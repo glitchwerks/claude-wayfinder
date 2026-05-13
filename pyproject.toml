@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-wayfinder"
+version = "0.0.1"
+description = "A typed, auditable dispatch matcher for Claude Code — post-cognitive routing with a deterministic-first scoring kernel."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Christopher Beaulieu" }]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.urls]
+Homepage = "https://github.com/glitchwerks/claude-wayfinder"
+Issues = "https://github.com/glitchwerks/claude-wayfinder/issues"
+
+# CLI demo entry point will be added when the demo is implemented.
+# [project.scripts]
+# claude-wayfinder = "claude_wayfinder.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_wayfinder"]

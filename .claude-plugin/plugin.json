@@ -1,0 +1,8 @@
+{
+  "name": "claude-wayfinder",
+  "description": "A typed, auditable dispatch matcher for Claude Code — post-cognitive routing with a deterministic-first scoring kernel.",
+  "author": {
+    "name": "Christopher Beaulieu",
+    "email": "cmb_dev@outlook.com"
+  }
+}
