@@ -9,9 +9,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  UV_SYSTEM_PYTHON: 1
-
 jobs:
 
   # ---------------------------------------------------------------------------
@@ -29,6 +26,7 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
           python-version: "3.11"
+          activate-environment: "true"
 
       - name: Install ruff
         run: uv pip install ruff
@@ -51,6 +49,7 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
           python-version: "3.11"
+          activate-environment: "true"
 
       - name: Install project with dev extras
         run: uv pip install -e ".[dev]"
@@ -73,6 +72,7 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
           python-version: "3.12"
+          activate-environment: "true"
 
       - name: Install project with dev extras
         run: uv pip install -e ".[dev]"
@@ -95,6 +95,7 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
           python-version: "3.11"
+          activate-environment: "true"
 
       - name: Install project with dev extras
         run: uv pip install -e ".[dev]"
