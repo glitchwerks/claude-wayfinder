@@ -1,0 +1,72 @@
+[
+  {
+    "description": "Python file + pytest keyword produces self_handle decision",
+    "task_description": "implement the new feature fix pytest tests",
+    "file_paths": ["src/main.py"],
+    "expected_decision_not": "needs_more_detail",
+    "comment": "path_globs **/*.py + pytest keyword raises score to self_handle"
+  },
+  {
+    "description": "Bicep file + bicep keyword produces self_handle decision",
+    "task_description": "write bicep template module for storage account",
+    "file_paths": ["infra/storage.bicep"],
+    "expected_decision_not": "needs_more_detail",
+    "comment": "bicep path glob + bicep keyword both fire"
+  },
+  {
+    "description": "PowerShell file + powershell keyword produces self_handle",
+    "task_description": "update the powershell deployment script cmdlet",
+    "file_paths": ["scripts/deploy.ps1"],
+    "expected_decision_not": "needs_more_detail",
+    "comment": "ps1 path glob + powershell keyword fire together to push score above threshold"
+  },
+  {
+    "description": "GitHub Actions workflow file + workflow keyword produces self_handle",
+    "task_description": "add a new step to the github-actions workflow runner",
+    "file_paths": [".github/workflows/test.yml"],
+    "expected_decision_not": "needs_more_detail",
+    "comment": ".github/workflows path glob + github-actions keyword"
+  },
+  {
+    "description": "Bicep file + multiple keyword signals fires",
+    "task_description": "deploy bicep template to resource group with module",
+    "file_paths": ["infra/main.bicep"],
+    "expected_decision_not": "needs_more_detail",
+    "comment": "bicep path glob + multiple bicep keywords provide high feature density"
+  },
+  {
+    "description": "Python keywords with pyproject.toml path fires",
+    "task_description": "implement python module fix ruff mypy type annotations",
+    "file_paths": ["pyproject.toml"],
+    "expected_decision_not": "needs_more_detail",
+    "comment": "pyproject.toml path glob + multiple python keywords"
+  },
+  {
+    "description": "Python file + ruff keyword fires",
+    "task_description": "run ruff linter on the codebase",
+    "file_paths": ["src/main.py"],
+    "expected_decision_not": "needs_more_detail",
+    "comment": "python path glob + ruff keyword"
+  },
+  {
+    "description": "Minimal single-word task returns needs_more_detail",
+    "task_description": "help",
+    "file_paths": [],
+    "expected_decision": "needs_more_detail",
+    "comment": "Single-word task with no files = below feature density threshold"
+  },
+  {
+    "description": "pyproject.toml path + python keyword fires",
+    "task_description": "update python project dependencies version pytest",
+    "file_paths": ["pyproject.toml"],
+    "expected_decision_not": "needs_more_detail",
+    "comment": "pyproject.toml in python path_globs + python keyword"
+  },
+  {
+    "description": "Empty context returns needs_more_detail",
+    "task_description": "",
+    "file_paths": [],
+    "expected_decision": "needs_more_detail",
+    "comment": "Empty context = zero feature density"
+  }
+]
