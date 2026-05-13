@@ -20,10 +20,10 @@ from typing import Any
 import pytest
 
 from claude_wayfinder.health import (
+    check_ci_invariants,
     compute_metrics,
     load_catalog_entries,
     load_jsonl,
-    check_ci_invariants,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
