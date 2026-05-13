@@ -1,0 +1,4 @@
+triggers:
+  keywords:
+    - { term: "microsoft", weight: 1.0 }
+applicable_agents: ["code-writer"]

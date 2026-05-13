@@ -1,0 +1,4 @@
+triggers:
+  keywords:
+    - { term: "csv", weight: 1.0 }
+applicable_agents: ["code-writer"]

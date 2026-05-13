@@ -1,0 +1,5 @@
+triggers:
+  keywords:
+    - { term: "brainstorm", weight: 1.0 }
+  tool_mentions: []
+applicable_agents: ["*"]
