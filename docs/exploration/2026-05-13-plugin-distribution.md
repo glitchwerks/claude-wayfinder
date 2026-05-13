@@ -171,3 +171,64 @@ Actual installed plugins show no `node_modules/`, no `requirements.txt`, no `pac
 - [Claude Code Native Installer: Skip Node.js Entirely | claudefa.st](https://claudefa.st/blog/guide/native-installer) (fetched 2026-05-13)
 - Local inspection of installed plugins: `C:\Users\chris\.claude\plugins\cache\claude-plugins-official\`
 - Local plugin manifest analysis: `superpowers` v5.1.0, `commit-commands` bbfcbdd86c26, `frontend-design` bbfcbdd86c26
+
+---
+
+## Follow-up research (2026-05-13, pass 2)
+
+> **Goal:** Resolve `Unknowns` item #6 from pass 1 — does subprocess-called `node` from a skill require the user to have Node on `$PATH`?
+> **Method:** `claude-code-guide` sub-agent dispatch, escalating C→B→D. Stage C (authoritative Anthropic source) resolved it; verified by router via `ops` agent reading the cited issue.
+
+### Stage 1 result: Authoritative answer found
+
+**The primary source:** [`anthropics/claude-code#30465` — "[FEATURE] Expose embedded Bun runtime for skill scripts"](https://github.com/anthropics/claude-code/issues/30465) — opened 2026-03-03 by `kamilchm`, closed `not_planned` 2026-03-31. Verified verbatim by router (issue body and state confirmed via `mcp__github__get_issue` on 2026-05-13).
+
+**Load-bearing quote from the issue body** (the feature requester's stated premise, uncontested by maintainers in the closure path):
+
+> When a skill bundles a TypeScript or JavaScript file and the SKILL.md instructs Claude to run it, Claude invokes `bun run script.ts` or `node script.ts` via Bash. But:
+>
+> - **Native install users** (the majority, and the recommended install path) have Bun embedded inside the `claude` binary **but no `bun` or `node` on their PATH**.
+> - **npm install users** have Node.js by definition, but this install method is being deprecated.
+> - **Non-technical users** — the growing audience Anthropic is targeting — have no idea how to install a language runtime, and shouldn't have to.
+
+**Caveat:** the closure was performed by `github-actions[bot]` rather than a maintainer comment. The 2 issue comments were not fetched for verbatim review. The bot closure + `not_planned` state_reason + a feature request that wouldn't exist if the runtime were already exposed = sufficient evidence to act on. Re-open this if a comment in #30465 turns out to contradict the body.
+
+### Stage 2 result: Skipped (Stage 1 resolved the question)
+
+### Stage 3 result: Skipped (Stage 1 resolved the question)
+
+### Final answer to the load-bearing question
+
+**Subprocess-called `node` (or `bun`, or `python`) in a skill REQUIRES the user to have the relevant interpreter on `$PATH` independently of Claude Code.** Claude Code's native installer ships Bun embedded inside the `claude` binary but does NOT expose it on PATH. Anthropic was asked to expose it and chose not to. This applies equally to Python — there is no documented mechanism for skills to inherit any runtime from the Claude Code installer.
+
+### Implication for kernel-language choice — recommendation REVISED
+
+The pass 1 "tied at zero friction" claim was **wrong** for the skill-subprocess invocation pattern, which is the pattern `claude-wayfinder` uses. The corrected picture:
+
+| Approach | Native-install user must pre-install | npm-install user must pre-install | Friction floor (corrected) |
+| --- | --- | --- | --- |
+| Python kernel, no bundling | Python 3.x | Python 3.x | **Medium** — same as TS, regardless of how user installed Claude Code |
+| TypeScript kernel, plain JS, no deps | Node.js | Nothing (npm install path provides Node) | **Medium** — fails the same way Python does on native installs (the recommended path) |
+| Python + PyInstaller binary | Nothing (binary in plugin) | Nothing | **Zero**, with caveat: PyInstaller on Windows has signing/AV issues |
+| TS bundled via `bun build --compile` | Nothing (single binary) | Nothing | **Zero**, cleaner than PyInstaller |
+| Single binary (Go/Rust, cross-compiled) | Nothing | Nothing | **Zero**, but burns the most dev time |
+
+**Key correction:** Python and plain-JS TS are **tied on friction** for the skill-subprocess pattern, but tied at *medium* friction (interpreter prereq), not zero. The earlier "TS gives zero friction" claim was based on conflating hook execution (in-process, Claude's bundled runtime) with skill-subprocess execution (user's PATH). Issue #30465 dissolves that conflation.
+
+**Revised recommendation: ship the Python port (PR #3) for v0.1.0.**
+
+The logic chain:
+
+1. The user's bar is "marketplace install → works." Strictly, no skill-subprocess kernel meets it in any language under the current Claude Code model.
+2. To approach that bar, you need bundled-runtime distribution: PyInstaller, `bun build --compile`, or a single-binary rewrite in Go/Rust. All three are feasible; all three are post-v0.1 work.
+3. Python and TS are symmetric on friction without bundling. Python has the work already done; TS would burn 1-2 weeks of rewrite for zero friction-floor improvement.
+4. Therefore: ship Python now with a documented interpreter prereq, and treat "zero-friction distribution via bundling" as an explicit v0.2 (or v0.3) initiative — which can then evaluate Python+PyInstaller vs TS+Bun-compile vs Go/Rust on the merits of bundling, not language choice in isolation.
+
+**Anti-recommendation: do NOT pivot to TS now.** The pivot's premise — that TS reduces install friction — does not survive the verified evidence. Pivoting would throw away the Python port to land on the same friction floor.
+
+### Updated `# Unknowns`
+
+- **Comments on `anthropics/claude-code#30465` not verbatim-verified.** If a maintainer comment in there contradicts the issue body, the verdict reopens. (Mitigation: low likelihood, since the request wouldn't exist if the runtime were exposed; if it matters, `gh issue view 30465 --repo anthropics/claude-code --comments` will return them.)
+- **`bin/` PATH-injection behavior** for plugins. Skills *cannot* assume runtimes — but `bin/` directories added to PATH while a plugin is active might. If `bin/` PATH-injection respects bundled binaries shipped in the plugin tree, a plugin could ship its own runtime that way. This wasn't explored in pass 2 and is the cheapest path to "bundled runtime in a plugin" if it works. Worth a follow-up if the v0.2 zero-friction question becomes live.
+- **PyInstaller on Windows signing / AV behavior.** Real concern for distribution if Python+bundle is the v0.2 path.
+- **Bun's `--compile` story on Windows.** Bun has historically had less-mature Windows support than macOS/Linux.
