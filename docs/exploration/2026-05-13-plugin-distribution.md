@@ -232,3 +232,54 @@ The logic chain:
 - **`bin/` PATH-injection behavior** for plugins. Skills *cannot* assume runtimes — but `bin/` directories added to PATH while a plugin is active might. If `bin/` PATH-injection respects bundled binaries shipped in the plugin tree, a plugin could ship its own runtime that way. This wasn't explored in pass 2 and is the cheapest path to "bundled runtime in a plugin" if it works. Worth a follow-up if the v0.2 zero-friction question becomes live.
 - **PyInstaller on Windows signing / AV behavior.** Real concern for distribution if Python+bundle is the v0.2 path.
 - **Bun's `--compile` story on Windows.** Bun has historically had less-mature Windows support than macOS/Linux.
+
+---
+
+## Community pattern survey (2026-05-13, pass 3)
+
+> **Goal:** Find existing plugins shipping non-trivial executable code and document how they handle the install-friction problem. Decide what shape v0.2 bundling work should take, based on what real plugins do — not theoretical options.
+> **Method:** `claude-code-guide` sub-agent dispatch — local plugin enumeration + GitHub search + web search.
+> **Router caveat (read first):** The agent's "10 plugins" set is dominated by plugins we already surveyed locally in pass 1, plus a handful of language-server plugins that don't fit the analog (LSP plugins assume the user has installed the language server binary themselves — that's a different friction model). Third-party GitHub search for plugins shipping runtime kernels did not surface meaningful results. That null result is itself a finding — it suggests either the marketplace is heavily Anthropic-dominated, the search queries didn't hit (search-engine flakiness), or third-party plugins shipping non-trivial runtime simply don't exist at scale yet. Treat the survey's depth with some caution; treat the headline conclusion ("no precedent for runtime bundling") as well-supported because it aligns with pass 1's local survey and the absence of any documented bundling pattern in pass 2.
+
+### Surveyed plugins
+
+| # | Plugin | Languages used | Runtime distribution | User must pre-install | Size |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `ralph-loop` (official) | Bash | Hooks call bash scripts | `bash`, `git` | ~200 KB |
+| 2 | `explanatory-output-style` (official) | Bash | Single bash script | `bash` | ~15 KB |
+| 3 | `microsoft-docs` (official) | Node/TS | Skill-subprocess calls Node CLI | Node 22+ | ~50 MB |
+| 4 | `superpowers` (official) | Node + Bash | Hooks + skill-subprocess; `server.cjs`, `render-graphs.js` | Node 18+, bash | ~15 MB |
+| 5 | `commit-commands` (official) | Markdown only | Skills shell out to `git` | `git` | ~50 KB |
+| 6 | `frontend-design` (official) | Markdown only | No subprocess | Nothing | ~5 KB |
+| 7 | `atomic-agents` (official) | Markdown only | No subprocess | Nothing | ~1 MB |
+| 8 | `pyright-lsp` (official) | None (LSP-only) | LSP server runs externally | User installs `pyright-langserver` separately | small |
+| 9 | `typescript-lsp` (official) | None (LSP-only) | LSP server runs externally | User installs TS language server | small |
+| 10 | `csharp-lsp` (official) | None (LSP-only) | LSP server runs externally | User installs .NET/C# tools | small |
+
+The four pass-1-surveyed plugins reappear; rows 8-10 are LSP plugins that fit a *different* friction model (user-installed daemon, not subprocess from skill). Rows 3 and 4 are the closest analogs to a Node-implemented kernel called from a skill.
+
+### Pattern synthesis
+
+1. **Two prevailing patterns in the official marketplace:**
+   - **Pattern A — "Requires interpreter on PATH"** (most plugins with executable code, including `ralph-loop`, `microsoft-docs`, `superpowers`). Plugin ships source files; user must have the interpreter; plugin's README/install instructions document the prereq.
+   - **Pattern B — "Pure Markdown"** (`frontend-design`, `atomic-agents`, `commit-commands`). No runtime needed beyond what Claude Code itself uses.
+2. **Plugins shipping a Node-implemented kernel called via `node` subprocess from a skill:** `microsoft-docs` (Node 22+ CLI) and `superpowers` (Node 18+ hooks + skill scripts) are the two closest analogs. **Both follow Pattern A — they require the user to have Node on PATH**. Neither bundles Node, neither uses `bin/` to ship a runtime. This is the strongest evidence that the TS-as-kernel path lands at the same friction floor as Python: the existing TS plugins don't escape the friction.
+3. **Plugins shipping a Python-implemented kernel called via skill subprocess:** None found in the official marketplace. (LSP plugins like `pyright-lsp` require Python but don't follow the skill-subprocess pattern — they delegate to an LSP daemon.) The Python-kernel-via-skill pattern would be a new entrant; no existing precedent to follow, but also no existing precedent for *not* following.
+4. **`bin/` directory used to ship executables:** **Zero precedent.** The mechanism is documented (per pass 1: "Executables added to PATH while the plugin is enabled"), but no surveyed plugin uses it for bundling its own runtime. This is potentially the cleanest path for future bundling work, but it would be untested ground.
+5. **Recommendation for v0.2 bundling — confirmed:**
+   - The community has not solved zero-friction distribution. Pattern A (require interpreter on PATH) is the prevailing convention.
+   - Bundling via `bin/` with PyInstaller / `bun build --compile` / Go-Rust single binary is *theoretically clean* but has no implementation precedent. Pioneering it would be real engineering work — could become a notable contribution to the ecosystem, but carries unknown-unknown risk (does Claude Code's `bin/` PATH injection actually work for binaries inside the plugin tree? does it work cross-platform? does it survive plugin upgrades?).
+   - **v0.1 path: follow Pattern A** — ship Python, document the interpreter prereq, fit the marketplace convention. No engineering risk; meets the user where they are; consistent with how `superpowers` and `microsoft-docs` operate.
+   - **v0.2 path (if zero-friction becomes a real adoption blocker): scope a `bin/`-based bundling experiment** as its own initiative. Likely value but unknown effort until prototyped.
+
+### Pattern-survey implications for the v0.1 plan
+
+- The Python port stays. Friction parity confirmed across two distinct lines of evidence (skill-subprocess invocations require user-side interpreter per #30465; existing Node-kernel plugins still require user-side Node).
+- The v0.1 install story is "user has Python; clone or install package; works" — same shape as `microsoft-docs` documents for Node.
+- A v0.2 issue should be filed to *scope* (not implement) the `bin/`-bundling experiment, while context is fresh. Likely entry points: PyInstaller per-platform binaries shipped under `bin/`, validated against Claude Code's PATH-injection on Windows / macOS / Linux.
+
+### Updated `# Unknowns`
+
+- **Third-party plugin ecosystem depth.** Pass 3's GitHub search did not surface third-party plugins shipping non-trivial runtime. Either the marketplace is heavily centralized on Anthropic's official set, or third-party plugins simply haven't grown that pattern yet. Worth re-checking in 3-6 months — the ecosystem is young and changing fast.
+- **`bin/` PATH-injection behavior for plugin-tree-bundled binaries.** Documented but uncharacterized. The cheapest path to v0.2 zero-friction; needs a prototype to validate.
+- **The two unread comments on `anthropics/claude-code#30465`** still unread. Listed in pass 2; mentioning here for completeness. Mitigation hasn't changed.
