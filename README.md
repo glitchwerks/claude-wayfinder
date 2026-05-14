@@ -2,15 +2,19 @@
 
 > A typed, auditable dispatch matcher for Claude Code — post-cognitive routing with a deterministic-first scoring kernel.
 
-## What this is
+## What this is — and why it matters
 
-`claude-wayfinder` is a routing primitive for Claude Code, extracted from a working production harness. It scores agents and skills against a structured task description composed by the router agent — not the raw user prompt — and returns one of seven typed decisions with confidence and rationale.
+A conventional LLM router enforces routing policy through prose instructions read at every decision point. In practice, this means the routing decision is made by the same model that's about to do the work — using the same signal that drove the original request. It drifts silently, makes the same decision differently across turns, and leaves no structured artifact you can inspect or replay.
 
-**Key design points:**
+`claude-wayfinder` replaces that loop for the mechanical cases — the ones that don't need judgment. It scores agents and skills against a structured task description composed by the router agent, not the raw user prompt, and returns one of seven typed decisions with confidence, rationale, and alternatives.
 
-- **Post-cognitive matching.** Operates after the router agent has read the conversation and composed a structured task description. Raw user prompts are signal-poor; richer signal comes from interpretation.
-- **Typed decision contract.** Seven-decision enum (`delegate` / `self_handle` / `self_handle_unaided` / `advisory` / `ambiguous` / `ask_user` / `needs_more_detail`) with structured rationale, confidence, and alternatives.
-- **Auto-generated catalog.** Built from skill sidecars and agent frontmatter — no hand-curated rule config to drift out of sync.
+**Three properties that matter:**
+
+- **Auditable.** Every dispatch decision is a structured artifact. Given the same context and catalog, the matcher returns the same answer. You can replay any past decision.
+- **Post-cognitive.** The matcher fires after the router agent has read the conversation and extracted intent, file paths, and tools. Raw prompts are signal-poor; the router's interpretation is richer — same model, more signal.
+- **Auto-generated catalog.** Built from skill sidecars and agent frontmatter at session start. No hand-curated rule config to drift out of sync.
+
+The decision contract is a seven-member typed enum: `delegate` / `self_handle` / `self_handle_unaided` / `advisory` / `ambiguous` / `ask_user` / `needs_more_detail`.
 
 For the algorithm specification, see [`docs/design/2026-04-30-deterministic-first-router-design-v5.md`](docs/design/2026-04-30-deterministic-first-router-design-v5.md).
 
@@ -25,7 +29,38 @@ Inside Claude Code, run these two commands:
 /plugin install claude-wayfinder@claude-wayfinder
 ```
 
-Once installed, the `dispatch` skill is available. Run `/dispatch` inside Claude Code to exercise the matcher against bundled demo fixtures and see all seven decision branches in action. See [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) for what the skill does and what output to expect.
+## How to use it
+
+### In Claude Code: `/dispatch`
+
+Once installed, the `/dispatch` skill is available inside Claude Code. It is designed to be invoked by the router agent **before any substantive task** — the trigger description in [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) captures when it fires automatically.
+
+When it triggers, the skill runs the matcher against the bundled demo catalog and returns all seven decision branches with inputs, decisions, confidence scores, and rationale. A single decision block looks like this:
+
+```
+[1/7] Branch: delegate
+  input       : 'implement the authentication module'
+  file_paths  : ['src/auth.py']
+  decision    : delegate
+  confidence  : 0.9000
+  agent       : code-writer
+  rationale   : code-writer matched on keyword 'implement' (weight 1.0) and
+                path glob '**/*.py' (weight 0.5). Gap to next agent: 0.45.
+  skills      : ['python']
+```
+
+**How you know it's working:** the decision field contains one of the seven typed strings; confidence is a float between 0 and 1; rationale names the specific triggers that fired. An `ask_user` result is valid in the contract but reserved in v0.1 — the matcher will not produce it against real input.
+
+### Difference between `/dispatch` and `python -m claude_wayfinder demo`
+
+| | `/dispatch` (in Claude Code) | `python -m claude_wayfinder demo` (CLI) |
+|---|---|---|
+| Catalog | Bundled demo fixtures | Bundled demo fixtures |
+| Invocation | Skill triggered by router agent | Direct CLI invocation |
+| Use case | Evaluate the matcher inside your Claude Code session | Evaluate the matcher without installing Claude Code |
+| Output | Same seven-decision output | Same seven-decision output |
+
+Both run the same matcher against the same bundled fixtures. The CLI path is the faster evaluation route if you are deciding whether to install the plugin.
 
 ## Try it (no Claude Code required)
 
@@ -82,14 +117,6 @@ result = decide(agents, skills, features, catalog)
 ```
 
 The `__all__`-guarded surface (`load_catalog`, `build_features`, `score`, `decide`, `VALID_DECISIONS`, and the supporting dataclasses) is stable for the v0.1 series: patch releases will not rename, remove, or alter any public signature.
-
-## Distribution model
-
-**v0.1 ships as a sideloadable Claude Code plugin.** There is no PyPI wheel. The "release" is a git tag and a GitHub Release page carrying the changelog; plugin users sideload from the git ref, contributors clone the repo. PyPI is deferred until a consumer with a real need surfaces.
-
-**v0.1 does not meet the original "marketplace install → works without secondary install" bar.** The plugin sideload path requires Python >= 3.11 on `$PATH` before the demonstration skill can call the matcher. This gap is named, not finessed: Anthropic does not expose Claude Code's bundled runtime to skill subprocesses (see [`anthropics/claude-code#30465`](https://github.com/anthropics/claude-code/issues/30465)), and no marketplace plugin bundles its own runtime today. Zero-friction install is scoped for v0.2 via spike #6.
-
-**No observability surface in v0.1.** The health-reporting module (`_health.py`) is internal and carries no stability promise. Routing-decision observability is deferred until a concrete consumer need is identified.
 
 ## Prior art
 
