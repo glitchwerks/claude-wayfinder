@@ -640,6 +640,10 @@ def _sort_entry_lists(entry: dict[str, Any]) -> dict[str, Any]:
         "triggers": triggers,
         inverse_field: sorted(entry.get(inverse_field, [])),
     }
+    # Issue #19: propagate routable field when present (agents only).
+    # Absent on skill entries; bool() guard ensures it is never None.
+    if "routable" in entry:
+        out["routable"] = bool(entry["routable"])
     return out
 
 
@@ -692,6 +696,12 @@ def build_catalog(
 ) -> dict[str, Any]:
     """Assemble the catalog dict from validated entries.
 
+    Issue #19: adds a top-level ``router_agent`` field that names the
+    first entry with ``routable=False`` (informational; the per-entry
+    flag is the actual exclusion gate).  When no entry declares
+    ``routable: false``, ``router_agent`` is set to ``None`` and a
+    warning is emitted to stderr via the caller (``build()``).
+
     Args:
         entries: Validated entries from ``validate_entry``. Each must
             have ``name``, ``kind``, ``description``, ``triggers``,
@@ -705,15 +715,26 @@ def build_catalog(
 
     Returns:
         A catalog dict with keys ``schema_version``,
-        ``built_for_project``, and ``entries``.
+        ``built_for_project``, ``router_agent``, and ``entries``.
         Entries are sorted by ``(kind, name)``. Within each entry,
         list fields are sorted (keywords by ``term``).
     """
     sorted_entries = sorted(entries, key=lambda e: (e["kind"], e["name"]))
     out_entries = [_sort_entry_lists(e) for e in sorted_entries]
+
+    # Identify the router agent: the first entry (in sort order) that
+    # has routable=False.  This field is informational — the per-entry
+    # routable flag is the actual gate in is_agent_routable.
+    router_agent: str | None = None
+    for e in sorted_entries:
+        if not e.get("routable", True):
+            router_agent = e["name"]
+            break
+
     return {
         "schema_version": SCHEMA_VERSION,
         "built_for_project": (str(built_for_project) if built_for_project is not None else None),
+        "router_agent": router_agent,
         "entries": out_entries,
     }
 
@@ -1528,6 +1549,11 @@ def _process_file(
     if result.entry is not None:
         result.entry["source"] = "owned"
         result.entry["content_hash"] = content_hash
+        # Issue #19: read routable flag from frontmatter (default True).
+        # Agents that declare ``routable: false`` are excluded from the
+        # matcher's scored pool via is_agent_routable (match_filters.py).
+        routable_raw = fm.get("routable", True)
+        result.entry["routable"] = bool(routable_raw)
     return result.entry
 
 
@@ -1868,6 +1894,17 @@ def build(
     update_revisions_sidecar(trackable, sidecar_path)
 
     catalog = build_catalog(entries, built_for_project=project_root)
+
+    # Issue #19: warn when no agent declared routable: false.  The
+    # catalog's router_agent field will be null, which means all agents
+    # are scored — including the router itself if it appears as an entry.
+    if catalog.get("router_agent") is None:
+        print(
+            "[catalog] WARNING: no router agent declared (routable: false);"
+            " all agents will be scored",
+            file=sys.stderr,
+        )
+
     write_catalog(out_path, catalog)
     write_log(log_path, all_issues, now=now)
 

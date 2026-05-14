@@ -145,6 +145,7 @@ class CatalogEntry:
     applicable_agents: tuple[str, ...]
     applicable_skills: tuple[str, ...]
     source: str = "owned"
+    routable: bool = True
 
 
 @dataclass
@@ -413,6 +414,7 @@ def load_catalog(path: Path) -> list[CatalogEntry]:
                 applicable_agents=tuple(raw.get("applicable_agents", [])),
                 applicable_skills=tuple(raw.get("applicable_skills", [])),
                 source=str(raw.get("source", "owned")),
+                routable=bool(raw.get("routable", True)),
             )
         )
     return entries
@@ -903,13 +905,15 @@ def main() -> None:
     features = build_features(context)
 
     # --- Score all entries ---
-    # is_agent_routable excludes 'general-purpose' and plugin agents
-    # (source='plugin') from the scored pool (issue #477 Pass 2.5).
+    # is_agent_routable excludes the router agent (routable=False) and
+    # plugin agents (source='plugin') from the scored pool.
+    # The routable flag is set in agent frontmatter; issue #19 replaced
+    # the hardcoded name check with this data-driven field.
     agent_entries = [
         e
         for e in entries
         if e.kind == "agent" and is_agent_routable(
-            name=e.name, kind=e.kind, source=e.source
+            name=e.name, kind=e.kind, source=e.source, routable=e.routable
         )
     ]
     skill_entries = [e for e in entries if e.kind == "skill"]

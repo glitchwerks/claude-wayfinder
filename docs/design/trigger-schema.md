@@ -122,6 +122,46 @@ applicable_skills: ["python", "github-actions"]
 
 A future version may add agent sidecar support; currently only skills use sidecar files.
 
+### 2c-a. `routable` field (agents only)
+
+| Field      | Type   | Required | Default | Scope        |
+| ---------- | ------ | -------- | ------- | ------------ |
+| `routable` | `bool` | no       | `true`  | agents only  |
+
+**Purpose:** marks the router agent (or any non-scoreable agent) so it is excluded from
+the `is_agent_routable` selection in the matcher. The matcher caller is, by definition,
+not a candidate for delegation — it must never appear in the scored-agents pool.
+
+**How the flag is used:** `is_agent_routable` in `src/claude_wayfinder/match_filters.py`
+accepts a `routable` keyword argument. The matcher passes the catalog entry's `routable`
+field through at dispatch time. This replaces the former hardcoded name check
+(`name == "general-purpose"`), making the system usable by teams whose router has any
+name (issue #19).
+
+**Catalog metadata:** the top-level `router_agent` key in `dispatch-catalog.json` is set
+to the name of the first agent with `routable: false` (sorted by `(kind, name)`). This
+field is **informational only** — the per-entry flag is the actual exclusion gate. When no
+agent declares `routable: false`, `router_agent` is `null` and the catalog generator emits
+a warning to stderr.
+
+**Example — router agent frontmatter:**
+
+```yaml
+---
+name: general-purpose
+description: The dispatch router. Never a delegation target.
+routable: false
+triggers:
+  keywords:
+    - { term: "route", weight: 1.0 }
+applicable_skills: ["*"]
+---
+```
+
+**If multiple agents declare `routable: false`:** each is individually excluded from
+scoring. The catalog's `router_agent` metadata field names only the first one found (in
+sort order); the flag on each entry is authoritative for that entry.
+
 ### 2d. Field reference
 
 | Field                               | Type                   | Required | Match target                                                                     | Default            |

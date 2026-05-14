@@ -7,6 +7,11 @@ from here so the exclusion rules stay in sync.
 
 Issue #477 acceptance criteria §"Shared predicate module" (Pass 2.5).
 
+Issue #19: replaced the hardcoded ``_EXCLUDED_AGENT_NAME`` constant
+(``"general-purpose"``) with a data-driven ``routable: bool`` parameter.
+Callers pass the catalog entry's ``routable`` field so that any agent
+may be marked non-routable without requiring changes to this module.
+
 Design note (Finding #1, PR #487): the predicate accepts three named
 scalar parameters rather than a ``dict[str, Any]`` to avoid allocating a
 temporary dict per entry in the scoring loop (match.py:894-899).  Using a
@@ -19,18 +24,21 @@ dependency.
 
 from __future__ import annotations
 
-# The router agent is always excluded from the scored agents pool.
-# Defined here as a constant so consumers do not embed magic strings.
-_EXCLUDED_AGENT_NAME: str = "general-purpose"
 
-
-def is_agent_routable(*, name: str, kind: str, source: str) -> bool:
+def is_agent_routable(
+    *,
+    name: str,
+    kind: str,
+    source: str,
+    routable: bool = True,
+) -> bool:
     """Return True when the described entry may participate in agent scoring.
 
-    An entry is **not** routable when either of the following holds:
+    An entry is **not** routable when any of the following holds:
 
-    * ``name`` equals ``"general-purpose"`` — the router itself must
-      never be selected as a delegation target.
+    * ``routable`` is ``False`` — the entry has been explicitly marked
+      as non-routable in its catalog frontmatter (e.g. the router agent
+      itself, which must never be selected as a delegation target).
     * ``kind`` is ``"agent"`` **and** ``source`` is ``"plugin"``
       — plugin agents land dormant (zero triggers) and are excluded from
       the scoring pool until they are explicitly given override triggers
@@ -53,14 +61,19 @@ def is_agent_routable(*, name: str, kind: str, source: str) -> bool:
         kind: Either ``"agent"`` or ``"skill"``.
         source: Provenance tag — ``"owned"``, ``"plugin"``,
             ``"plugin-override"``, ``"builtin"``, or ``"project"``.
+        routable: Whether the entry declares itself as a valid routing
+            target.  Defaults to ``True`` so callers that do not yet
+            pass the field remain backward-compatible.  Set to ``False``
+            for the router agent (or any other non-scoreable agent) so
+            it is excluded from the scored pool at dispatch time.
 
     Returns:
         ``True`` when the entry may enter agent scoring; ``False`` when
         the exclusion rules apply.
 
     Examples:
-        >>> is_agent_routable(name="general-purpose", kind="agent",
-        ...                   source="owned")
+        >>> is_agent_routable(name="router-agent", kind="agent",
+        ...                   source="owned", routable=False)
         False
         >>> is_agent_routable(name="my-agent", kind="agent",
         ...                   source="plugin")
@@ -75,7 +88,7 @@ def is_agent_routable(*, name: str, kind: str, source: str) -> bool:
         ...                   kind="skill", source="plugin")
         True
     """
-    if name == _EXCLUDED_AGENT_NAME:
+    if not routable:
         return False
     if kind == "agent" and source == "plugin":
         return False
