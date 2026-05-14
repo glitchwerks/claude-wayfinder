@@ -1,8 +1,13 @@
 {
   "name": "claude-wayfinder",
+  "version": "0.0.1",
   "description": "A typed, auditable dispatch matcher for Claude Code — post-cognitive routing with a deterministic-first scoring kernel.",
   "author": {
     "name": "Christopher Beaulieu",
     "email": "cmb_dev@outlook.com"
-  }
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/glitchwerks/claude-wayfinder",
+  "repository": "https://github.com/glitchwerks/claude-wayfinder",
+  "keywords": ["dispatch", "routing", "matcher", "claude-code", "deterministic"]
 }

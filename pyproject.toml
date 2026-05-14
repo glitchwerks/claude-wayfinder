@@ -26,9 +26,8 @@ dev = ["pytest>=7", "ruff>=0.4", "pyyaml>=6.0"]
 Homepage = "https://github.com/glitchwerks/claude-wayfinder"
 Issues = "https://github.com/glitchwerks/claude-wayfinder/issues"
 
-# CLI demo entry point will be added when the demo is implemented.
-# [project.scripts]
-# claude-wayfinder = "claude_wayfinder.cli:main"
+[project.scripts]
+claude-wayfinder = "claude_wayfinder.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_wayfinder"]
