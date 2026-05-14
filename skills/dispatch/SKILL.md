@@ -1,18 +1,24 @@
 ---
 name: dispatch
 description: >
-  Run the claude-wayfinder deterministic 7-decision dispatch matcher
-  against bundled demo fixtures and return the decision output for each
-  of the 7 routing branches (delegate, self_handle, self_handle_unaided,
-  advisory, ambiguous, ask_user, needs_more_detail).
-  Invoke this skill to evaluate the matcher or explore its routing logic
-  without configuring your own catalog.
+  Evaluation surface for the claude-wayfinder deterministic 7-decision
+  dispatch matcher. Runs the matcher against bundled demo fixtures — not
+  your live session traffic — and returns decision output for all 7
+  routing branches (delegate, self_handle, self_handle_unaided, advisory,
+  ambiguous, ask_user, needs_more_detail). Use this to try the matcher
+  before integrating it into your own router agent.
 triggers:
   command_prefixes:
     - /dispatch
 ---
 
 # Dispatch Skill
+
+> **v0.1 is an evaluation surface, not a daily-driver router.** This skill
+> runs the matcher against bundled demo fixtures so you can see the
+> decision logic in action. It does not intercept your session traffic or
+> route your tasks automatically. To wire the matcher into your own router
+> agent, see the contributor path in the README.
 
 Invoke the bundled demo to see the **claude-wayfinder** deterministic
 7-decision matcher in action.
@@ -108,6 +114,3 @@ all 7 decision branches:
 - `ask_user` is a valid entry in `VALID_DECISIONS` but is **reserved** in
   v0.1 — the matcher never produces it. It is shown in the demo with a
   note explaining its reserved status.
-- The v0.1 plugin is an **evaluation surface**, not a daily-driver router.
-  To point the matcher at your own agents and skills, see the contributor
-  path in the README and the `python -m claude_wayfinder --help` output.

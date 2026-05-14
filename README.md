@@ -33,9 +33,9 @@ Inside Claude Code, run these two commands:
 
 ### In Claude Code: `/dispatch`
 
-Once installed, the `/dispatch` skill is available inside Claude Code. It is designed to be invoked by the router agent **before any substantive task** — the trigger description in [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) captures when it fires automatically.
+v0.1 is a **try-before-integrate** primitive. The `/dispatch` skill runs the matcher against bundled demo fixtures so you can see all seven decision branches in action — it does not intercept your session traffic or route your tasks automatically. After running it, you decide whether to wire the matcher into your own router agent. Automatic routing is deferred to v0.2 ([#6](https://github.com/glitchwerks/claude-wayfinder/issues/6)).
 
-When it triggers, the skill runs the matcher against the bundled demo catalog and returns all seven decision branches with inputs, decisions, confidence scores, and rationale. A single decision block looks like this:
+When invoked, the skill runs the matcher against the bundled demo catalog and returns all seven decision branches with inputs, decisions, confidence scores, and rationale. A single decision block looks like this:
 
 ```
 [1/7] Branch: delegate
@@ -61,6 +61,13 @@ When it triggers, the skill runs the matcher against the bundled demo catalog an
 | Output | Same seven-decision output | Same seven-decision output |
 
 Both run the same matcher against the same bundled fixtures. The CLI path is the faster evaluation route if you are deciding whether to install the plugin.
+
+### What's next
+
+If you want to use the matcher for real routing in your own Claude Code setup, there are two paths:
+
+- **Integrate now via the contributor path.** Clone the repo, build your own catalog from your agent and skill frontmatter, and call the library API from your router agent. The [Contributing](#contributing) section covers the mechanics, and `python -m claude_wayfinder --help` documents the CLI surface.
+- **Wait for the bundled runtime.** Issue [#6](https://github.com/glitchwerks/claude-wayfinder/issues/6) tracks the zero-friction-install spike — a bundled router agent and catalog generator that would make daily-driver routing available without manual integration. That work is scoped to v0.2.
 
 ## Try it (no Claude Code required)
 
