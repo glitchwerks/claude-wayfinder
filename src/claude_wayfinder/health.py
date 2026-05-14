@@ -1,7 +1,8 @@
 """Router health reporting tool — v5 §3.3.4 metrics.
 
 Reports pre-ship CI invariants and runtime telemetry for the deterministic
-dispatch system described in docs/router/2026-04-30-deterministic-first-router-design-v5.md.
+dispatch system described in
+docs/design/2026-04-30-deterministic-first-router-design-v5.md.
 
 Two output modes:
   --ci      Pre-ship CI invariants only; exits non-zero on failure.
@@ -9,12 +10,9 @@ Two output modes:
             telemetry.
 
 Log file inputs:
-  ~/.claude/state/router-drift.jsonl   Drift events from hooks (#200/#201).
+  ~/.claude/state/router-drift.jsonl   Drift events from hooks.
   ~/.claude/state/dispatch-log.jsonl   Agent dispatch events from the
                                        PreToolUse log-agent-dispatch hook.
-
-Issue #204 / Refs #341 (skill_mediated_delegation informational reporting).
-Issue #480 (plugin entries Notable Findings line).
 """
 
 from __future__ import annotations
@@ -107,7 +105,7 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Plugin entry counts (#480)
+# Plugin entry counts
 # ---------------------------------------------------------------------------
 
 _PLUGIN_SOURCES: frozenset[str] = frozenset({"plugin", "plugin-override"})
@@ -152,8 +150,7 @@ def compute_plugin_entry_counts(
           ``source in {"plugin", "plugin-override"}``.
         * ``k_routable``— subset of ``m_agents`` where
           ``is_agent_routable(name=..., kind=..., source=...)`` returns
-          ``True`` (per #477, only ``source=="plugin-override"`` agents
-          qualify).
+          ``True`` (only ``source=="plugin-override"`` agents qualify).
     """
     n_skills = 0
     m_agents = 0
@@ -310,7 +307,7 @@ def compute_metrics(
             label="Skill-mediated delegation",
             metric_class="informational",
             value=float(total_skill_mediated),
-            healthy=True,  # Informational — never a breach per #341
+            healthy=True,  # Informational — never a breach
             threshold="N/A (informational)",
             detail=(
                 f"{total_skill_mediated} total skill-mediated delegations "
@@ -914,10 +911,10 @@ def format_ci_output(invariants: dict[str, MetricResult]) -> str:
 
 
 def most_recent_harness_version(dispatch_log: list[dict[str, Any]]) -> str | None:
-    """Return the harness_version from the last dispatch-log entry that carries one.
+    """Return the ``harness_version`` from the most recent versioned dispatch-log entry.
 
     Legacy entries lack the field — those are silently skipped.  Returns None
-    when no versioned entry exists (e.g. all entries are pre-#390 legacy).
+    when no versioned entry exists (e.g. all entries are legacy unversioned).
 
     Args:
         dispatch_log: Events from dispatch-log.jsonl.
@@ -962,13 +959,13 @@ def format_report_output(
     )
     lines.append("")
 
-    # Surface the harness version so /router-health output is interpretable
-    # across harness changes (issue #390).  Absent on pre-#390 log entries.
+    # Surface the version so /router-health output is interpretable across
+    # tool changes.  Absent on legacy log entries without this field.
     harness_version = most_recent_harness_version(dispatch_log or [])
     if harness_version:
         lines.append(f"**Harness version (most recent):** `{harness_version}`")
     else:
-        lines.append("**Harness version:** _(unversioned — pre-#390 log entries)_")
+        lines.append("**Harness version:** _(unversioned — legacy log entries)_")
     lines.append("")
 
     # --- Section 1: CI Invariants ---
@@ -1030,7 +1027,7 @@ def format_report_output(
         lines.append("> All runtime telemetry metrics are within healthy ranges.")
         lines.append("")
 
-    # --- Section 3: Informational (#341) ---
+    # --- Section 3: Informational ---
     if info_metrics:
         lines.append("## Informational Metrics")
         lines.append("")
@@ -1048,11 +1045,11 @@ def format_report_output(
         lines.append(
             "> `skill_mediated_delegation` events are counted per session and in "
             "total. They are **not** treated as drift threshold breaches — this is "
-            "the correct skill-first dispatch pattern (v5 §3.2.1 / issue #341)."
+            "the correct skill-first dispatch pattern (v5 §3.2.1)."
         )
         lines.append("")
 
-    # --- Section 4: Notable Findings (#480) ---
+    # --- Section 4: Notable Findings ---
     lines.append("## Notable Findings")
     lines.append("")
     entries = catalog_entries if catalog_entries is not None else load_catalog_entries()

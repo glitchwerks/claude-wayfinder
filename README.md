@@ -19,7 +19,7 @@
 
 ## Quickstart
 
-> The CLI demo is not yet shipped (tracked in upstream issue #525). Once published, the quickstart will be:
+> The CLI demo is not yet shipped. Once published, the quickstart will be:
 >
 > ```bash
 > git clone https://github.com/glitchwerks/claude-wayfinder

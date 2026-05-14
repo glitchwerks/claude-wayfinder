@@ -16,7 +16,7 @@ Usage::
     echo '{"task_description": "implement the new feature",
            "file_paths": ["src/main.py"]}' | python match.py
 
-See ``docs/router/2026-04-30-deterministic-first-router-design-v5.md``
+See ``docs/design/2026-04-30-deterministic-first-router-design-v5.md``
 sections 3.1.1-3.1.8 for the full specification this module implements.
 """
 
@@ -72,7 +72,7 @@ _MAX_SKILLS = 3
 # A weight-1.0 keyword contributes exactly this value; lower weights
 # scale proportionally.  Must be >= _SKILL_MIN so a single primary
 # keyword alone can clear the attachment threshold.  Raised from 0.3
-# to 0.5 in issue #425 to fix single-keyword skills never attaching.
+# to 0.5 to fix single-keyword skills never attaching.
 _KEYWORD_MULTIPLIER = 0.5
 
 # Catalog error banner prefix (v5 §3.1.6).
@@ -479,9 +479,9 @@ def _matched_glob_count(entry: CatalogEntry, features: Features) -> int:
     """Count distinct globs from the entry that match any feature path.
 
     Each glob is counted at most once even if it matches multiple paths
-    (per v5 §3.1.2 / trigger-schema §4).
+    (per v5 §3.1.2 / docs/design/trigger-schema.md §4).
 
-    Matching uses ``fnmatch.fnmatch`` per trigger-schema.md §2d.  Note
+    Matching uses ``fnmatch.fnmatch`` per docs/design/trigger-schema.md §2d.  Note
     that ``fnmatch`` does not treat ``**`` as a recursive wildcard;
     ``**/*.py`` matches ``src/main.py`` (because fnmatch expands ``*``
     greedily within a segment) but the exact expansion depends on the
@@ -521,10 +521,10 @@ def score(entry: CatalogEntry, features: Features) -> float:
         s += 0.5 * count of matching tool_mentions
         return min(s, 1.0)
 
-    Note: ``file_extensions`` is removed from the schema (Issue #249).
+    Note: ``file_extensions`` is removed from the schema.
     The original v5 formula included ``0.4 * file_extensions``; this
     implementation omits it and uses path_globs exclusively, consistent
-    with trigger-schema.md §4.
+    with docs/design/trigger-schema.md §4.
 
     Args:
         entry: One catalog entry to score.
