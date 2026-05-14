@@ -1,0 +1,7 @@
+triggers:
+  keywords:
+    - { term: "refactor", weight: 1.0 }
+    - { term: "restructure", weight: 1.0 }
+    - { term: "rename", weight: 0.5 }
+    - { term: "extract", weight: 0.25 }
+applicable_agents: ["*"]
