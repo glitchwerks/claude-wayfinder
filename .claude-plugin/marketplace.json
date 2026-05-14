@@ -1,0 +1,13 @@
+{
+  "name": "claude-wayfinder",
+  "owner": {
+    "name": "Christopher Beaulieu",
+    "email": "cmb_dev@outlook.com"
+  },
+  "plugins": [
+    {
+      "name": "claude-wayfinder",
+      "path": "./"
+    }
+  ]
+}
