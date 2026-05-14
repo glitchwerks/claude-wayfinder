@@ -4,22 +4,20 @@ Reads trigger configuration from sidecar ``triggers.yml`` files next to
 each ``SKILL.md``, from ``triggers/<plugin>/<skill>.yml`` for plugin
 overrides, and from inline YAML frontmatter for agent ``.md`` files.
 Validates each source against the trigger schema documented in
-``docs/router/trigger-schema.md`` (v6) and emits a
+``docs/design/trigger-schema.md`` (v6) and emits a
 deterministically-ordered JSON catalog to
 ``~/.claude/state/dispatch-catalog.json``.
 
-Issue #250 (v6 sidecar schema) supersedes the inline-frontmatter approach
-used in v5.  Skills now store trigger config in ``triggers.yml`` sidecars;
+The v6 sidecar schema supersedes the inline-frontmatter approach used in
+v5.  Skills now store trigger config in ``triggers.yml`` sidecars;
 plugin-owned skills that cannot be edited use override files at
 ``~/.claude/triggers/<plugin>/<skill>.yml``.
 
-Issue #385 adds project-local merging: when the generator is invoked from
-inside a git repository (or ``--project-root`` is supplied explicitly),
+Project-local merging: when the generator is invoked from inside a git
+repository (or ``--project-root`` is supplied explicitly),
 ``<root>/.claude/skills/**/SKILL.md`` and ``<root>/.claude/agents/*.md``
 are scanned and merged into the catalog with ``source="project"``.
 Project entries override user-global entries on name collision.
-
-Issue #197 acceptance criteria 2-7 (original catalog generator).
 """
 
 from __future__ import annotations
@@ -55,7 +53,7 @@ TRIGGER_FIELDS: tuple[str, ...] = (
     "excludes",
 )
 
-# ``file_extensions`` was removed from TRIGGER_FIELDS in Issue #249.
+# ``file_extensions`` was removed from TRIGGER_FIELDS.
 # Sidecars that still declare it receive a warning and the field is
 # stripped from the catalog entry.  This constant exists so the
 # deprecation check can reference the field by name without magic strings.
@@ -71,7 +69,7 @@ class ValidationIssue:
     """One validation finding produced by the schema validator.
 
     Attributes:
-        severity: Per the trigger-schema.md severity ladder.
+        severity: Per the docs/design/trigger-schema.md severity ladder.
         entry_name: ``name`` field of the entry, or the file path
             stem if the file lacked a parseable ``name``.
         message: Human-readable detail. Goes verbatim to the log.
@@ -509,7 +507,7 @@ def validate_entry(
         return ValidationResult(entry=None, issues=issues)
 
     # --- Deprecation check: file_extensions ---
-    # ``file_extensions`` was removed from TRIGGER_FIELDS in Issue #249.
+    # ``file_extensions`` was removed from TRIGGER_FIELDS.
     # If a sidecar still declares it, warn and drop the field so authors
     # are nudged to migrate to ``path_globs``.
     if _DEPRECATED_FILE_EXTENSIONS in triggers_raw:
@@ -640,7 +638,7 @@ def _sort_entry_lists(entry: dict[str, Any]) -> dict[str, Any]:
         "triggers": triggers,
         inverse_field: sorted(entry.get(inverse_field, [])),
     }
-    # Issue #19: propagate routable field when present (agents only).
+    # Propagate routable field when present (agents only).
     # Absent on skill entries; bool() guard ensures it is never None.
     if "routable" in entry:
         out["routable"] = bool(entry["routable"])
@@ -696,11 +694,11 @@ def build_catalog(
 ) -> dict[str, Any]:
     """Assemble the catalog dict from validated entries.
 
-    Issue #19: adds a top-level ``router_agent`` field that names the
-    first entry with ``routable=False`` (informational; the per-entry
-    flag is the actual exclusion gate).  When no entry declares
-    ``routable: false``, ``router_agent`` is set to ``None`` and a
-    warning is emitted to stderr via the caller (``build()``).
+    Adds a top-level ``router_agent`` field that names the first entry
+    with ``routable=False`` (informational; the per-entry flag is the
+    actual exclusion gate).  When no entry declares ``routable: false``,
+    ``router_agent`` is set to ``None`` and a warning is emitted to
+    stderr via the caller (``build()``).
 
     Args:
         entries: Validated entries from ``validate_entry``. Each must
@@ -1260,7 +1258,7 @@ def detect_exclude_dead_zones(
 ) -> list[ValidationIssue]:
     """Detect ``excludes`` terms that never affect a decision.
 
-    Per ``docs/router/trigger-schema.md`` §7. Warning only; never
+    Per ``docs/design/trigger-schema.md`` §7. Warning only; never
     excludes an entry.
 
     Args:
@@ -1272,10 +1270,10 @@ def detect_exclude_dead_zones(
         A list of ``ValidationIssue``.
 
     Notes:
-        Full simulation requires the matcher from Issue #198. Until
-        the matcher lands, this function emits a single ``info`` line
-        documenting the deferral when the corpus is present, and a
-        single ``info`` line documenting the skip when absent.
+        Full simulation requires the matcher. Until that integration
+        lands, this function emits a single ``info`` line documenting
+        the deferral when the corpus is present, and a single ``info``
+        line documenting the skip when absent.
     """
     if not corpus_path.exists() or corpus_path.stat().st_size == 0:
         return [
@@ -1289,7 +1287,7 @@ def detect_exclude_dead_zones(
         ValidationIssue(
             "info",
             "<catalog>",
-            "EXCLUDE_DEAD_ZONE checks deferred: matcher (#198) not yet integrated",
+            "EXCLUDE_DEAD_ZONE checks deferred: matcher not yet integrated",
         )
     ]
 
@@ -1489,7 +1487,7 @@ def _process_plugin_file(
     """
     stem = path.parent.name if kind == "skill" else path.stem
     # Derive a short plugin namespace from the full identifier.
-    # "superpowers@claude-plugins-official" → "superpowers"
+    # e.g. "superpowers@my-plugin-registry" → "superpowers"
     plugin_short = plugin_name.split("@")[0]
     # Always synthesise the canonical namespaced name so references in
     # applicable_skills / applicable_agents resolve correctly.
@@ -1549,7 +1547,7 @@ def _process_file(
     if result.entry is not None:
         result.entry["source"] = "owned"
         result.entry["content_hash"] = content_hash
-        # Issue #19: read routable flag from frontmatter (default True).
+        # Read routable flag from frontmatter (default True).
         # Agents that declare ``routable: false`` are excluded from the
         # matcher's scored pool via is_agent_routable (match_filters.py).
         routable_raw = fm.get("routable", True)
@@ -1578,16 +1576,16 @@ def build(
     inline frontmatter), and (when provided) scans
     ``plugin_overrides_dir`` for ``<plugin>/<skill>.yml`` overrides.
 
-    Pass 2.5 (issue #477): when ``plugins_dir`` is supplied, reads the
-    plugin manifest at ``<plugins_dir>/installed_plugins.json`` and
-    enumerates ``SKILL.md`` / ``*.md`` files from each user-scoped
-    install.  Plugin entries land **dormant** (zero triggers) with
-    ``source="plugin"`` so they participate in cross-reference
-    resolution but cannot drive routing decisions until explicitly
-    activated via a plugin-override sidecar.
+    Pass 2.5: when ``plugins_dir`` is supplied, reads the plugin manifest
+    at ``<plugins_dir>/installed_plugins.json`` and enumerates
+    ``SKILL.md`` / ``*.md`` files from each user-scoped install.  Plugin
+    entries land **dormant** (zero triggers) with ``source="plugin"`` so
+    they participate in cross-reference resolution but cannot drive
+    routing decisions until explicitly activated via a plugin-override
+    sidecar.
 
-    Pass 2.6 (issue #505): when ``builtin_agents_dir`` is supplied,
-    walks ``<builtin_agents_dir>/*.yml`` and emits catalog entries with
+    Pass 2.6: when ``builtin_agents_dir`` is supplied, walks
+    ``<builtin_agents_dir>/*.yml`` and emits catalog entries with
     ``source="builtin"`` for each valid, version-compatible sidecar.
     Builtin agents are Claude Code's embedded agents (``Explore``,
     ``Plan``) that cannot be edited but can be given trigger surface via
@@ -1670,11 +1668,10 @@ def build(
             entries.append(result)
 
     # --- Pass 2.5: plugin-provided skills and agents (dormant) ---
-    # Issue #477: wire discover_installed_plugins + discover_plugin_entries
-    # into build().  Plugin entries land with source="plugin" and zero
-    # triggers so they are dormant by default.  This pass runs after the
-    # owned-agents pass and before the plugin-overrides pass so that
-    # override entries (Pass 3) can supersede plugin-provided ones.
+    # Plugin entries land with source="plugin" and zero triggers so they
+    # are dormant by default.  This pass runs after the owned-agents pass
+    # and before the plugin-overrides pass so that override entries
+    # (Pass 3) can supersede plugin-provided ones.
     if plugins_dir is not None:
         plugin_issues: list[ValidationIssue] = []
         installs = discover_installed_plugins(plugins_dir, plugin_issues)
@@ -1707,8 +1704,8 @@ def build(
                 entries.append(p_result)
 
     # --- Pass 2.6: builtin-agent sidecars ---
-    # Issue #505: walk <builtin_agents_dir>/*.yml for operator-authored
-    # sidecars describing Claude Code's embedded agents (Explore, Plan).
+    # Walk <builtin_agents_dir>/*.yml for operator-authored sidecars
+    # describing Claude Code's embedded agents (Explore, Plan).
     # Each sidecar must declare min_claude_version; the running version is
     # read dynamically so CI tests can override it via CLAUDE_VERSION.
     #
@@ -1895,9 +1892,9 @@ def build(
 
     catalog = build_catalog(entries, built_for_project=project_root)
 
-    # Issue #19: warn when no agent declared routable: false.  The
-    # catalog's router_agent field will be null, which means all agents
-    # are scored — including the router itself if it appears as an entry.
+    # Warn when no agent declared routable: false.  The catalog's
+    # router_agent field will be null, which means all agents are scored
+    # — including the router itself if it appears as an entry.
     if catalog.get("router_agent") is None:
         print(
             "[catalog] WARNING: no router agent declared (routable: false);"
@@ -1948,8 +1945,7 @@ def main(argv: list[str] | None = None) -> int:
         default=home / "plugins",
         help=(
             "Directory containing installed_plugins.json.  Used for "
-            "Pass 2.5 plugin discovery (issue #477).  Defaults to "
-            "~/.claude/plugins/."
+            "Pass 2.5 plugin discovery.  Defaults to ~/.claude/plugins/."
         ),
     )
     parser.add_argument(
@@ -1958,7 +1954,7 @@ def main(argv: list[str] | None = None) -> int:
         default=home / "triggers" / _BUILTIN_AGENTS_SUBDIR,
         help=(
             "Directory containing builtin-agent sidecar .yml files.  "
-            "Used for Pass 2.6 builtin discovery (issue #505).  "
+            "Used for Pass 2.6 builtin discovery.  "
             "Defaults to ~/.claude/triggers/builtin/."
         ),
     )

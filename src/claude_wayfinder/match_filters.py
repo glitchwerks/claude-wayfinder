@@ -5,21 +5,17 @@ for which catalog entries may participate in agent scoring.  Both the
 catalog generator (build_catalog.py) and the matcher (match.py) import
 from here so the exclusion rules stay in sync.
 
-Issue #477 acceptance criteria §"Shared predicate module" (Pass 2.5).
-
-Issue #19: replaced the hardcoded ``_EXCLUDED_AGENT_NAME`` constant
-(``"general-purpose"``) with a data-driven ``routable: bool`` parameter.
-Callers pass the catalog entry's ``routable`` field so that any agent
+The hardcoded ``_EXCLUDED_AGENT_NAME`` constant (``"general-purpose"``) was
+replaced with a data-driven ``routable: bool`` parameter so that any agent
 may be marked non-routable without requiring changes to this module.
 
-Design note (Finding #1, PR #487): the predicate accepts three named
-scalar parameters rather than a ``dict[str, Any]`` to avoid allocating a
-temporary dict per entry in the scoring loop (match.py:894-899).  Using a
-``CatalogEntry`` directly would create a circular import because
-``CatalogEntry`` is defined in ``match.py``, which already imports from
-this module.  Three named keyword args give the same call-site clarity
-and proper type information without the allocation cost or the circular
-dependency.
+The predicate accepts three named scalar parameters rather than a
+``dict[str, Any]`` to avoid allocating a temporary dict per entry in the
+scoring loop (match.py:894-899).  Using a ``CatalogEntry`` directly would
+create a circular import because ``CatalogEntry`` is defined in ``match.py``,
+which already imports from this module.  Three named keyword args give the
+same call-site clarity and proper type information without the allocation
+cost or the circular dependency.
 """
 
 from __future__ import annotations
