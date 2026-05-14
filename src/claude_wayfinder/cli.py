@@ -1,0 +1,274 @@
+"""CLI entry point for the ``claude_wayfinder`` package.
+
+Exposes the ``demo`` sub-command which iterates the bundled demo prompts
+against the bundled demo catalog and prints human-readable output for each
+of the 7 decision branches.
+
+Usage::
+
+    python -m claude_wayfinder demo
+
+No external dependencies, no network access, no user state required.
+The bundled fixtures are loaded from the package's ``fixtures/`` directory.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+from claude_wayfinder.match import (
+    build_features,
+    decide,
+    load_catalog,
+    score,
+)
+from claude_wayfinder.match_filters import is_agent_routable
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Path to the bundled demo fixtures directory (shipped with the package).
+_FIXTURES_DIR: Path = Path(__file__).parent / "fixtures"
+_DEMO_CATALOG: Path = _FIXTURES_DIR / "demo-catalog.json"
+_DEMO_PROMPTS: Path = _FIXTURES_DIR / "demo-prompts.json"
+
+# Decision branch label reserved but not produced by the v0.1 matcher.
+_ASK_USER_BRANCH = "ask_user"
+
+# Human-readable banner displayed once at the start of the demo.
+_BANNER = """
+=============================================================
+  claude-wayfinder demo — 7-decision dispatch matcher (v5)
+=============================================================
+Bundled catalog:  {catalog}
+Bundled prompts:  {prompts}
+-------------------------------------------------------------
+""".strip()
+
+
+# ---------------------------------------------------------------------------
+# Core demo logic
+# ---------------------------------------------------------------------------
+
+
+def _score_catalog(
+    entries: list[Any],
+    features: Any,
+) -> tuple[list[Any], list[Any]]:
+    """Score all catalog entries against features and return sorted pools.
+
+    Args:
+        entries: List of ``CatalogEntry`` objects from the catalog.
+        features: ``Features`` extracted from the dispatch context.
+
+    Returns:
+        A tuple of ``(scored_agents, scored_skills)`` each sorted by score
+        descending then name ascending.
+    """
+    from claude_wayfinder.match import ScoredEntry
+
+    agent_entries = [
+        e
+        for e in entries
+        if e.kind == "agent"
+        and is_agent_routable(
+            name=e.name,
+            kind=e.kind,
+            source=e.source,
+            routable=e.routable,
+        )
+    ]
+    skill_entries = [e for e in entries if e.kind == "skill"]
+
+    scored_agents = sorted(
+        [ScoredEntry(entry=e, score=score(e, features)) for e in agent_entries],
+        key=lambda se: (-se.score, se.entry.name),
+    )
+    scored_skills = sorted(
+        [ScoredEntry(entry=e, score=score(e, features)) for e in skill_entries],
+        key=lambda se: (-se.score, se.entry.name),
+    )
+    return scored_agents, scored_skills
+
+
+def _format_decision(result: dict[str, Any]) -> str:
+    """Format a decision dict as a concise human-readable line.
+
+    Args:
+        result: Decision dict returned by ``decide()``.
+
+    Returns:
+        Multi-line string summarising the decision.
+    """
+    lines: list[str] = []
+    decision = result.get("decision", "?")
+    confidence = result.get("confidence", 0.0)
+    rationale = result.get("rationale", "")
+    lines.append(f"  decision    : {decision}")
+    lines.append(f"  confidence  : {confidence:.4f}")
+    if "agent" in result:
+        lines.append(f"  agent       : {result['agent']}")
+    if result.get("skills"):
+        lines.append(f"  skills      : {', '.join(result['skills'])}")
+    lines.append(f"  rationale   : {rationale}")
+    alts = result.get("alternatives", [])
+    if alts:
+        alt_str = ", ".join(
+            f"{a['agent']}({a['score']:.2f})" for a in alts
+        )
+        lines.append(f"  alternatives: {alt_str}")
+    return "\n".join(lines)
+
+
+def run_demo(out: Any = None) -> int:
+    """Run the demo against the bundled fixtures and write output.
+
+    Iterates ``demo-prompts.json``, runs the matcher for each non-reserved
+    prompt, and prints one formatted block per decision branch.  The
+    ``ask_user`` branch is reserved in v0.1 and is shown with a note
+    rather than a live matcher call.
+
+    Args:
+        out: File-like object to write output to.  Defaults to
+            ``sys.stdout``.
+
+    Returns:
+        Exit code: 0 on success, non-zero on error.
+    """
+    if out is None:
+        out = sys.stdout
+
+    # --- Load catalog ---
+    try:
+        entries = load_catalog(_DEMO_CATALOG)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+        print(
+            f"[DEMO ERROR] Failed to load bundled catalog: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # --- Load prompts ---
+    try:
+        prompts: list[dict[str, Any]] = json.loads(
+            _DEMO_PROMPTS.read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        print(
+            f"[DEMO ERROR] Failed to load bundled prompts: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # --- Banner ---
+    print(
+        _BANNER.format(
+            catalog=_DEMO_CATALOG.name,
+            prompts=_DEMO_PROMPTS.name,
+        ),
+        file=out,
+    )
+    print("", file=out)
+
+    # --- Iterate prompts ---
+    for idx, prompt in enumerate(prompts, start=1):
+        branch = prompt.get("_branch", f"prompt-{idx}")
+        note = prompt.get("_note", "")
+
+        print(f"[{idx}/7] Branch: {branch}", file=out)
+        if note:
+            print(f"  note        : {note}", file=out)
+
+        # ask_user is reserved — the matcher never produces it in v0.1.
+        if branch == _ASK_USER_BRANCH:
+            print(
+                "  decision    : ask_user",
+                file=out,
+            )
+            print(
+                "  rationale   : Reserved — not produced by the v0.1 "
+                "matcher. ask_user is part of the 7-decision contract "
+                "and reserved for future clarification flows.",
+                file=out,
+            )
+            print("", file=out)
+            continue
+
+        # Build context (drop private _-prefixed keys).
+        context: dict[str, Any] = {
+            k: v for k, v in prompt.items() if not k.startswith("_")
+        }
+        # Handle null task_description gracefully (should not occur for
+        # non-reserved prompts, but guard defensively).
+        if context.get("task_description") is None:
+            context["task_description"] = ""
+
+        features = build_features(context)
+        scored_agents, scored_skills = _score_catalog(entries, features)
+        result = decide(scored_agents, scored_skills, features, entries)
+
+        task_desc = context.get("task_description", "")
+        paths = context.get("file_paths", [])
+        print(f"  input       : {task_desc!r}", file=out)
+        if paths:
+            print(f"  file_paths  : {paths}", file=out)
+        print(_format_decision(result), file=out)
+        print("", file=out)
+
+    print("-------------------------------------------------------------", file=out)
+    print("Demo complete. All 7 decision branches shown.", file=out)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level argument parser.
+
+    Returns:
+        A configured ``ArgumentParser`` for ``python -m claude_wayfinder``.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m claude_wayfinder",
+        description=(
+            "claude-wayfinder — deterministic 7-decision dispatch matcher."
+        ),
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser(
+        "demo",
+        help=(
+            "Run the bundled demo: 7 example prompts, one per decision "
+            "branch, with the matcher's output for each."
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse CLI arguments and dispatch to the requested sub-command.
+
+    Args:
+        argv: Argument list.  Defaults to ``sys.argv[1:]`` when ``None``.
+
+    Returns:
+        Exit code: 0 on success, non-zero on error.
+    """
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "demo":
+        return run_demo()
+
+    # No sub-command given — print help and exit non-zero.
+    parser.print_help()
+    return 1

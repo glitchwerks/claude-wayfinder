@@ -1,0 +1,65 @@
+{
+  "entries": [
+    {
+      "name": "code-writer",
+      "kind": "agent",
+      "source": "owned",
+      "routable": true,
+      "applicable_agents": [],
+      "applicable_skills": ["python"],
+      "triggers": {
+        "command_prefixes": [],
+        "agent_mentions": ["code-writer"],
+        "path_globs": ["**/*.py", "**/*.ts"],
+        "keywords": [
+          {"term": "implement",  "weight": 1.0},
+          {"term": "edit",       "weight": 0.5},
+          {"term": "review",     "weight": 1.0},
+          {"term": "deploy",     "weight": 0.5}
+        ],
+        "tool_mentions": [],
+        "excludes": []
+      }
+    },
+    {
+      "name": "devops",
+      "kind": "agent",
+      "source": "owned",
+      "routable": true,
+      "applicable_agents": [],
+      "applicable_skills": [],
+      "triggers": {
+        "command_prefixes": [],
+        "agent_mentions": ["devops"],
+        "path_globs": ["**/*.yml", "**/*.yaml"],
+        "keywords": [
+          {"term": "deploy",    "weight": 1.0},
+          {"term": "pipeline",  "weight": 0.5},
+          {"term": "review",    "weight": 1.0},
+          {"term": "infra",     "weight": 0.5}
+        ],
+        "tool_mentions": [],
+        "excludes": []
+      }
+    },
+    {
+      "name": "python",
+      "kind": "skill",
+      "source": "owned",
+      "routable": false,
+      "applicable_agents": ["*"],
+      "applicable_skills": [],
+      "triggers": {
+        "command_prefixes": [],
+        "agent_mentions": [],
+        "path_globs": [],
+        "keywords": [
+          {"term": "python", "weight": 1.0},
+          {"term": "script", "weight": 0.5}
+        ],
+        "tool_mentions": [],
+        "excludes": []
+      }
+    }
+  ]
+}

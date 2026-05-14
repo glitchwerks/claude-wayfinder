@@ -1,0 +1,44 @@
+[
+  {
+    "_branch": "delegate",
+    "_note": "code-writer scores 0.9 (keyword 'implement' + glob **/*.py); devops scores 0.0; gap 0.9 >= 0.2",
+    "task_description": "implement the authentication module",
+    "file_paths": ["src/auth.py"]
+  },
+  {
+    "_branch": "self_handle",
+    "_note": "python skill scores 0.75 (keyword 'python' + 'script'); no agent exceeds 0.5; self_handle fires",
+    "task_description": "run the python data pipeline script",
+    "file_paths": ["data/input.csv"]
+  },
+  {
+    "_branch": "self_handle_unaided",
+    "_note": "generic prompt; no agent or skill scores above threshold",
+    "task_description": "update the team wiki page with meeting notes",
+    "file_paths": ["wiki/page.md"]
+  },
+  {
+    "_branch": "advisory",
+    "_note": "code-writer scores 0.5 (keyword 'implement'); devops scores 0.0; gap 0.5 >= 0.2; advisory fires",
+    "task_description": "how does this implement the feature",
+    "file_paths": ["docs/notes.md"]
+  },
+  {
+    "_branch": "ambiguous",
+    "_note": "both agents score 0.5 (keyword 'review'); gap 0.0 < 0.2; ambiguous fires",
+    "task_description": "review the module changes",
+    "file_paths": ["Makefile"]
+  },
+  {
+    "_branch": "ask_user",
+    "_note": "RESERVED — the matcher does not produce ask_user in v0.1; it is part of the 7-decision contract and reserved for future use (e.g. clarification flows)",
+    "task_description": null,
+    "file_paths": []
+  },
+  {
+    "_branch": "needs_more_detail",
+    "_note": "feature density < 2 (single keyword token, no paths); needs_more_detail fires",
+    "task_description": "help",
+    "file_paths": []
+  }
+]
