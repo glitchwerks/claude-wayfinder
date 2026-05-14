@@ -23,7 +23,7 @@ from claude_wayfinder.match import (
     score,
 )
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 
 # ``build_catalog.build_catalog`` is public but cannot be re-exported here
 # because the name ``build_catalog`` at the package level refers to the
