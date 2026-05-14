@@ -1,0 +1,12 @@
+triggers:
+  path_globs:
+    - "agents/**/*.md"
+    - "agents/*.md"
+    - "CLAUDE.md"
+    - "skills/**/SKILL.md"
+  keywords:
+    - { term: "frontmatter", weight: 1.0 }
+    - { term: "harness", weight: 1.0 }
+    - { term: "agent", weight: 0.5 }
+    - { term: "skill", weight: 0.25 }
+applicable_agents: ["*"]

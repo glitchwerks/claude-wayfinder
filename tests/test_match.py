@@ -1257,6 +1257,11 @@ _AGENTS_DIR = REPO_ROOT / "agents"
 _SKILLS_DIR = REPO_ROOT / "skills"
 _TRIGGERS_DIR = REPO_ROOT / "triggers"
 
+#: Fixture directories containing synthetic agents and skills for
+#: catalog cascade tests that must run without the private harness.
+_FIXTURE_AGENTS_DIR = REPO_ROOT / "tests" / "fixtures" / "agents"
+_FIXTURE_SKILLS_DIR = REPO_ROOT / "tests" / "fixtures" / "skills"
+
 _BUILD_SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "build_catalog.py"
 
 
@@ -1302,6 +1307,58 @@ def _build_live_catalog(tmp_path: Path) -> Path:
     return out_path
 
 
+def _build_synthetic_catalog(tmp_path: Path) -> Path:
+    """Build a dispatch catalog from the tests/fixtures/ agent and skill dirs.
+
+    Replaces ``_build_live_catalog`` for tests that previously skipped when
+    the private harness ``agents/`` directory was absent.  The fixture
+    directories are committed alongside the tests and must always exist —
+    a missing fixture directory is a fatal error, not a skip.
+
+    Args:
+        tmp_path: pytest temporary directory for catalog and log output.
+
+    Returns:
+        Path to the generated catalog JSON file.
+
+    Raises:
+        AssertionError: If either fixture directory is missing.
+    """
+    assert _FIXTURE_AGENTS_DIR.is_dir(), (
+        f"Fixture agents directory missing: {_FIXTURE_AGENTS_DIR}. "
+        "Fixture files are committed and must always be present."
+    )
+    assert _FIXTURE_SKILLS_DIR.is_dir(), (
+        f"Fixture skills directory missing: {_FIXTURE_SKILLS_DIR}. "
+        "Fixture files are committed and must always be present."
+    )
+    out_path = tmp_path / "synthetic-catalog.json"
+    log_path = tmp_path / "synthetic-catalog.log"
+    result = subprocess.run(
+        [
+            PYTHON,
+            str(_BUILD_SCRIPT),
+            "--agents-dir",
+            str(_FIXTURE_AGENTS_DIR),
+            "--skills-dir",
+            str(_FIXTURE_SKILLS_DIR),
+            "--out",
+            str(out_path),
+            "--log",
+            str(log_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode not in (0, 2):
+        raise RuntimeError(
+            f"Synthetic catalog build failed (exit {result.returncode}):\n"
+            f"{result.stderr}\nLog path: {log_path}"
+        )
+    return out_path
+
+
 class TestIssue361EditFamilyTriggers:
     """Regression tests for issue #361.
 
@@ -1309,16 +1366,16 @@ class TestIssue361EditFamilyTriggers:
     it had no edit-family keywords and no path_globs.  These three tests
     cover the three scenarios described in the issue's acceptance criteria.
 
-    All three tests build a live catalog from the worktree's agents/
-    directory so they fail against the pre-fix frontmatter and pass after
-    the fix is applied — giving true TDD red/green coverage.
+    All three tests build a synthetic catalog from tests/fixtures/ so they
+    run without the private harness agents/ directory and give true
+    TDD red/green coverage of the fixture frontmatter.
     """
 
     def test_css_edit_routes_to_code_writer(self, tmp_path: Path) -> None:
         """CSS edit task with HTML file path must identify code-writer.
 
         Expected post-fix score for code-writer:
-          0.4 (glob **/*.html matches index.html)
+          0.4 (glob *.html matches index.html)
           + 0.5 * 0.5 (edit keyword, weight=0.5)
           = 0.65 → advisory or delegate (code-writer is the identified agent).
 
@@ -1330,7 +1387,7 @@ class TestIssue361EditFamilyTriggers:
         The key invariant is that the decision is NOT 'self_handle_unaided'
         and the agent IS 'code-writer'.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": (
                 "Edit two CSS values in index.html on an existing branch"
@@ -1360,7 +1417,7 @@ class TestIssue361EditFamilyTriggers:
         """Python script task with .py file path must identify code-writer.
 
         Expected post-fix score for code-writer:
-          0.4 (glob **/*.py matches deploy.py)
+          0.4 (glob *.py matches deploy.py)
           + 0.5 * 1.0 (implement keyword, weight=1.0)
           + 0.5 * 0.25 (script keyword, weight=0.25)
           = 0.4 + 0.5 + 0.125 = 1.025 → clamped to 1.0 → delegate.
@@ -1370,7 +1427,7 @@ class TestIssue361EditFamilyTriggers:
         The path_glob addition in #361 raises the score above 0.5 so
         code-writer is properly identified as the right agent.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "Implement the deployment script in Python",
             "file_paths": ["deploy.py"],
@@ -1408,10 +1465,10 @@ class TestIssue361EditFamilyTriggers:
           = 0.25
           (infra/main.bicep does not match any code-writer path_glob)
 
-        Gap = 1.0 - 0.15 = 0.85 >= 0.2 → delegate to devops.
+        Gap = 1.0 - 0.25 = 0.75 >= 0.2 → delegate to devops.
         code-writer must NOT win here even with edit-family keywords.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": (
                 "Update the bicep infrastructure deployment template"
@@ -1446,9 +1503,9 @@ class TestIssue364DocWriterAgent:
     plan files, ADRs) had no specialist owner.  The doc-writer agent
     introduced in #364 fills that gap.
 
-    All four tests build a live catalog from the worktree's agents/
-    directory so they fail before agents/doc-writer.md is created and
-    pass after it is added — giving true TDD red/green coverage.
+    All four tests build a synthetic catalog from tests/fixtures/ so they
+    run without the private harness agents/ directory and give true
+    TDD red/green coverage of the fixture frontmatter.
     """
 
     def test_docs_md_routes_to_doc_writer(self, tmp_path: Path) -> None:
@@ -1463,7 +1520,7 @@ class TestIssue364DocWriterAgent:
         Pre-fix: doc-writer does not exist → no agent matches prose paths
         → self_handle_unaided, no agent in output.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "update the docs",
             "file_paths": ["docs/foo.md"],
@@ -1496,7 +1553,7 @@ class TestIssue364DocWriterAgent:
 
         Pre-fix: doc-writer does not exist → README edits fall through.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "edit the readme",
             "file_paths": ["README.md"],
@@ -1528,7 +1585,7 @@ class TestIssue364DocWriterAgent:
         What decision is returned depends on other agents and harness
         carve-out behaviour, but doc-writer must not win here.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "edit the agent",
             "file_paths": ["agents/code-writer.md"],
@@ -1561,7 +1618,7 @@ class TestIssue364DocWriterAgent:
         doc-writer should score 0.0 (no matching glob, 'edit' weight
         only 0.25 → 0.125, not enough to win over code-writer).
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "edit the function",
             "file_paths": ["src/main.py"],
@@ -1598,17 +1655,16 @@ class TestIssue366AgentAuthoringSkill:
     should activate the ``agent-authoring`` skill when these files are in
     scope.
 
-    All four tests build a live catalog from the worktree's ``agents/`` and
-    ``skills/`` directories so they fail before ``skills/agent-authoring/``
-    is created and pass after it is added — giving true TDD red/green
-    coverage.
+    All four tests build a synthetic catalog from tests/fixtures/ so they
+    run without the private harness agents/ directory and give true TDD
+    red/green coverage of the fixture frontmatter.
     """
 
     def test_agent_md_edit_self_handles_with_agent_authoring_skill(self, tmp_path: Path) -> None:
         """agents/foo.md + 'update the frontmatter' → self_handle with agent-authoring skill.
 
         Expected post-fix score breakdown:
-          - ``agents/foo.md`` matches ``agents/**/*.md`` path_glob → +0.4
+          - ``agents/foo.md`` matches ``agents/*.md`` path_glob → +0.4
           - keyword "frontmatter" (weight=1.0) → +0.5*1.0 = +0.50
           Total skill score = 0.90 → self_handle decision, "agent-authoring" in skills.
 
@@ -1616,7 +1672,7 @@ class TestIssue366AgentAuthoringSkill:
         delegated to sub-agents), so the decision must be ``self_handle``
         (not ``delegate``).
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "update the frontmatter in agents/foo.md",
             "file_paths": ["agents/foo.md"],
@@ -1649,7 +1705,7 @@ class TestIssue366AgentAuthoringSkill:
           - keyword "harness" (weight=1.0) → +0.5*1.0 = +0.50
           Total skill score = 0.90 → self_handle, "agent-authoring" in skills.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "tighten the harness rule in CLAUDE.md",
             "file_paths": ["CLAUDE.md"],
@@ -1682,7 +1738,7 @@ class TestIssue366AgentAuthoringSkill:
           - keyword "skill" (weight=0.25, demoted from 0.5 in #454) → +0.5*0.25 = +0.125
           Total skill score = 0.525 → self_handle, "agent-authoring" in skills.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "update the skill",
             "file_paths": ["skills/foo/SKILL.md"],
@@ -1713,7 +1769,7 @@ class TestIssue366AgentAuthoringSkill:
         by the doc-writer agent, not a harness file.  This test ensures the
         skill's path_globs are tightly scoped to actual harness artifacts.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": "update the docs",
             "file_paths": ["docs/foo.md"],
@@ -1836,10 +1892,10 @@ class TestIssue425KeywordMultiplier:
         With new multiplier (0.5):
           0.5 * 1.0 (refactor) + 0.5 * 0.25 (extract) = 0.625 — attaches.
 
-        This test builds from the live catalog so it validates the actual
-        refactoring-discipline triggers.yml against the fixed scorer.
+        This test builds from the synthetic fixture catalog so it validates the
+        fixture refactoring-discipline triggers.yml against the fixed scorer.
         """
-        catalog_path = _build_live_catalog(tmp_path)
+        catalog_path = _build_synthetic_catalog(tmp_path)
         stdin_obj = {
             "task_description": ("refactor the auth module to extract credential validation"),
             "file_paths": ["src/auth.py"],
