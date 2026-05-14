@@ -1,20 +1,27 @@
 """Deterministic 7-decision dispatch matcher for the router (v5).
 
 Reads a JSON dispatch context from stdin and writes a JSON routing
-decision to stdout.  Consumes the dispatch catalog at
-``~/.claude/state/dispatch-catalog.json`` (or the path given by
-``DISPATCH_CATALOG_PATH``).  Exits non-zero with a ``[CATALOG ERROR]``
-banner on stderr when the catalog is degraded.
+decision to stdout.  The catalog path must be supplied via one of:
 
-Every successful invocation appends a decision record to
-``~/.claude/state/dispatch-log.jsonl`` (or the path given by
-``DISPATCH_LOG_PATH``).  Log-write failures are non-fatal: a message is
-written to stderr but the matcher's stdout decision is always emitted.
+  1. ``--catalog-path <path>`` CLI flag.
+  2. ``DISPATCH_CATALOG_PATH`` env var.
+
+If neither is present the matcher exits non-zero with a
+``[CATALOG ERROR]`` banner on stderr naming the fix.  The old
+``~/.claude/`` default and the middle env-var step have been
+removed (Issue #10).
+
+Every successful invocation appends a decision record to the path given
+by ``DISPATCH_LOG_PATH``.  When ``DISPATCH_LOG_PATH`` is absent logging
+is silently disabled — no fallback to ``~/.claude/``.  Log-write
+failures are non-fatal: a message is written to stderr but the
+matcher's stdout decision is always emitted.
 
 Usage::
 
     echo '{"task_description": "implement the new feature",
-           "file_paths": ["src/main.py"]}' | python match.py
+           "file_paths": ["src/main.py"]}' \\
+      | python match.py --catalog-path /path/to/dispatch-catalog.json
 
 See ``docs/design/2026-04-30-deterministic-first-router-design-v5.md``
 sections 3.1.1-3.1.8 for the full specification this module implements.
@@ -22,6 +29,7 @@ sections 3.1.1-3.1.8 for the full specification this module implements.
 
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import hashlib
 import json
@@ -32,7 +40,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from claude_wayfinder.match_filters import is_agent_routable
 
@@ -221,41 +229,66 @@ def extract_keywords(text: str) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_catalog_path() -> Path:
-    """Return the catalog file path from env or default.
+def _resolve_catalog_path(
+    explicit_path: str | Path | None = None,
+) -> Path:
+    """Return the catalog file path from the explicit arg or env var.
 
-    Lookup order:
-    1. ``DISPATCH_CATALOG_PATH`` env var — absolute override.
-    2. ``$CLAUDE_HOME/state/dispatch-catalog.json`` when ``CLAUDE_HOME``
-       is set.
-    3. ``~/.claude/state/dispatch-catalog.json`` (platform default).
+    Resolution order (first match wins):
+
+    1. ``explicit_path`` argument — supplied via ``--catalog-path`` CLI
+       flag.
+    2. ``DISPATCH_CATALOG_PATH`` env var.
+    3. **Fail loud** — emits a ``[CATALOG ERROR]`` banner on stderr and
+       exits with code 2.
+
+    The previous three-step lookup (env var, home-env middle step,
+    platform default) has been reduced to two steps — env var or explicit
+    arg, else fail loud (Issue #10).  Callers that previously relied on
+    the default must now supply an explicit path or set
+    ``DISPATCH_CATALOG_PATH``.
+
+    Args:
+        explicit_path: Path supplied by the caller (e.g. ``--catalog-path``
+            CLI flag).  ``None`` falls through to the env var.
 
     Returns:
-        Resolved ``Path`` to the catalog file (may not exist yet).
+        Resolved ``Path`` to the catalog file.  The file may not exist;
+        callers are responsible for checking.
+
+    Raises:
+        SystemExit: With code 2 when no path source is available.
     """
-    explicit = os.environ.get("DISPATCH_CATALOG_PATH")
-    if explicit:
-        return Path(explicit)
-    claude_home_env = os.environ.get("CLAUDE_HOME")
-    if claude_home_env:
-        return Path(claude_home_env) / "state" / "dispatch-catalog.json"
-    return Path.home() / ".claude" / "state" / "dispatch-catalog.json"
+    if explicit_path is not None:
+        return Path(explicit_path)
+    env_val = os.environ.get("DISPATCH_CATALOG_PATH")
+    if env_val:
+        return Path(env_val)
+    _emit_catalog_error(
+        "no catalog path specified — pass --catalog-path <path> "
+        "or set DISPATCH_CATALOG_PATH"
+    )
 
 
-def _resolve_log_path() -> Path:
-    """Return the dispatch log file path from env or default.
+def _resolve_log_path() -> Path | None:
+    """Return the dispatch log file path from env, or None to disable logging.
 
-    Lookup order:
+    Resolution order:
+
     1. ``DISPATCH_LOG_PATH`` env var — absolute override.
-    2. ``~/.claude/state/dispatch-log.jsonl`` (platform default).
+    2. ``None`` — logging is silently disabled (no ``~/.claude/`` fallback).
+
+    The previous ``~/.claude/state/dispatch-log.jsonl`` platform default
+    has been removed (Issue #10).  When ``DISPATCH_LOG_PATH`` is absent,
+    log writing is skipped without error.
 
     Returns:
-        Resolved ``Path`` to the log file (may not exist yet).
+        ``Path`` to the log file, or ``None`` when logging is disabled.
     """
     explicit = os.environ.get("DISPATCH_LOG_PATH")
     if explicit:
         return Path(explicit).expanduser()
-    return Path.home() / ".claude" / "state" / "dispatch-log.jsonl"
+    return None
 
 
 def _compute_catalog_hash(catalog_data: dict[str, Any] | str | bytes) -> str:
@@ -313,7 +346,7 @@ def _write_log_entry(
     input_dict: dict[str, Any],
     output_dict: dict[str, Any],
     catalog_hash: str,
-    log_path: Path,
+    log_path: Path | None,
 ) -> None:
     """Append one decision record to the dispatch log file.
 
@@ -321,13 +354,20 @@ def _write_log_entry(
     parent directory does not exist it is created.  All I/O errors are
     caught and emitted to stderr; this function never raises.
 
+    When ``log_path`` is ``None`` (logging disabled — no
+    ``DISPATCH_LOG_PATH`` env var was set), the function returns
+    immediately without writing or emitting any message.
+
     Args:
         input_dict: The parsed dispatch context (stdin JSON).
         output_dict: The matcher decision (stdout JSON).
         catalog_hash: SHA-256 digest of the catalog used, from
             ``_compute_catalog_hash``.
-        log_path: Path to the ``.jsonl`` log file.
+        log_path: Path to the ``.jsonl`` log file, or ``None`` to
+            silently skip log writing.
     """
+    if log_path is None:
+        return
     entry: dict[str, Any] = {
         "type": "matcher_decision",
         "ts": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
@@ -823,7 +863,7 @@ def _top_alternatives(scored: list[ScoredEntry], n: int = 3) -> list[dict[str, A
 # ---------------------------------------------------------------------------
 
 
-def _emit_catalog_error(details: str) -> None:
+def _emit_catalog_error(details: str) -> NoReturn:
     """Write the catalog-degraded banner to stderr and exit 2.
 
     Args:
@@ -838,12 +878,28 @@ def _emit_catalog_error(details: str) -> None:
     sys.exit(2)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Entry point: read JSON from stdin, write decision JSON to stdout.
 
-    Catalog path is resolved via ``_resolve_catalog_path()``.  If the
-    catalog is degraded (missing, malformed, or empty), emits a
-    ``[CATALOG ERROR]`` banner to stderr and exits with code 2.
+    The catalog path is resolved via ``_resolve_catalog_path()``.  If no
+    path is available (no ``--catalog-path`` flag and no
+    ``DISPATCH_CATALOG_PATH`` env var), emits a ``[CATALOG ERROR]`` banner
+    on stderr and exits with code 2.  If the catalog is degraded (missing,
+    malformed, or empty), the same banner is emitted.
+
+    Arg resolution order for catalog:
+
+    1. ``--catalog-path <path>`` CLI flag.
+    2. ``DISPATCH_CATALOG_PATH`` env var.
+    3. Fail loud with ``[CATALOG ERROR]``.
+
+    Log path resolution order:
+
+    1. ``DISPATCH_LOG_PATH`` env var.
+    2. Logging silently disabled (no ``~/.claude/`` fallback).
+
+    Args:
+        argv: Argument list.  Defaults to ``sys.argv[1:]`` when ``None``.
 
     Input JSON shape (stdin)::
 
@@ -866,8 +922,26 @@ def main() -> None:
             "alternatives": [{"agent": "...", "score": 0.x}, ...]
         }
     """
+    # --- Parse CLI args ---
+    parser = argparse.ArgumentParser(
+        description="Deterministic 7-decision dispatch matcher (v5).",
+        add_help=True,
+    )
+    parser.add_argument(
+        "--catalog-path",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to the dispatch-catalog.json file.  "
+            "Resolution order: --catalog-path > DISPATCH_CATALOG_PATH env "
+            "var > error.  The old ~/.claude/state/ default has been removed."
+        ),
+    )
+    args = parser.parse_args(argv)
+
     # --- Load catalog ---
-    catalog_path = _resolve_catalog_path()
+    catalog_path = _resolve_catalog_path(args.catalog_path)
 
     if not catalog_path.exists():
         _emit_catalog_error(f"file not found at {catalog_path}")
