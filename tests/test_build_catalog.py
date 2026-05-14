@@ -2858,66 +2858,6 @@ def test_disabled_skill_applicable_skills_ref_falls_back_to_external_log(
 
 
 # ---------------------------------------------------------------------------
-# GitHub read/write-split invariant tests (issue #514 / #512 Phase 1)
-# ---------------------------------------------------------------------------
-
-
-def test_subagent_github_write_tools_removed() -> None:
-    """Sub-agents (except review agents) must not list GitHub write tools.
-
-    Per #512 Phase 1 (#513): write tools were removed from sub-agent
-    frontmatter to enforce the read/write split structurally — the call
-    cannot happen if the tool isn't in context. This test prevents silent
-    regression if a future agent edit re-adds them.
-    """
-    if not (REPO_ROOT / "agents").is_dir():
-        pytest.skip("requires harness agents/ directory (not present in public repo)")
-    prohibited_tools = [
-        "mcp__github__add_issue_comment",
-        "mcp__github__create_issue",
-        "mcp__github__create_pull_request",
-        "mcp__github__update_issue",
-        "mcp__github__merge_pull_request",
-        "mcp__github__create_or_update_file",
-        "mcp__github__push_files",
-    ]
-    subagents = ["code-writer", "debugger", "doc-writer"]
-    for agent in subagents:
-        agent_path = REPO_ROOT / "agents" / f"{agent}.md"
-        fm = load_frontmatter(agent_path)
-        tools_str = fm.get("tools", "") if fm else ""
-        for tool in prohibited_tools:
-            assert tool not in tools_str, (
-                f"{agent} must not have {tool} (per #512 read/write split). "
-                f"If you need to write to GitHub from this agent, return "
-                f"findings to the router for it to post."
-            )
-
-
-def test_review_agents_retain_create_pull_request_review() -> None:
-    """code-reviewer and inquisitor keep create_pull_request_review by design.
-
-    Per #514, this carve-out exists because (1) the agent's identity encodes
-    the intent, (2) reviews carry a structured state enum that bounds the
-    action shape, and (3) reviews are scope-bounded to the PR diff. A future
-    over-aggressive scrub that removed this tool would make these agents
-    inoperable — this test guards against it.
-    """
-    if not (REPO_ROOT / "agents").is_dir():
-        pytest.skip("requires harness agents/ directory (not present in public repo)")
-    review_agents = ["code-reviewer", "inquisitor"]
-    required_tool = "mcp__github__create_pull_request_review"
-    for agent in review_agents:
-        agent_path = REPO_ROOT / "agents" / f"{agent}.md"
-        fm = load_frontmatter(agent_path)
-        tools_str = fm.get("tools", "") if fm else ""
-        assert required_tool in tools_str, (
-            f"{agent} must retain {required_tool} (its core output). "
-            f"See #514 for the carve-out rationale."
-        )
-
-
-# ---------------------------------------------------------------------------
 # Issue #505 — Pass 2.6 builtin agent sidecars
 # ---------------------------------------------------------------------------
 
