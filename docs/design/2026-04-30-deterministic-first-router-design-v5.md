@@ -2,7 +2,7 @@
 
 **Status:** Final design  
 **Date:** 2026-04-30  
-**Implemented in:** `src/claude_wayfinder/match.py`, `src/claude_wayfinder/build_catalog.py`, `src/claude_wayfinder/health.py`
+**Implemented in:** `src/claude_wayfinder/match.py`, `src/claude_wayfinder/build_catalog.py`, `src/claude_wayfinder/_health.py`
 
 ---
 
@@ -224,7 +224,7 @@ A script (~120 lines) scans the just-completed turn's events and emits drift eve
 #### 3.3.3 Drift action thresholds, owner, cadence
 
 - **Owner:** the operator.
-- **Cadence:** drift summary appears in the session recap. The health checker (`src/claude_wayfinder/health.py`) provides an on-demand full report.
+- **Cadence:** drift summary appears in the session recap. The health checker (`src/claude_wayfinder/_health.py`) provides an on-demand full report.
 - **Trigger:** operator reads report and decides.
 
 | Drift type                       | Action threshold                                                                     | Operator decides whether to                                                  |
@@ -250,7 +250,7 @@ Two metric classes, separated explicitly:
 
 The catalog stability test is meaningfully different from a matcher determinism replay: catalog generation is NOT a pure function — it traverses the filesystem, parses YAML, applies inverse-index logic, and possibly performs dependency ordering. Real failure modes include hash-based ordering producing different results across runs, file-iteration order differing on different filesystems, and YAML parser quirks. This is a real falsifier.
 
-**Runtime telemetry** (computed by `src/claude_wayfinder/health.py` from drift log + dispatch log):
+**Runtime telemetry** (computed by `src/claude_wayfinder/_health.py` from drift log + dispatch log):
 
 | Metric                   | Tests claim                                      | Healthy range (starting hypothesis) |
 | ------------------------ | ------------------------------------------------ | ----------------------------------- |

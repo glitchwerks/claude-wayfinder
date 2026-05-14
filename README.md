@@ -29,6 +29,10 @@
 >
 > No Claude Code install needed to evaluate the matcher.
 
+## API
+
+The public API — `load_catalog`, `build_features`, `score`, `decide`, and the supporting dataclasses — is documented in [`docs/api.md`](docs/api.md). That document covers the full `__all__` surface, the stability promise for v0.1, and which submodule imports are not covered.
+
 ## Why not just a hook?
 
 > Full answer to be expanded in a later sub-task. Short version: a `UserPromptSubmit` hook matches on raw prompt text, which is signal-poor. `claude-wayfinder` matches on a router-composed task description after the agent has interpreted user intent — strictly more signal at a small token cost.

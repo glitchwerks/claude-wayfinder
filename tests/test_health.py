@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from claude_wayfinder.health import (
+from claude_wayfinder._health import (
     check_ci_invariants,
     compute_metrics,
     load_catalog_entries,
@@ -27,7 +27,7 @@ from claude_wayfinder.health import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "health.py"
+SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "_health.py"
 
 
 # ---------------------------------------------------------------------------
@@ -1125,7 +1125,7 @@ def test_catalog_path_no_env_returns_empty_not_home(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "claude_wayfinder.health.Path.home", lambda: fake_home
+        "claude_wayfinder._health.Path.home", lambda: fake_home
     )
 
     result = load_catalog_entries()
