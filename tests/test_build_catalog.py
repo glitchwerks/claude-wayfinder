@@ -3307,3 +3307,179 @@ def test_builtin_pass_warns_when_version_unknown_with_sidecars(
     catalog = json.loads(out.read_text(encoding="utf-8"))
     names = {e["name"] for e in catalog["entries"]}
     assert "Explore" not in names, "Builtin entries must be excluded when version is unknown."
+
+
+# ---------------------------------------------------------------------------
+# Issue #19 — data-driven ``routable`` flag (replaces hardcoded name check)
+# ---------------------------------------------------------------------------
+
+
+def test_routable_false_in_frontmatter_propagates_to_catalog(
+    tmp_path: Path,
+) -> None:
+    """An agent with ``routable: false`` in frontmatter gets ``routable=False`` in the entry.
+
+    The catalog generator must read the ``routable`` field and store it
+    on the entry so the matcher can call ``is_agent_routable`` with the
+    flag rather than hardcoding a name comparison.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "router-agent.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: router-agent
+            description: The dispatch router.
+            routable: false
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "cat.json"
+    log = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log,
+        now="2026-05-13T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(e for e in catalog["entries"] if e["name"] == "router-agent")
+    assert entry["routable"] is False
+
+
+def test_routable_absent_defaults_true_in_catalog(tmp_path: Path) -> None:
+    """An agent without ``routable:`` in frontmatter gets ``routable=True``.
+
+    The omitted flag must default to ``True`` so existing agent files
+    that do not declare the field remain fully routable.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "specialist.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: specialist
+            description: A specialist agent.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "cat.json"
+    log = tmp_path / "log"
+    build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log,
+        now="2026-05-13T00:00:00Z",
+    )
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(e for e in catalog["entries"] if e["name"] == "specialist")
+    assert entry.get("routable", True) is True
+
+
+def test_catalog_router_agent_metadata_populated(tmp_path: Path) -> None:
+    """The catalog ``router_agent`` top-level field names the first routable=false agent."""
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "router-agent.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: router-agent
+            description: The dispatch router.
+            routable: false
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "code-writer.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: code-writer
+            description: Writes code.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "cat.json"
+    log = tmp_path / "log"
+    build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log,
+        now="2026-05-13T00:00:00Z",
+    )
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    assert catalog.get("router_agent") == "router-agent"
+
+
+def test_catalog_router_agent_null_when_none_declared(
+    tmp_path: Path,
+) -> None:
+    """The catalog ``router_agent`` field is ``null`` when no routable=false agent exists.
+
+    A warning must also be emitted to stderr so operators notice the
+    missing declaration.
+    """
+    import io
+    import sys
+
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "specialist.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: specialist
+            description: A specialist.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "cat.json"
+    log = tmp_path / "log"
+
+    # Capture stderr to verify the warning is emitted.
+    captured = io.StringIO()
+    old_stderr = sys.stderr
+    sys.stderr = captured
+    try:
+        build(
+            skills_dir=tmp_path / "no-skills",
+            agents_dir=agents,
+            corpus_path=tmp_path / "absent.jsonl",
+            out_path=out,
+            log_path=log,
+            now="2026-05-13T00:00:00Z",
+        )
+    finally:
+        sys.stderr = old_stderr
+
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    assert catalog.get("router_agent") is None
+    warning_output = captured.getvalue()
+    assert "no router agent" in warning_output.lower()

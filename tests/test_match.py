@@ -50,6 +50,7 @@ def _make_agent(
     agent_mentions: list[str] | None = None,
     excludes: list[str] | None = None,
     applicable_skills: list[str] | None = None,
+    routable: bool = True,
 ) -> dict[str, Any]:
     """Build a minimal agent catalog entry."""
     return {
@@ -57,6 +58,7 @@ def _make_agent(
         "kind": "agent",
         "description": f"Agent {name}.",
         "source": "owned",
+        "routable": routable,
         "triggers": {
             "command_prefixes": command_prefixes or [],
             "agent_mentions": agent_mentions or [],
@@ -583,15 +585,20 @@ class TestScoringRules:
 
 
 class TestGeneralPurposeExclusion:
-    """general-purpose is never in the scored agents pool."""
+    """The router agent (routable=False) is never in the scored agents pool."""
 
     def test_general_purpose_excluded_from_agent_pool(self, tmp_path: Path) -> None:
-        """general-purpose never wins as best_agent, even with keyword matches."""
+        """The router agent never wins as best_agent, even with keyword matches.
+
+        Exclusion is driven by ``routable=False`` in the catalog entry,
+        not by the name ``"general-purpose"`` (issue #19).
+        """
         catalog = _catalog(
             [
                 _make_agent(
                     "general-purpose",
                     keywords=[{"term": "anything", "weight": 1.0}],
+                    routable=False,
                 ),
                 _make_agent(
                     "code-writer",
