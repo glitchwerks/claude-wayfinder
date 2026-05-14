@@ -110,23 +110,23 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 _PLUGIN_SOURCES: frozenset[str] = frozenset({"plugin", "plugin-override"})
 
-#: Default location of the live dispatch catalog.
-_DEFAULT_CATALOG_PATH = Path.home() / ".claude" / "state" / "dispatch-catalog.json"
+def _catalog_path() -> Path | None:
+    """Return the dispatch-catalog.json path from ``DISPATCH_CATALOG_PATH``.
 
+    Returns ``None`` when the environment variable is absent — callers must
+    treat ``None`` as "no catalog available" and return empty results rather
+    than falling back to ``~/.claude/``.
 
-def _catalog_path() -> Path:
-    """Return the dispatch-catalog.json path, honouring DISPATCH_CATALOG_PATH.
-
-    The environment variable override exists primarily for testing — it lets
-    tests inject a synthetic catalog without touching the user's live state.
+    The ``~/.claude/state/dispatch-catalog.json`` default and the old
+    ``_DEFAULT_CATALOG_PATH`` constant have been removed (Issue #10).
 
     Returns:
-        Path to the catalog file (may not exist — callers must handle that).
+        Path to the catalog file, or ``None`` when the env var is unset.
     """
     env_override = os.environ.get("DISPATCH_CATALOG_PATH", "")
     if env_override:
         return Path(env_override)
-    return _DEFAULT_CATALOG_PATH
+    return None
 
 
 def compute_plugin_entry_counts(
@@ -170,17 +170,33 @@ def compute_plugin_entry_counts(
     return n_skills, m_agents, k_routable
 
 
-def load_catalog_entries() -> list[dict[str, Any]]:
-    """Load catalog entries from the live (or overridden) dispatch-catalog.json.
+def load_catalog_entries(
+    catalog_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Load catalog entries from the given path or ``DISPATCH_CATALOG_PATH``.
 
     Missing or malformed catalogs are silently treated as empty — consistent
     with the ``load_jsonl`` strategy used for log files.
 
+    Resolution order:
+
+    1. ``catalog_path`` argument when provided.
+    2. ``DISPATCH_CATALOG_PATH`` env var.
+    3. Return ``[]`` — no ``~/.claude/`` fallback (Issue #10).
+
+    Args:
+        catalog_path: Explicit path to the catalog file.  When ``None``,
+            ``DISPATCH_CATALOG_PATH`` is consulted; if that is also absent,
+            ``[]`` is returned immediately.
+
     Returns:
-        List of raw entry dicts from the catalog file.  Empty list when the
-        file is absent or unparseable.
+        List of raw entry dicts from the ``"entries"`` key of the catalog
+        file.  Empty list when no path is configured, the file is absent,
+        or the file is unparseable.
     """
-    path = _catalog_path()
+    path: Path | None = catalog_path if catalog_path is not None else _catalog_path()
+    if path is None:
+        return []
     if not path.exists():
         return []
     try:
@@ -325,8 +341,8 @@ def compute_metrics(
 
 def check_ci_invariants(
     *,
-    skills_dir: Path,
-    agents_dir: Path,
+    skills_dir: Path | None,
+    agents_dir: Path | None,
     plugin_overrides_dir: Path | None = None,
 ) -> dict[str, MetricResult]:
     """Run pre-ship CI invariants.
@@ -336,14 +352,35 @@ def check_ci_invariants(
       2. schema_validation   — generator exits 0 with no fatal-severity entries.
       3. trigger_firing_accuracy — smoke tests from fixtures/trigger-smoke-tests.json.
 
+    When ``skills_dir`` or ``agents_dir`` is ``None``, all three invariants
+    are marked unhealthy with a descriptive message (paths not configured).
+
     Args:
-        skills_dir:           Path to the skills tree.
-        agents_dir:           Path to the agents directory.
+        skills_dir:           Path to the skills tree, or ``None``.
+        agents_dir:           Path to the agents directory, or ``None``.
         plugin_overrides_dir: Path to the triggers override directory.
 
     Returns:
         Dict mapping invariant key to MetricResult.
     """
+    if skills_dir is None or agents_dir is None:
+        msg = (
+            "CI invariant checks require --skills-dir and --agents-dir. "
+            "Pass explicit paths or set them as arguments."
+        )
+        not_configured = MetricResult(
+            label="Not configured",
+            metric_class="ci_invariant",
+            value=0,
+            healthy=False,
+            threshold="Paths required",
+            detail=msg,
+        )
+        return {
+            "catalog_stability": not_configured,
+            "schema_validation": not_configured,
+            "trigger_firing_accuracy": not_configured,
+        }
     results: dict[str, MetricResult] = {}
     catalog_stability = _check_catalog_stability(
         skills_dir=skills_dir,
@@ -1093,13 +1130,15 @@ def format_report_output(
 # ---------------------------------------------------------------------------
 
 
-def _default_state_path(filename: str) -> Path:
-    """Return the default ~/.claude/state/<filename> path."""
-    return Path.home() / ".claude" / "state" / filename
-
-
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
+
+    All directory and file paths previously defaulting to ``~/.claude/...``
+    now require explicit values (Issue #10).  The ``~/.claude/`` default
+    has been removed; callers must pass ``--catalog-path``, ``--drift-log``,
+    ``--dispatch-log``, ``--skills-dir``, ``--agents-dir``, and
+    ``--plugin-overrides-dir`` explicitly, or set ``DISPATCH_CATALOG_PATH``
+    for the catalog.
 
     Args:
         argv: Argument list.  Defaults to sys.argv[1:].
@@ -1135,42 +1174,64 @@ def main(argv: list[str] | None = None) -> int:
         help="Full markdown report with both CI invariants and runtime telemetry.",
     )
 
-    home = Path.home() / ".claude"
+    parser.add_argument(
+        "--catalog-path",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to dispatch-catalog.json.  Falls back to "
+            "DISPATCH_CATALOG_PATH env var when omitted; catalog section "
+            "of the report is empty when neither is set."
+        ),
+    )
     parser.add_argument(
         "--drift-log",
         type=Path,
-        default=_default_state_path("router-drift.jsonl"),
-        help="Path to router-drift.jsonl (default: ~/.claude/state/router-drift.jsonl)",
+        default=None,
+        help=(
+            "Path to router-drift.jsonl.  Telemetry section is empty "
+            "when omitted and the file does not exist."
+        ),
     )
     parser.add_argument(
         "--dispatch-log",
         type=Path,
-        default=_default_state_path("dispatch-log.jsonl"),
-        help="Path to dispatch-log.jsonl (default: ~/.claude/state/dispatch-log.jsonl)",
+        default=None,
+        help=(
+            "Path to dispatch-log.jsonl.  Telemetry section is empty "
+            "when omitted and the file does not exist."
+        ),
     )
     parser.add_argument(
         "--skills-dir",
         type=Path,
-        default=home / "skills",
+        default=None,
         help="Skills directory for CI invariant checks.",
     )
     parser.add_argument(
         "--agents-dir",
         type=Path,
-        default=home / "agents",
+        default=None,
         help="Agents directory for CI invariant checks.",
     )
     parser.add_argument(
         "--plugin-overrides-dir",
         type=Path,
-        default=home / "triggers",
+        default=None,
         help="Plugin overrides directory for CI invariant checks.",
     )
 
     args = parser.parse_args(argv)
 
-    dispatch_log = load_jsonl(args.dispatch_log)
-    drift_log = load_jsonl(args.drift_log)
+    # Log files: treat absent paths the same as empty files.
+    _empty: list[dict[str, Any]] = []
+    dispatch_log = (
+        load_jsonl(args.dispatch_log) if args.dispatch_log is not None else _empty
+    )
+    drift_log = (
+        load_jsonl(args.drift_log) if args.drift_log is not None else _empty
+    )
 
     invariants = check_ci_invariants(
         skills_dir=args.skills_dir,
@@ -1199,7 +1260,8 @@ def main(argv: list[str] | None = None) -> int:
 
     else:  # --report
         runtime_metrics = compute_metrics(dispatch_log, drift_log)
-        catalog_entries = load_catalog_entries()
+        # catalog_path arg: explicit flag > DISPATCH_CATALOG_PATH env var > None
+        catalog_entries = load_catalog_entries(catalog_path=args.catalog_path)
         output = format_report_output(
             invariants,
             runtime_metrics,
