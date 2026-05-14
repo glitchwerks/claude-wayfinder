@@ -1091,3 +1091,108 @@ def test_load_catalog_entries_returns_empty_when_entries_not_list(
     result = load_catalog_entries()
 
     assert result == [], f"Expected empty list when 'entries' is not a list, got: {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# 19. Issue #10: Remove ~/.claude defaults — health.py catalog path
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_path_no_env_returns_empty_not_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """load_catalog_entries returns [] when no DISPATCH_CATALOG_PATH is set.
+
+    After Issue #10, ``_catalog_path()`` must not fall back to
+    ``~/.claude/state/dispatch-catalog.json``.  When the env var is absent,
+    the function should return an empty list (the same silent-empty contract
+    as when the path does not exist), not read from the user's home directory.
+    """
+    monkeypatch.delenv("DISPATCH_CATALOG_PATH", raising=False)
+
+    # Place a catalog at the old default location so that if the fallback is
+    # still present the test would incorrectly pass the silent-empty check.
+    # We monkeypatch Path.home() to point at tmp_path so any .home() call
+    # returns a directory we control.
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    state_dir = fake_home / ".claude" / "state"
+    state_dir.mkdir(parents=True)
+    poisoned_catalog = state_dir / "dispatch-catalog.json"
+    poisoned_catalog.write_text(
+        json.dumps({"entries": [{"kind": "agent", "name": "poison-agent"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "claude_wayfinder.health.Path.home", lambda: fake_home
+    )
+
+    result = load_catalog_entries()
+
+    # If the fallback to ~/.claude/ were still active the poisoned catalog
+    # would be found and a non-empty list returned.
+    assert result == [], (
+        f"load_catalog_entries must return [] when no DISPATCH_CATALOG_PATH "
+        f"is set (no ~/.claude fallback); got: {result!r}"
+    )
+
+
+def test_health_cli_catalog_path_flag_used_for_report(
+    tmp_path: Path,
+) -> None:
+    """health.py --report uses --catalog-path when supplied.
+
+    After Issue #10, the health CLI must accept a ``--catalog-path`` flag
+    so callers can supply the catalog path explicitly rather than relying
+    on the ``~/.claude/`` default.  This test passes a valid catalog via
+    the flag and asserts the report runs without error.
+    """
+    catalog = {
+        "schema_version": 1,
+        "entries": [
+            {
+                "name": "code-writer",
+                "kind": "agent",
+                "description": "Writes code.",
+                "source": "owned",
+                "routable": True,
+                "triggers": {"keywords": [{"term": "implement", "weight": 1.0}]},
+                "applicable_skills": [],
+            }
+        ],
+    }
+    catalog_file = tmp_path / "dispatch-catalog.json"
+    catalog_file.write_text(json.dumps(catalog), encoding="utf-8")
+
+    skills_dir = tmp_path / "skills"
+    agents_dir = tmp_path / "agents"
+    skills_dir.mkdir()
+    agents_dir.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--report",
+            "--catalog-path",
+            str(catalog_file),
+            "--drift-log",
+            str(tmp_path / "drift.jsonl"),
+            "--dispatch-log",
+            str(tmp_path / "dispatch.jsonl"),
+            "--skills-dir",
+            str(skills_dir),
+            "--agents-dir",
+            str(agents_dir),
+            "--plugin-overrides-dir",
+            str(tmp_path / "triggers"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"health.py --report with --catalog-path failed; "
+        f"stderr={result.stderr!r}"
+    )

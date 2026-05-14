@@ -780,7 +780,12 @@ class TestDeterminism:
 
 
 class TestEnvVarOverrides:
-    """DISPATCH_CATALOG_PATH and CLAUDE_HOME are honored."""
+    """DISPATCH_CATALOG_PATH env var and --catalog-path flag are honored.
+
+    Note: ``CLAUDE_HOME`` was removed as a lookup step in Issue #10.
+    The matching test for the old ``CLAUDE_HOME`` behaviour has been
+    converted into a negative assertion in ``TestIssue10FailLoudCatalogPath``.
+    """
 
     def test_dispatch_catalog_path_override(self, tmp_path: Path) -> None:
         """DISPATCH_CATALOG_PATH points to a custom catalog file."""
@@ -813,11 +818,24 @@ class TestEnvVarOverrides:
         out = json.loads(result.stdout)
         assert out["decision"] != "needs_more_detail"
 
-    def test_claude_home_used_for_default_catalog_path(self, tmp_path: Path) -> None:
-        """CLAUDE_HOME changes the default catalog lookup directory."""
-        state_dir = tmp_path / "state"
-        state_dir.mkdir()
-        catalog = _catalog(
+    def test_catalog_path_flag_takes_precedence_over_env(
+        self, tmp_path: Path
+    ) -> None:
+        """--catalog-path flag takes precedence over DISPATCH_CATALOG_PATH env.
+
+        Write two catalogs: one at an env-var path (with no matching agents)
+        and one at the flag path (with a matching agent).  Assert the decision
+        is driven by the flag-supplied catalog.
+        """
+        # Env-var catalog: empty entries — would produce needs_more_detail.
+        env_catalog_path = tmp_path / "env_catalog.json"
+        env_catalog_path.write_text(
+            json.dumps({"schema_version": 1, "entries": []}),
+            encoding="utf-8",
+        )
+
+        # Flag catalog: contains a matching agent.
+        flag_catalog = _catalog(
             [
                 _make_agent(
                     "code-writer",
@@ -826,13 +844,17 @@ class TestEnvVarOverrides:
                 ),
             ]
         )
-        (state_dir / "dispatch-catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
+        flag_catalog_path = tmp_path / "flag_catalog.json"
+        flag_catalog_path.write_text(json.dumps(flag_catalog), encoding="utf-8")
 
-        env = {k: v for k, v in os.environ.items() if k != "DISPATCH_CATALOG_PATH"}
-        env["CLAUDE_HOME"] = str(tmp_path)
-
+        env = {**os.environ, "DISPATCH_CATALOG_PATH": str(env_catalog_path)}
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [
+                PYTHON,
+                str(MATCH_SCRIPT),
+                "--catalog-path",
+                str(flag_catalog_path),
+            ],
             input=json.dumps(
                 {
                     "task_description": "implement the feature",
@@ -846,7 +868,11 @@ class TestEnvVarOverrides:
         )
         assert result.returncode == 0, result.stderr
         out = json.loads(result.stdout)
-        assert out["decision"] != "needs_more_detail"
+        # Flag catalog has an agent — decision should not be needs_more_detail.
+        assert out["decision"] != "needs_more_detail", (
+            "--catalog-path flag must override DISPATCH_CATALOG_PATH env; "
+            f"got: {out['decision']!r}"
+        )
 
 
 # ===========================================================================
@@ -1082,17 +1108,21 @@ class TestWorktreeCatalogParity:
     into thinking a dual-catalog system is intentional.  These tests assert
     that the matcher's catalog resolution is independent of whether it is
     invoked from a worktree or the main checkout.
+
+    Note: These tests previously used ``CLAUDE_HOME`` to supply the catalog
+    directory.  After Issue #10 removed ``CLAUDE_HOME`` support, they have
+    been updated to use ``DISPATCH_CATALOG_PATH`` (the explicit env var).
     """
 
     def test_matcher_reads_main_catalog_not_wt_variant(self, tmp_path: Path) -> None:
         """Matcher uses dispatch-catalog.json; dispatch-catalog-wt.json is ignored.
 
         Writes a catalog to ``<tmp>/state/dispatch-catalog.json`` and an
-        intentionally *empty* file at ``<tmp>/state/dispatch-catalog-wt.json``
+        intentionally broken file at ``<tmp>/state/dispatch-catalog-wt.json``
         (which would break matching if the matcher tried to read it).
-        Sets ``CLAUDE_HOME=<tmp>`` so the matcher resolves the catalog via the
-        env-var path.  Asserts the matcher succeeds using the main catalog,
-        proving it never touches the wt file.
+        Sets ``DISPATCH_CATALOG_PATH`` to the main catalog path so the
+        matcher resolves it explicitly.  Asserts the matcher succeeds using
+        the main catalog, proving it never touches the wt file.
         """
         state_dir = tmp_path / "state"
         state_dir.mkdir()
@@ -1106,15 +1136,15 @@ class TestWorktreeCatalogParity:
                 ),
             ]
         )
-        (state_dir / "dispatch-catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
+        catalog_file = state_dir / "dispatch-catalog.json"
+        catalog_file.write_text(json.dumps(catalog), encoding="utf-8")
         # Write a *broken* wt variant — if the matcher reads this it will fail.
         (state_dir / "dispatch-catalog-wt.json").write_text(
             "NOT VALID JSON — matcher must not read this file",
             encoding="utf-8",
         )
 
-        env = {k: v for k, v in os.environ.items() if k != "DISPATCH_CATALOG_PATH"}
-        env["CLAUDE_HOME"] = str(tmp_path)
+        env = {**os.environ, "DISPATCH_CATALOG_PATH": str(catalog_file)}
 
         result = subprocess.run(
             [PYTHON, str(MATCH_SCRIPT)],
@@ -1140,13 +1170,17 @@ class TestWorktreeCatalogParity:
             "advisory",
         }, f"Unexpected decision: {out['decision']}"
 
-    def test_worktree_and_main_checkout_produce_identical_decisions(self, tmp_path: Path) -> None:
-        """Matcher decision is identical regardless of CLAUDE_HOME location.
+    def test_worktree_and_main_checkout_produce_identical_decisions(
+        self, tmp_path: Path
+    ) -> None:
+        """Matcher decision is identical regardless of catalog location.
 
-        Simulates calling the matcher from a worktree (``wt_home``) vs the
-        main checkout (``main_home``).  Both point their state dir at the
-        same catalog content.  The decision must be identical, confirming
-        there is no worktree-specific routing path.
+        Simulates calling the matcher from a worktree (``wt_catalog``) vs
+        the main checkout (``main_catalog``).  Both use the same catalog
+        content, supplied via ``DISPATCH_CATALOG_PATH``.  The decision must
+        be identical, confirming there is no context-specific routing path.
+
+        Note: Previously used ``CLAUDE_HOME`` — updated for Issue #10.
         """
         catalog = _catalog(
             [
@@ -1166,29 +1200,28 @@ class TestWorktreeCatalogParity:
             "file_paths": ["src/main.py"],
         }
 
-        # Main-checkout context: catalog at main_home/state/dispatch-catalog.json
-        main_home = tmp_path / "main"
-        (main_home / "state").mkdir(parents=True)
-        (main_home / "state" / "dispatch-catalog.json").write_text(
-            json.dumps(catalog), encoding="utf-8"
-        )
+        # Main-checkout catalog.
+        main_catalog = tmp_path / "main" / "dispatch-catalog.json"
+        main_catalog.parent.mkdir(parents=True)
+        main_catalog.write_text(json.dumps(catalog), encoding="utf-8")
 
-        # Worktree context: catalog at wt_home/state/dispatch-catalog.json
-        # (same content; no wt-specific variant file present)
-        wt_home = tmp_path / "worktree"
-        (wt_home / "state").mkdir(parents=True)
-        (wt_home / "state" / "dispatch-catalog.json").write_text(
-            json.dumps(catalog), encoding="utf-8"
-        )
+        # Worktree catalog (same content, different path).
+        wt_catalog = tmp_path / "worktree" / "dispatch-catalog.json"
+        wt_catalog.parent.mkdir(parents=True)
+        wt_catalog.write_text(json.dumps(catalog), encoding="utf-8")
 
-        base_env = {k: v for k, v in os.environ.items() if k != "DISPATCH_CATALOG_PATH"}
+        base_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"DISPATCH_CATALOG_PATH", "CLAUDE_HOME"}
+        }
 
         result_main = subprocess.run(
             [PYTHON, str(MATCH_SCRIPT)],
             input=json.dumps(stdin_obj),
             capture_output=True,
             text=True,
-            env={**base_env, "CLAUDE_HOME": str(main_home)},
+            env={**base_env, "DISPATCH_CATALOG_PATH": str(main_catalog)},
             check=False,
         )
         result_wt = subprocess.run(
@@ -1196,7 +1229,7 @@ class TestWorktreeCatalogParity:
             input=json.dumps(stdin_obj),
             capture_output=True,
             text=True,
-            env={**base_env, "CLAUDE_HOME": str(wt_home)},
+            env={**base_env, "DISPATCH_CATALOG_PATH": str(wt_catalog)},
             check=False,
         )
 
@@ -2095,4 +2128,270 @@ class TestPluginOverrideAgentRouting:
         assert out["decision"] != "no_match", (
             f"plugin-override agent was not included in scoring "
             f"(decision was 'no_match'); full output: {out}"
+        )
+
+
+# ===========================================================================
+# Issue #10: Remove ~/.claude default fallbacks — fail-loud path resolution
+# ===========================================================================
+
+
+class TestIssue10FailLoudCatalogPath:
+    """Catalog path resolution must fail loud when no explicit source is given.
+
+    After Issue #10, the two-step resolution chain is:
+      1. ``--catalog-path <path>`` CLI flag
+      2. ``DISPATCH_CATALOG_PATH`` env var
+      3. **fail loud** — emit ``[CATALOG ERROR]`` banner, exit non-zero.
+
+    ``CLAUDE_HOME`` and ``Path.home()`` are no longer lookup steps.
+    """
+
+    def test_no_path_no_env_exits_nonzero_with_catalog_error(
+        self, tmp_path: Path
+    ) -> None:
+        """CLI exits non-zero and emits [CATALOG ERROR] when no path is given.
+
+        Both ``DISPATCH_CATALOG_PATH`` and ``CLAUDE_HOME`` are absent from the
+        environment.  The matcher must not fall back to ``~/.claude/...`` —
+        it must emit a ``[CATALOG ERROR]`` banner on stderr and exit 2.
+        """
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"DISPATCH_CATALOG_PATH", "CLAUDE_HOME"}
+        }
+        result = subprocess.run(
+            [PYTHON, str(MATCH_SCRIPT)],
+            input=json.dumps({"task_description": "implement a feature"}),
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            check=False,
+        )
+        assert result.returncode != 0, (
+            "Expected non-zero exit when no catalog path is supplied; "
+            f"got returncode={result.returncode}, stderr={result.stderr!r}"
+        )
+        assert "[CATALOG ERROR]" in result.stderr, (
+            f"Expected [CATALOG ERROR] banner on stderr; got: {result.stderr!r}"
+        )
+
+    def test_catalog_error_message_names_the_fix(self, tmp_path: Path) -> None:
+        """[CATALOG ERROR] message tells the user how to supply a path.
+
+        The error text must mention either ``--catalog-path`` or
+        ``DISPATCH_CATALOG_PATH`` so the caller knows what to do.
+        """
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"DISPATCH_CATALOG_PATH", "CLAUDE_HOME"}
+        }
+        result = subprocess.run(
+            [PYTHON, str(MATCH_SCRIPT)],
+            input=json.dumps({"task_description": "implement a feature"}),
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            check=False,
+        )
+        assert any(
+            token in result.stderr
+            for token in ("--catalog-path", "DISPATCH_CATALOG_PATH")
+        ), (
+            "Error message must name the fix (--catalog-path or "
+            f"DISPATCH_CATALOG_PATH); got: {result.stderr!r}"
+        )
+
+    def test_claude_home_env_var_is_ignored(self, tmp_path: Path) -> None:
+        """CLAUDE_HOME env var no longer redirects catalog resolution.
+
+        After Issue #10, ``CLAUDE_HOME`` is not a lookup step.  Even if a
+        valid catalog exists under ``$CLAUDE_HOME/state/dispatch-catalog.json``,
+        the matcher must not use it — it should still fail loud.
+        """
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                ),
+            ]
+        )
+        (state_dir / "dispatch-catalog.json").write_text(
+            json.dumps(catalog), encoding="utf-8"
+        )
+
+        # Env has CLAUDE_HOME pointing at a valid catalog but no
+        # DISPATCH_CATALOG_PATH.
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k != "DISPATCH_CATALOG_PATH"
+        }
+        clean_env["CLAUDE_HOME"] = str(tmp_path)
+
+        result = subprocess.run(
+            [PYTHON, str(MATCH_SCRIPT)],
+            input=json.dumps({"task_description": "implement a feature"}),
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            check=False,
+        )
+        assert result.returncode != 0, (
+            "CLAUDE_HOME must no longer serve as a catalog fallback; "
+            "expected non-zero exit but got success. "
+            f"stderr={result.stderr!r}, stdout={result.stdout!r}"
+        )
+        assert "[CATALOG ERROR]" in result.stderr, (
+            f"Expected [CATALOG ERROR] on stderr; got: {result.stderr!r}"
+        )
+
+    def test_catalog_path_flag_overrides_env(self, tmp_path: Path) -> None:
+        """--catalog-path flag supplies the catalog path to the CLI.
+
+        When ``--catalog-path <path>`` is passed, the matcher uses that file
+        and succeeds — regardless of whether ``DISPATCH_CATALOG_PATH`` is set.
+        """
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                    path_globs=["**/*.py"],
+                ),
+            ]
+        )
+        catalog_file = tmp_path / "my_catalog.json"
+        catalog_file.write_text(json.dumps(catalog), encoding="utf-8")
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"DISPATCH_CATALOG_PATH", "CLAUDE_HOME"}
+        }
+
+        result = subprocess.run(
+            [
+                PYTHON,
+                str(MATCH_SCRIPT),
+                "--catalog-path",
+                str(catalog_file),
+            ],
+            input=json.dumps(
+                {
+                    "task_description": "implement the feature",
+                    "file_paths": ["main.py"],
+                }
+            ),
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"--catalog-path flag should supply catalog and succeed; "
+            f"stderr={result.stderr!r}"
+        )
+        out = json.loads(result.stdout)
+        assert out["decision"] in {
+            "delegate",
+            "self_handle",
+            "advisory",
+            "ambiguous",
+        }, f"Expected a routing decision, got: {out['decision']!r}"
+
+    def test_dispatch_catalog_path_env_still_works(self, tmp_path: Path) -> None:
+        """DISPATCH_CATALOG_PATH env var remains the second resolution step.
+
+        The env var is still supported after Issue #10 — only ``CLAUDE_HOME``
+        and the ``~/.claude/`` default are removed.
+        """
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                    path_globs=["**/*.py"],
+                ),
+            ]
+        )
+        catalog_file = tmp_path / "env_catalog.json"
+        catalog_file.write_text(json.dumps(catalog), encoding="utf-8")
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"CLAUDE_HOME"}
+        }
+        clean_env["DISPATCH_CATALOG_PATH"] = str(catalog_file)
+
+        result = subprocess.run(
+            [PYTHON, str(MATCH_SCRIPT)],
+            input=json.dumps(
+                {
+                    "task_description": "implement the feature",
+                    "file_paths": ["main.py"],
+                }
+            ),
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"DISPATCH_CATALOG_PATH env var must still work; "
+            f"stderr={result.stderr!r}"
+        )
+        out = json.loads(result.stdout)
+        assert out["decision"] not in {"needs_more_detail"}, (
+            f"Expected a routing decision, got: {out['decision']!r}"
+        )
+
+    def test_log_path_missing_disables_logging_silently(
+        self, tmp_path: Path
+    ) -> None:
+        """Missing DISPATCH_LOG_PATH disables log writing without crashing.
+
+        After Issue #10, ``_resolve_log_path()`` returns ``None`` when no log
+        path is configured (no env var).  The matcher must still succeed and
+        emit a valid decision — no crash, no fallback to ``~/.claude/``.
+        """
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                ),
+            ]
+        )
+        catalog_file = tmp_path / "catalog.json"
+        catalog_file.write_text(json.dumps(catalog), encoding="utf-8")
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"DISPATCH_LOG_PATH", "CLAUDE_HOME"}
+        }
+        clean_env["DISPATCH_CATALOG_PATH"] = str(catalog_file)
+
+        result = subprocess.run(
+            [PYTHON, str(MATCH_SCRIPT)],
+            input=json.dumps({"task_description": "implement a feature"}),
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            "Matcher must succeed even when no log path is configured; "
+            f"stderr={result.stderr!r}"
+        )
+        out = json.loads(result.stdout)
+        assert out["decision"] in _VALID_DECISIONS, (
+            f"Expected a valid decision; got: {out['decision']!r}"
         )

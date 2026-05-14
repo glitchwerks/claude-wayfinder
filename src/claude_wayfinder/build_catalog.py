@@ -645,7 +645,10 @@ def _sort_entry_lists(entry: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def detect_project_root(cwd: Path | None = None) -> Path | None:
+def detect_project_root(
+    cwd: Path | None = None,
+    user_global_dir: Path | None = None,
+) -> Path | None:
     """Detect the git repository root for the given working directory.
 
     Runs ``git rev-parse --show-toplevel`` in *cwd* (or the process cwd
@@ -653,18 +656,26 @@ def detect_project_root(cwd: Path | None = None) -> Path | None:
     ``None`` when the command fails (not a git repo, git not installed,
     etc.).
 
-    When the resolved root equals the user-global ``~/.claude`` directory,
-    ``None`` is returned to prevent double-scanning that tree as both
-    owned and project sources.
+    When the resolved root equals ``user_global_dir``, ``None`` is returned
+    to prevent double-scanning that tree as both owned and project sources.
+    When ``user_global_dir`` is ``None`` the double-scan guard is skipped.
+
+    The previous hard-coded ``~/.claude`` default for the guard has been
+    removed (Issue #10).  Callers that need the guard must pass the user-
+    global directory explicitly.
 
     Args:
         cwd: Directory in which to run the git command.  Defaults to the
             current process working directory when ``None``.
+        user_global_dir: Resolved path to the user-global directory (e.g.
+            ``~/.claude``).  When provided, the function returns ``None``
+            if the detected git root equals this directory.  When ``None``,
+            the guard is not applied.
 
     Returns:
         Resolved ``Path`` of the git repository root, or ``None`` when
-        not inside a git repo or when the resolved root is the user-global
-        home directory.
+        not inside a git repo or when the resolved root equals
+        ``user_global_dir``.
     """
     effective_cwd = cwd or Path.cwd()
     try:
@@ -681,8 +692,7 @@ def detect_project_root(cwd: Path | None = None) -> Path | None:
     if result.returncode != 0:
         return None
     root = Path(result.stdout.strip()).resolve()
-    user_global_home = (Path.home() / ".claude").resolve()
-    if root == user_global_home:
+    if user_global_dir is not None and root == user_global_dir.resolve():
         return None
     return root
 
@@ -1559,7 +1569,7 @@ def build(
     *,
     skills_dir: Path,
     agents_dir: Path,
-    corpus_path: Path,
+    corpus_path: Path | None,
     out_path: Path,
     log_path: Path,
     plugin_overrides_dir: Path | None = None,
@@ -1610,8 +1620,9 @@ def build(
             ``SKILL.md`` files.  Silently skipped if absent.
         agents_dir: Root of the agents tree.  Non-recursively globbed
             for ``*.md`` files.  Silently skipped if absent.
-        corpus_path: Path to ``routing-corpus.jsonl``.  Passed verbatim
-            to ``detect_exclude_dead_zones``; may be absent.
+        corpus_path: Path to ``routing-corpus.jsonl``, or ``None`` to
+            skip dead-zone detection.  When a path is given but the file
+            is absent, detection is also skipped.
         out_path: Catalog JSON output path.  Parent directory created if
             absent.
         log_path: Log file path.  Parent directory created if absent.
@@ -1872,7 +1883,18 @@ def build(
                     entries.append(proj_entry)
 
     _resolve_applicable_references(entries, all_issues)
-    all_issues.extend(detect_exclude_dead_zones(entries=entries, corpus_path=corpus_path))
+    if corpus_path is not None:
+        all_issues.extend(
+            detect_exclude_dead_zones(entries=entries, corpus_path=corpus_path)
+        )
+    else:
+        all_issues.append(
+            ValidationIssue(
+                "info",
+                "<catalog>",
+                "corpus path not configured; skipping EXCLUDE_DEAD_ZONE checks",
+            )
+        )
 
     # Update the per-component revision sidecar.  Only owned components
     # (skills under skills/ and agents under agents/) are tracked —
@@ -1921,57 +1943,65 @@ def main(argv: list[str] | None = None) -> int:
         catalog is degraded (see ``build()``).
     """
     parser = argparse.ArgumentParser(
-        description="Build the dispatch catalog from skill sidecars and agent frontmatter."
+        description=(
+            "Build the dispatch catalog from skill sidecars and agent "
+            "frontmatter.  All directory paths that previously defaulted "
+            "to ~/.claude/... now require explicit values (Issue #10)."
+        )
     )
-    home = Path.home() / ".claude"
     parser.add_argument(
         "--skills-dir",
         type=Path,
-        default=home / "skills",
+        required=True,
+        help="Directory containing skill SKILL.md files.",
     )
     parser.add_argument(
         "--agents-dir",
         type=Path,
-        default=home / "agents",
+        required=True,
+        help="Directory containing agent frontmatter .md files.",
     )
     parser.add_argument(
         "--plugin-overrides-dir",
         type=Path,
-        default=home / "triggers",
+        default=None,
+        help="Directory containing plugin-override trigger .yml files.",
     )
     parser.add_argument(
         "--plugins-dir",
         type=Path,
-        default=home / "plugins",
+        default=None,
         help=(
             "Directory containing installed_plugins.json.  Used for "
-            "Pass 2.5 plugin discovery.  Defaults to ~/.claude/plugins/."
+            "Pass 2.5 plugin discovery."
         ),
     )
     parser.add_argument(
         "--builtin-agents-dir",
         type=Path,
-        default=home / "triggers" / _BUILTIN_AGENTS_SUBDIR,
+        default=None,
         help=(
             "Directory containing builtin-agent sidecar .yml files.  "
-            "Used for Pass 2.6 builtin discovery.  "
-            "Defaults to ~/.claude/triggers/builtin/."
+            "Used for Pass 2.6 builtin discovery."
         ),
     )
     parser.add_argument(
         "--corpus",
         type=Path,
-        default=home / "state" / "routing-corpus.jsonl",
+        default=None,
+        help="Path to routing-corpus.jsonl for corpus-alignment scoring.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=home / "state" / "dispatch-catalog.json",
+        required=True,
+        help="Output path for dispatch-catalog.json.",
     )
     parser.add_argument(
         "--log",
         type=Path,
-        default=home / "state" / "catalog-generation.log",
+        required=True,
+        help="Output path for the catalog-generation log.",
     )
     parser.add_argument(
         "--project-root",
@@ -1987,10 +2017,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # Resolve project root: explicit flag takes priority; fall back to
     # auto-detection from the current working directory.
+    # The user_global_dir guard is skipped (None) because the caller must
+    # supply all directory paths explicitly — the guard existed only to
+    # prevent defaulting into ~/.claude when cwd happened to be inside it.
     if args.project_root is not None:
         project_root: Path | None = args.project_root.resolve()
     else:
-        project_root = detect_project_root()
+        project_root = detect_project_root(user_global_dir=None)
 
     return build(
         skills_dir=args.skills_dir,

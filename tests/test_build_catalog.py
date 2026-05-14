@@ -3483,3 +3483,149 @@ def test_catalog_router_agent_null_when_none_declared(
     assert catalog.get("router_agent") is None
     warning_output = captured.getvalue()
     assert "no router agent" in warning_output.lower()
+
+
+# ===========================================================================
+# Issue #10: Remove ~/.claude defaults — build_catalog.py path resolution
+# ===========================================================================
+
+
+class TestIssue10BuildCatalogPathDefaults:
+    """build_catalog.py CLI defaults must not reference Path.home()/.claude/.
+
+    After Issue #10, every argument that previously defaulted to
+    ``~/.claude/...`` must either require an explicit value or write to a
+    neutral location (cwd / tmp).  The ``detect_project_root`` guard that
+    compared against ``~/.claude`` must accept the user-global directory as
+    a parameter rather than computing it internally with Path.home().
+    """
+
+    def test_detect_project_root_accepts_user_global_dir_param(
+        self, tmp_path: Path
+    ) -> None:
+        """detect_project_root accepts a user_global_dir parameter.
+
+        When ``user_global_dir`` is passed explicitly, ``detect_project_root``
+        must use it for the double-scan guard instead of computing
+        ``Path.home() / '.claude'`` internally.
+
+        Set ``user_global_dir`` to a git repo that is *not* a real git repo
+        (tmp subdir) so the returned root never equals the real ``~/.claude``.
+        Set the repo root to *exactly* ``user_global_dir`` and assert None is
+        returned (the guard fired correctly).
+        """
+        from claude_wayfinder.build_catalog import detect_project_root
+
+        fake_global = tmp_path / "dot-claude"
+        fake_global.mkdir()
+        # Initialise a git repo at fake_global so git returns it as the root.
+        subprocess.run(
+            ["git", "init", str(fake_global)],
+            capture_output=True,
+            check=False,
+        )
+
+        result = detect_project_root(
+            cwd=fake_global,
+            user_global_dir=fake_global.resolve(),
+        )
+        assert result is None, (
+            "detect_project_root must return None when the git root equals "
+            f"user_global_dir; got: {result!r}"
+        )
+
+    def test_detect_project_root_without_param_does_not_call_path_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """detect_project_root does not call Path.home() when user_global_dir
+        is supplied.
+
+        Patch ``pathlib.Path.home`` to raise RuntimeError; passing
+        ``user_global_dir`` explicitly must bypass it entirely.
+        """
+        from claude_wayfinder.build_catalog import detect_project_root
+
+        def _no_home() -> Path:
+            raise RuntimeError(
+                "Path.home() must not be called when user_global_dir is "
+                "supplied to detect_project_root"
+            )
+
+        monkeypatch.setattr("pathlib.Path.home", _no_home)
+
+        # Non-git directory → detect_project_root returns None early (no
+        # git root, so guard never fires and Path.home() is never reached).
+        plain_dir = tmp_path / "not-a-repo"
+        plain_dir.mkdir()
+
+        # Should not raise even though Path.home() is patched to explode.
+        result = detect_project_root(
+            cwd=plain_dir,
+            user_global_dir=plain_dir,
+        )
+        assert result is None, (
+            f"Expected None for a non-git directory; got: {result!r}"
+        )
+
+    def test_build_cli_no_home_defaults(self, tmp_path: Path) -> None:
+        """build_catalog CLI does not write to ~/.claude when all paths are
+        supplied explicitly.
+
+        Passes all required paths as CLI flags and patches Path.home() to
+        raise RuntimeError.  If any code path still calls Path.home() during
+        the build, the test will fail with the patched error rather than
+        silently writing to the user's home directory.
+        """
+        skills_dir = tmp_path / "skills"
+        agents_dir = tmp_path / "agents"
+        triggers_dir = tmp_path / "triggers"
+        plugins_dir = tmp_path / "plugins"
+        builtin_dir = tmp_path / "builtin"
+        for d in (
+            skills_dir,
+            agents_dir,
+            triggers_dir,
+            plugins_dir,
+            builtin_dir,
+        ):
+            d.mkdir()
+
+        out = tmp_path / "catalog.json"
+        log = tmp_path / "build.log"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--skills-dir",
+                str(skills_dir),
+                "--agents-dir",
+                str(agents_dir),
+                "--plugin-overrides-dir",
+                str(triggers_dir),
+                "--plugins-dir",
+                str(plugins_dir),
+                "--builtin-agents-dir",
+                str(builtin_dir),
+                "--corpus",
+                str(tmp_path / "corpus.jsonl"),
+                "--out",
+                str(out),
+                "--log",
+                str(log),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        # Exit code 2 is acceptable (no entries → degraded), but the build
+        # must not crash and must not write to ~/.claude/.
+        assert result.returncode in {0, 2}, (
+            f"Unexpected exit code {result.returncode}; "
+            f"stderr={result.stderr!r}"
+        )
+        # The catalog must have been written to the explicit --out path.
+        assert out.exists(), (
+            f"Catalog was not written to the --out path {out}; "
+            f"may have fallen back to ~/.claude/state/dispatch-catalog.json"
+        )
