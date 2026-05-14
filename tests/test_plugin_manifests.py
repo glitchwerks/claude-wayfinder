@@ -1,14 +1,9 @@
 """Tests for .claude-plugin manifest files.
 
-Validates that plugin.json and marketplace.json (when present) contain all
-required fields for Claude Code plugin distribution.
+Validates that plugin.json and marketplace.json contain all required
+fields for Claude Code plugin distribution.
 
-Missing fields that are tracked for completion in later issues are marked
-``xfail`` so the suite stays green while flagging the gap clearly.
-
-Issue references:
-    - Issue #13: marketplace.json
-    - Issue #14: version, license, homepage, repository fields in plugin.json
+Completed by Issue #13 (marketplace.json + all plugin.json fields).
 """
 
 from __future__ import annotations
@@ -26,6 +21,7 @@ import pytest
 _REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 _PLUGIN_JSON: Path = _REPO_ROOT / ".claude-plugin" / "plugin.json"
 _MARKETPLACE_JSON: Path = _REPO_ROOT / ".claude-plugin" / "marketplace.json"
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -46,13 +42,27 @@ def plugin_manifest() -> dict[str, Any]:
     return json.loads(_PLUGIN_JSON.read_text(encoding="utf-8"))
 
 
+@pytest.fixture(scope="module")
+def marketplace_manifest() -> dict[str, Any]:
+    """Load and return the parsed marketplace.json manifest.
+
+    Returns:
+        A dict containing the parsed JSON content of marketplace.json.
+
+    Raises:
+        FileNotFoundError: If .claude-plugin/marketplace.json does not exist.
+        json.JSONDecodeError: If the file is not valid JSON.
+    """
+    return json.loads(_MARKETPLACE_JSON.read_text(encoding="utf-8"))
+
+
 # ---------------------------------------------------------------------------
-# plugin.json — always-required fields
+# plugin.json — required fields
 # ---------------------------------------------------------------------------
 
 
 class TestPluginManifestRequiredFields:
-    """Tests for always-required fields in .claude-plugin/plugin.json."""
+    """Tests for all required fields in .claude-plugin/plugin.json."""
 
     def test_plugin_json_exists(self) -> None:
         """Verify that .claude-plugin/plugin.json is present in the repo."""
@@ -117,24 +127,6 @@ class TestPluginManifestRequiredFields:
             "plugin.json must contain an 'author' field."
         )
 
-
-# ---------------------------------------------------------------------------
-# plugin.json — fields pending Issue #14 (xfail)
-# ---------------------------------------------------------------------------
-
-
-class TestPluginManifestPendingFields:
-    """Tests for fields not yet populated — tracked by Issue #14.
-
-    All tests in this class are marked xfail.  When Issue #14 is resolved,
-    remove the ``@pytest.mark.xfail`` decorators and these tests become
-    hard requirements.
-    """
-
-    @pytest.mark.xfail(
-        reason="version field will be filled in by Issue #14",
-        strict=False,
-    )
     def test_version_field_present(
         self, plugin_manifest: dict[str, Any]
     ) -> None:
@@ -147,10 +139,38 @@ class TestPluginManifestPendingFields:
             "plugin.json must contain a 'version' field (e.g. '0.1.0')."
         )
 
-    @pytest.mark.xfail(
-        reason="license field will be filled in by Issue #14",
-        strict=False,
-    )
+    def test_version_matches_pyproject(
+        self, plugin_manifest: dict[str, Any]
+    ) -> None:
+        """Verify plugin.json version matches pyproject.toml version.
+
+        The two version sources must stay in sync so that the plugin
+        version reflects the installed package version.
+
+        Args:
+            plugin_manifest: The parsed plugin.json dict (from fixture).
+        """
+        pyproject_path = _REPO_ROOT / "pyproject.toml"
+        pyproject_text = pyproject_path.read_text(encoding="utf-8")
+        # Parse version line: version = "X.Y.Z"
+        pyproject_version: str | None = None
+        for line in pyproject_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("version") and "=" in stripped:
+                # Only the [project] section version — skip [tool.*] blocks.
+                raw = stripped.split("=", 1)[1].strip().strip('"').strip("'")
+                pyproject_version = raw
+                break
+        assert pyproject_version is not None, (
+            "Could not parse version from pyproject.toml."
+        )
+        plugin_version = plugin_manifest.get("version")
+        assert plugin_version == pyproject_version, (
+            f"plugin.json version '{plugin_version}' does not match "
+            f"pyproject.toml version '{pyproject_version}'. "
+            "Keep both in sync."
+        )
+
     def test_license_field_present(
         self, plugin_manifest: dict[str, Any]
     ) -> None:
@@ -163,10 +183,6 @@ class TestPluginManifestPendingFields:
             "plugin.json must contain a 'license' field (e.g. 'MIT')."
         )
 
-    @pytest.mark.xfail(
-        reason="homepage field will be filled in by Issue #14",
-        strict=False,
-    )
     def test_homepage_field_present(
         self, plugin_manifest: dict[str, Any]
     ) -> None:
@@ -179,10 +195,6 @@ class TestPluginManifestPendingFields:
             "plugin.json must contain a 'homepage' field."
         )
 
-    @pytest.mark.xfail(
-        reason="repository field will be filled in by Issue #14",
-        strict=False,
-    )
     def test_repository_field_present(
         self, plugin_manifest: dict[str, Any]
     ) -> None:
@@ -197,54 +209,69 @@ class TestPluginManifestPendingFields:
 
 
 # ---------------------------------------------------------------------------
-# marketplace.json — pending Issue #13 (xfail)
+# marketplace.json — required fields
 # ---------------------------------------------------------------------------
 
 
 class TestMarketplaceManifest:
     """Tests for .claude-plugin/marketplace.json.
 
-    marketplace.json is not yet created (tracked by Issue #13).  All tests
-    here are marked xfail.  When Issue #13 is resolved, remove the
-    ``@pytest.mark.xfail`` decorators.
+    marketplace.json ships the marketplace-of-one self-listing for the
+    plugin sideload path:
+
+        /plugin marketplace add glitchwerks/claude-wayfinder
     """
 
-    @pytest.mark.xfail(
-        reason="marketplace.json will be created by Issue #13",
-        strict=False,
-    )
     def test_marketplace_json_exists(self) -> None:
         """Verify that .claude-plugin/marketplace.json is present."""
         assert _MARKETPLACE_JSON.exists(), (
-            f"Expected {_MARKETPLACE_JSON} to exist. "
-            "Create .claude-plugin/marketplace.json (tracked by Issue #13)."
+            f"Expected {_MARKETPLACE_JSON} to exist."
         )
 
-    @pytest.mark.xfail(
-        reason="marketplace.json will be created by Issue #13",
-        strict=False,
-    )
-    def test_marketplace_json_valid_shape(self) -> None:
-        """Verify that marketplace.json is valid JSON with a required shape.
+    def test_marketplace_json_valid_json(self) -> None:
+        """Verify that marketplace.json is valid JSON."""
+        text = _MARKETPLACE_JSON.read_text(encoding="utf-8")
+        manifest = json.loads(text)  # raises on invalid JSON
+        assert isinstance(manifest, dict), (
+            "marketplace.json must be a JSON object."
+        )
 
-        Expects at minimum a 'categories' list and a 'tags' list.
+    def test_name_field_present(
+        self, marketplace_manifest: dict[str, Any]
+    ) -> None:
+        """Verify that the 'name' field is present in marketplace.json.
+
+        Args:
+            marketplace_manifest: The parsed marketplace.json dict.
         """
-        if not _MARKETPLACE_JSON.exists():
-            pytest.skip(
-                "marketplace.json does not exist yet (tracked by Issue #13)"
-            )
-        manifest: dict[str, Any] = json.loads(
-            _MARKETPLACE_JSON.read_text(encoding="utf-8")
+        assert "name" in marketplace_manifest, (
+            "marketplace.json must contain a 'name' field."
         )
-        assert "categories" in manifest, (
-            "marketplace.json must contain a 'categories' list."
+
+    def test_owner_field_present(
+        self, marketplace_manifest: dict[str, Any]
+    ) -> None:
+        """Verify that the 'owner' field is present in marketplace.json.
+
+        Args:
+            marketplace_manifest: The parsed marketplace.json dict.
+        """
+        assert "owner" in marketplace_manifest, (
+            "marketplace.json must contain an 'owner' field."
         )
-        assert isinstance(manifest["categories"], list), (
-            "marketplace.json 'categories' must be a list."
+
+    def test_plugins_field_present_and_non_empty(
+        self, marketplace_manifest: dict[str, Any]
+    ) -> None:
+        """Verify that 'plugins' is a non-empty list in marketplace.json.
+
+        Args:
+            marketplace_manifest: The parsed marketplace.json dict.
+        """
+        assert "plugins" in marketplace_manifest, (
+            "marketplace.json must contain a 'plugins' field."
         )
-        assert "tags" in manifest, (
-            "marketplace.json must contain a 'tags' list."
-        )
-        assert isinstance(manifest["tags"], list), (
-            "marketplace.json 'tags' must be a list."
+        plugins = marketplace_manifest["plugins"]
+        assert isinstance(plugins, list) and len(plugins) > 0, (
+            "marketplace.json 'plugins' must be a non-empty list."
         )
