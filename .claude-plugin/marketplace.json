@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "claude-wayfinder",
-      "path": "./"
+      "source": "./"
     }
   ]
 }
