@@ -409,7 +409,7 @@ After deploying the dispatch loop, the matcher's observability layer tracks rout
 
 The telemetry design, drift event types, action thresholds, and the health checker (`src/claude_wayfinder/_health.py`) are documented in full in:
 
-[`docs/design/2026-04-30-deterministic-first-router-design-v5.md` — Layer 3: Drift telemetry (§3.3)](docs/design/2026-04-30-deterministic-first-router-design-v5.md)
+[`docs/schema.md` — Observability (§5)](schema.md#5-observability)
 
 Key points:
 
@@ -423,6 +423,7 @@ Key points:
 ## Cross-references
 
 - **Schema documentation** — the catalog entry schema, dispatch context schema (5 input fields), and decision output schema (7 decision types) are documented in [`docs/schema.md`](schema.md).
-- **Algorithm specification** — [`docs/design/2026-04-30-deterministic-first-router-design-v5.md`](design/2026-04-30-deterministic-first-router-design-v5.md)
+- **Algorithm specification** — [`docs/schema.md §4`](schema.md#4-scoring-and-decision-algorithm)
+- **Design rationale** — [`docs/design.md`](design.md)
 - **v0.2 integration design rationale** — [`docs/design/2026-05-14-v0.2-integration-design.md`](design/2026-05-14-v0.2-integration-design.md)
 - **Library API** — [`docs/api.md`](api.md)

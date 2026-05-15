@@ -2,7 +2,7 @@
 
 `claude-wayfinder` exposes a small, typed surface for embedding the deterministic dispatch matcher in your own code. The public API is defined by `__all__` in `src/claude_wayfinder/__init__.py`.
 
-For the matcher's design rationale and the seven-decision contract, see [`docs/design/2026-04-30-deterministic-first-router-design-v5.md`](design/2026-04-30-deterministic-first-router-design-v5.md).
+For the matcher's design rationale, see [`docs/design.md`](design.md). For the seven-decision contract and the scoring algorithm, see [`docs/schema.md`](schema.md).
 
 ## Public surface
 

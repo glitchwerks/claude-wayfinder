@@ -223,7 +223,121 @@ No agent or skill scored above threshold. The matcher found no useful signal.
 
 ---
 
-## 4. Catalog-level metadata
+## 4. Scoring and decision algorithm
+
+This section documents the algorithm `match.py` uses to convert catalog entries and dispatch context into a routing decision. It is the normative spec; the pseudocode is an exact transliteration of the implementation.
+
+### Per-entry scoring
+
+```python
+def score(entry, features):
+    if features.command_prefix in entry.triggers.command_prefixes:
+        return 1.0
+    if any(m in features.agent_mentions for m in entry.triggers.agent_mentions):
+        return 1.0
+    if any(x in features.keywords for x in entry.triggers.excludes):
+        return 0.0
+
+    s = 0.0
+    s += 0.4 * matched_glob_count(entry, features)
+    s += sum(0.3 * k.weight for k in entry.triggers.keywords if k.term in features.keywords)
+    s += 0.5 * len([t for t in entry.triggers.tool_mentions if t in features.tool_mentions])
+    return min(s, 1.0)
+```
+
+Short-circuits fire before additive scoring. `command_prefixes` and `agent_mentions` short-circuit to `1.0`; `excludes` short-circuits to `0.0`. All three match against `features.keywords` only — `excludes` does not check `tool_mentions` or `agent_mentions`.
+
+Coefficient summary: path glob match = `0.4` per glob; keyword match = `0.3 × weight` per term; tool mention match = `0.5` per tool. Score is clamped to `1.0`.
+
+### Decision composition
+
+After scoring all entries, the matcher selects a decision:
+
+```python
+def decide(scored_agents, scored_skills, features):
+    if feature_count(features) < 2:
+        return {"decision": "needs_more_detail", ...}
+
+    best_agent = scored_agents[0] if scored_agents else None
+    best_skills = [s for s in scored_skills if s.score >= 0.5][:3]
+
+    if best_agent and best_agent.score >= 0.85 and gap(scored_agents) >= 0.2:
+        return {"decision": "delegate", "agent": best_agent.name,
+                "skills": skills_for_agent(best_agent, features), ...}
+
+    if best_agent and best_agent.score >= 0.5 and gap(scored_agents) < 0.2:
+        return {"decision": "ambiguous", "candidates": top_3_agents, ...}
+
+    if best_skills:
+        return {"decision": "self_handle", "skills": [s.name for s in best_skills], ...}
+
+    if best_agent and best_agent.score >= 0.5:
+        return {"decision": "advisory", "agent": best_agent.name,
+                "skills": skills_for_agent(best_agent, features), ...}
+
+    return {"decision": "self_handle_unaided", ...}
+```
+
+The router agent is excluded from the scored-agents pool via the `routable: false` flag. The `gap` function is the score difference between the top and second-place agent. `feature_count` counts populated input dimensions: `task_description` with at least one keyword = 1; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each add 1 when non-empty.
+
+### Decision ladder
+
+| Decision              | Condition                                                   | Confidence   |
+| --------------------- | ----------------------------------------------------------- | ------------ |
+| `needs_more_detail`   | Feature density < 2 populated dimensions                    | `0.0`        |
+| `delegate`            | Best agent score ≥ 0.85, gap ≥ 0.2                          | best score   |
+| `ambiguous`           | Best agent score ≥ 0.5, gap < 0.2                           | best score   |
+| `self_handle`         | No dominant agent; ≥1 skill score ≥ 0.5                     | best score   |
+| `advisory`            | Best agent score ≥ 0.5, gap ≥ 0.2 (below delegate threshold) | best score  |
+| `self_handle_unaided` | No agent or skill above threshold                           | `0.0`        |
+
+`ask_user` is reserved and not produced by the current decision ladder.
+
+---
+
+## 5. Observability
+
+The matcher's observability layer tracks routing decisions against actual tool-use behavior. This section summarizes the telemetry shape; the full drift design rationale is in [`docs/design.md`](design.md).
+
+### Drift event types and action thresholds
+
+Drift events are written to `router-drift.jsonl` by a Stop hook and a PreToolUse floor hook.
+
+| Event type                       | Producer            | Action threshold                                              |
+| -------------------------------- | ------------------- | ------------------------------------------------------------- |
+| `bypass`                         | PreToolUse hook     | ≥ 5 events with same agent type in 7 days                     |
+| `stale_dispatch`                 | PreToolUse hook     | ≥ 3 events in 7 days (advisory-only until STALENESS_BOUND calibrated) |
+| `advisory_override`              | Stop hook scanner   | ≥ 3 events with same router-vs-catalog choice in 7 days       |
+| `self_handle_unaided_invocation` | Stop hook scanner   | ≥ 10 events in 7 days                                         |
+| `needs_more_detail_repeat`       | Stop hook scanner   | ≥ 3 events in 7 days                                          |
+| `catalog_degraded_session`       | Stop hook scanner   | ≥ 1 ever — immediate action                                   |
+
+### Pre-ship CI invariants
+
+These are verified at catalog generation time and on PRs that touch skill or agent frontmatter:
+
+| Invariant                    | Pass condition                                                                    |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| Catalog stability            | Generator run twice on unchanged source; output identical byte-for-byte           |
+| Trigger-rule firing accuracy | Per-entry smoke-test inputs produce expected matches                              |
+| Schema validation            | Generator exits 0 with no per-entry fatal warnings on touched frontmatter         |
+
+### Runtime telemetry (healthy ranges — starting hypothesis)
+
+Computed by `src/claude_wayfinder/_health.py` from the drift log and dispatch log:
+
+| Metric                   | Healthy range |
+| ------------------------ | ------------- |
+| Dispatch invocation rate | ≥ 80%         |
+| Bypass rate              | ≤ 10%         |
+| Advisory override rate   | ≤ 30%         |
+| Catalog availability     | ≥ 99%         |
+
+Drift trends are signal the operator interprets — the design does not claim that drift-going-down equals improved outcome quality. See [`docs/design.md`](design.md) for the design philosophy around this distinction.
+
+---
+
+## 6. Catalog-level metadata
 
 The top-level `dispatch-catalog.json` object has these fields:
 
@@ -236,7 +350,7 @@ The top-level `dispatch-catalog.json` object has these fields:
 
 ---
 
-## 5. Minimal example catalog
+## 7. Minimal example catalog
 
 The following illustrates the full catalog structure with five representative entries. Fields use their actual JSON types (booleans lowercase, numbers unquoted).
 

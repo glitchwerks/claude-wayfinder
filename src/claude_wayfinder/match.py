@@ -23,8 +23,8 @@ Usage::
            "file_paths": ["src/main.py"]}' \\
       | python match.py --catalog-path /path/to/dispatch-catalog.json
 
-See ``docs/design/2026-04-30-deterministic-first-router-design-v5.md``
-sections 3.1.1-3.1.8 for the full specification this module implements.
+See ``docs/schema.md`` §4 for the scoring and decision algorithm this
+module implements, and ``docs/design.md`` for the design rationale.
 """
 
 from __future__ import annotations
