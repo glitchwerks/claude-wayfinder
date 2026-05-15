@@ -113,3 +113,12 @@ The field-level documentation for this footgun is in [`docs/design/trigger-schem
 **(c) Catalog-vs-source staleness window.** Between a source file change and the next catalog rebuild, routing decisions are based on stale data. The stale-mtime warning in the v0.2 dispatch skill (issue #40, PR #44) surfaces this as a `[DISPATCH WARNING]` on stderr. The window is bounded by the rebuild cadence the consumer configures (pre-commit hook, CI job, or manual).
 
 **(d) Drift telemetry requires router relay.** None of the observability surfaces — session banner, `match.py` stderr, catalog generation log — reach the operator without either router relay or operator-initiated polling. The design increases detection probability via redundancy (multiple surfaces) but does not guarantee router-independent surfacing. The health checker (`src/claude_wayfinder/_health.py`) is the one operator-controlled path that does not require router relay.
+
+---
+
+## Non-goals
+
+- **Bundled standalone binary** — deferred to issue #6.
+- **Shipped router agent** — wayfinder is a matcher and telemetry plugin, not a routing agent. Consumers bring their own router agent definition.
+- **`UserPromptSubmit` hook for automatic dispatch-context extraction** — deferred to v0.3; the power-user audience composes context themselves.
+- **No bundled dispatch-shape enforcement.** Wayfinder ships the matcher and drift telemetry (issue #53). It does not ship hooks that enforce which agents are allowed to dispatch which other agents — that policy lives in the consumer's router agent definition. See [`docs/dispatch-discipline.md`](dispatch-discipline.md) for the four routing-shape rules the matcher implicitly assumes and consumer-side implementation pointers.
