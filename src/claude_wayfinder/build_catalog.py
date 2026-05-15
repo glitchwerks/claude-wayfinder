@@ -1931,24 +1931,17 @@ def build(
     return 2 if degraded else 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry point.  Returns process exit code.
+def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
+    """Register all ``catalog build`` flags onto *parser*.
+
+    This helper is extracted so that both the standalone
+    ``build_catalog.main()`` entry point and the ``cli.py``
+    ``catalog build`` sub-subparser can share an identical parameter
+    surface without duplication.
 
     Args:
-        argv: Argument list to parse.  Defaults to ``sys.argv[1:]``
-            when ``None``.
-
-    Returns:
-        Integer exit code: ``0`` on a clean build, ``2`` when the
-        catalog is degraded (see ``build()``).
+        parser: An ``ArgumentParser`` (or sub-parser) to populate.
     """
-    parser = argparse.ArgumentParser(
-        description=(
-            "Build the dispatch catalog from skill sidecars and agent "
-            "frontmatter.  All directory paths that previously defaulted "
-            "to ~/.claude/... now require explicit values (Issue #10)."
-        )
-    )
     parser.add_argument(
         "--skills-dir",
         type=Path,
@@ -2013,8 +2006,24 @@ def main(argv: list[str] | None = None) -> int:
             "via 'git rev-parse --show-toplevel' in the current directory."
         ),
     )
-    args = parser.parse_args(argv)
 
+
+def run_catalog_build(args: argparse.Namespace) -> int:
+    """Execute a catalog build from a pre-parsed argument namespace.
+
+    Resolves the project root (explicit flag or auto-detection) and
+    delegates to :func:`build`.  Extracted so that both the standalone
+    ``build_catalog`` entry point and the ``cli.py`` ``catalog build``
+    subcommand share identical post-parse behaviour without duplication.
+
+    Args:
+        args: A parsed ``argparse.Namespace`` that must carry all
+            attributes registered by :func:`add_catalog_build_args`.
+
+    Returns:
+        Integer exit code: ``0`` on a clean build, ``2`` when the
+        catalog is degraded (see :func:`build`).
+    """
     # Resolve project root: explicit flag takes priority; fall back to
     # auto-detection from the current working directory.
     # The user_global_dir guard is skipped (None) because the caller must
@@ -2036,6 +2045,29 @@ def main(argv: list[str] | None = None) -> int:
         log_path=args.log,
         project_root=project_root,
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point.  Returns process exit code.
+
+    Args:
+        argv: Argument list to parse.  Defaults to ``sys.argv[1:]``
+            when ``None``.
+
+    Returns:
+        Integer exit code: ``0`` on a clean build, ``2`` when the
+        catalog is degraded (see ``build()``).
+    """
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build the dispatch catalog from skill sidecars and agent "
+            "frontmatter.  All directory paths that previously defaulted "
+            "to ~/.claude/... now require explicit values (Issue #10)."
+        )
+    )
+    add_catalog_build_args(parser)
+    args = parser.parse_args(argv)
+    return run_catalog_build(args)
 
 
 if __name__ == "__main__":
