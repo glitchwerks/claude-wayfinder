@@ -6,6 +6,38 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Tier 1 drift-telemetry hooks** — five Claude Code hooks shipped in `hooks/`
+  that automate catalog health, catalog auto-refresh, and routing-quality
+  observability without any manual wiring. All hooks exit 0 in all conditions
+  and never block a session or prompt. (#53)
+  - `check-catalog-health.js` (SessionStart) — emits `[CATALOG ERROR]` or
+    `[CATALOG STALE]` banner when the dispatch catalog is missing, empty,
+    unparseable, or older than any source file.
+  - `refresh-catalog-on-stale.js` (UserPromptSubmit) — auto-rebuilds the
+    catalog when a source file is newer or the current project root has changed
+    since the last build. Monitors user-global skills/agents, project-local
+    `.claude/` trees, plugin cache, and `installed_plugins.json`.
+  - `log-agent-dispatch.js` (PreToolUse/Agent) — appends an `agent_dispatch`
+    event to `~/.claude/state/dispatch-log.jsonl` for every Agent tool call.
+  - `check-agent-dispatch-pairing.js` (PreToolUse/Agent) — classifies each
+    Agent call as `router_mediated`, `skill_mediated`, `bypass`, or
+    `stale_dispatch`; writes drift events to `router-drift.jsonl` for
+    non-router-mediated cases. Integrates a sidecar for same-turn
+    Skill→Agent detection.
+  - `router-drift-scanner.js` (Stop) — scans the completed session transcript
+    and appends five additional drift event types to `router-drift.jsonl`:
+    `advisory_override`, `self_handle_unaided_invocation`,
+    `needs_more_detail_repeat`, `catalog_degraded_session`,
+    `skill_mediated_delegation`.
+- **`hooks/hooks.json`** — manifest wiring all five hooks to their Claude Code
+  lifecycle events. (#53)
+- **Node 20 CI job** (`Test (Node)`) — runs `node --test hooks/tests/*.test.js`
+  in GitHub Actions on every push and pull request. 143 tests. (#53)
+- **143 hook unit tests** across five test files using the built-in
+  `node:test` runner; no npm dependencies required. (#53)
+
 ## [0.2.0] — 2026-05-15
 
 End-to-end integration flow. v0.1 shipped the matcher as an evaluation surface
