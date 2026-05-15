@@ -69,9 +69,35 @@ If you want to use the matcher for real routing in your own Claude Code setup, t
 - **Integrate now via the contributor path.** Clone the repo, build your own catalog from your agent and skill frontmatter, and call the library API from your router agent. The [Contributing](#contributing) section covers the mechanics, and `python -m claude_wayfinder --help` documents the CLI surface.
 - **Wait for the bundled runtime.** Issue [#6](https://github.com/glitchwerks/claude-wayfinder/issues/6) tracks the zero-friction-install spike — a bundled router agent and catalog generator that would make daily-driver routing available without manual integration. That work is scoped to v0.2.
 
-## Power-user integration
+## Quick start
 
-For consumers who want to use claude-wayfinder as their actual router rather than just evaluate it: the full wiring guide — catalog build commands, router-agent prompt snippet, catalog refresh patterns, and troubleshooting — is in [`docs/integration.md`](docs/integration.md).
+Minimum path from zero to a working real-catalog `/dispatch`:
+
+**1. Install the plugin** — inside Claude Code:
+
+```
+/plugin marketplace add glitchwerks/claude-wayfinder
+```
+
+**2. Build a catalog** — run this console script once (and again whenever your skill or agent frontmatter changes):
+
+```bash
+claude-wayfinder catalog build \
+  --skills-dir ~/.claude/skills \
+  --agents-dir ~/.claude/agents \
+  --out ~/.claude/dispatch-catalog.json \
+  --log ~/.claude/dispatch-catalog-build.log
+```
+
+**3. Set `$DISPATCH_CATALOG_PATH`** — in your shell profile:
+
+```bash
+export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
+```
+
+Without this env var, `/dispatch` runs in demo mode against bundled fixtures and does not route your tasks.
+
+**4. Add `Skill` to your router agent's `tools:` frontmatter** — `/dispatch` is invoked as a skill, so the router must have `Skill` in its tool list. See [`docs/integration.md`](docs/integration.md) for the full router-agent prompt snippet and catalog refresh patterns.
 
 ## Try it (no Claude Code required)
 
