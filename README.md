@@ -69,6 +69,10 @@ If you want to use the matcher for real routing in your own Claude Code setup, t
 - **Integrate now via the contributor path.** Clone the repo, build your own catalog from your agent and skill frontmatter, and call the library API from your router agent. The [Contributing](#contributing) section covers the mechanics, and `python -m claude_wayfinder --help` documents the CLI surface.
 - **Wait for the bundled runtime.** Issue [#6](https://github.com/glitchwerks/claude-wayfinder/issues/6) tracks the zero-friction-install spike — a bundled router agent and catalog generator that would make daily-driver routing available without manual integration. That work is scoped to v0.2.
 
+## Power-user integration
+
+For consumers who want to use claude-wayfinder as their actual router rather than just evaluate it: the full wiring guide — catalog build commands, router-agent prompt snippet, catalog refresh patterns, and troubleshooting — is in [`docs/integration.md`](docs/integration.md).
+
 ## Try it (no Claude Code required)
 
 The CLI demo evaluates the matcher against bundled fixtures without requiring a Claude Code install. It covers all seven decision branches.
