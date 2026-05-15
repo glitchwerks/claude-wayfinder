@@ -28,6 +28,7 @@ Issues = "https://github.com/glitchwerks/claude-wayfinder/issues"
 
 [project.scripts]
 claude-wayfinder = "claude_wayfinder.cli:main"
+claude-wayfinder-match = "claude_wayfinder.match:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_wayfinder"]

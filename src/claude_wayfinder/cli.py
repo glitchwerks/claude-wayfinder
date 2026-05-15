@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import claude_wayfinder.build_catalog as _build_catalog_mod
 from claude_wayfinder.match import (
     build_features,
     decide,
@@ -251,6 +252,23 @@ def _build_parser() -> argparse.ArgumentParser:
             "branch, with the matcher's output for each."
         ),
     )
+
+    # --- catalog subcommand ---
+    catalog_parser = sub.add_parser(
+        "catalog",
+        help="Catalog management subcommands.",
+    )
+    catalog_sub = catalog_parser.add_subparsers(dest="catalog_command")
+
+    build_parser = catalog_sub.add_parser(
+        "build",
+        help=(
+            "Build the dispatch catalog from skill SKILL.md sidecars and "
+            "agent frontmatter files."
+        ),
+    )
+    _build_catalog_mod.add_catalog_build_args(build_parser)
+
     return parser
 
 
@@ -268,6 +286,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "demo":
         return run_demo()
+
+    if args.command == "catalog":
+        if getattr(args, "catalog_command", None) == "build":
+            return _build_catalog_mod.run_catalog_build(args)
+        # ``catalog`` with no sub-subcommand — print catalog help.
+        parser.parse_args(["catalog", "--help"])
+        return 1
 
     # No sub-command given — print help and exit non-zero.
     parser.print_help()
