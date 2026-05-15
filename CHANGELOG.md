@@ -8,6 +8,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`docs/dispatch-discipline.md`** — reference doc describing the four routing-shape
+  rules the matcher assumes (self-dispatch prohibition, Opus-native nested dispatch
+  carve-out, skill propagation, one-dispatch-per-Agent-call), with failure modes and
+  consumer-side implementation pointers for each. Closes #54.
+- **`docs/design.md` § Non-goals** — explicit disclaimer that wayfinder does not ship
+  dispatch-shape enforcement hooks; cross-reference to `docs/dispatch-discipline.md`.
 - **Tier 1 drift-telemetry hooks** — five Claude Code hooks shipped in `hooks/`
   that automate catalog health, catalog auto-refresh, and routing-quality
   observability without any manual wiring. All hooks exit 0 in all conditions
