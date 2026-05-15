@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import claude_wayfinder.build_catalog as _build_catalog_mod
+from claude_wayfinder._dispatch import run_dispatch
 from claude_wayfinder.match import (
     build_features,
     decide,
@@ -253,6 +254,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    sub.add_parser(
+        "dispatch",
+        help=(
+            "Mode-aware dispatch: demo mode when $DISPATCH_CATALOG_PATH is "
+            "unset; real-catalog mode when the env var resolves to a valid "
+            "catalog.  Reads dispatch context JSON from stdin; writes "
+            "decision JSON to stdout."
+        ),
+    )
+
     # --- catalog subcommand ---
     catalog_parser = sub.add_parser(
         "catalog",
@@ -286,6 +297,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "demo":
         return run_demo()
+
+    if args.command == "dispatch":
+        return run_dispatch()
 
     if args.command == "catalog":
         if getattr(args, "catalog_command", None) == "build":
