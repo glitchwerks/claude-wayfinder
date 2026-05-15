@@ -404,7 +404,7 @@ This returns the same decision JSON the router would receive. Adjust the dispatc
 
 ## Cross-references
 
-- **Schema documentation** — the catalog entry schema, dispatch context schema (5 input fields), and decision output schema (7 decision types) are documented in [`docs/schema.md`](schema.md) (coming in #42).
+- **Schema documentation** — the catalog entry schema, dispatch context schema (5 input fields), and decision output schema (7 decision types) are documented in [`docs/schema.md`](schema.md).
 - **Algorithm specification** — [`docs/design/2026-04-30-deterministic-first-router-design-v5.md`](design/2026-04-30-deterministic-first-router-design-v5.md)
 - **v0.2 integration design rationale** — [`docs/design/2026-05-14-v0.2-integration-design.md`](design/2026-05-14-v0.2-integration-design.md)
 - **Library API** — [`docs/api.md`](api.md)
