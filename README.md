@@ -16,7 +16,7 @@ A conventional LLM router enforces routing policy through prose instructions rea
 
 The decision contract is a seven-member typed enum: `delegate` / `self_handle` / `self_handle_unaided` / `advisory` / `ambiguous` / `ask_user` / `needs_more_detail`.
 
-For the algorithm specification, see [`docs/design/2026-04-30-deterministic-first-router-design-v5.md`](docs/design/2026-04-30-deterministic-first-router-design-v5.md).
+For the design rationale, see [`docs/design.md`](docs/design.md). For the algorithm specification, see [`docs/schema.md`](docs/schema.md).
 
 ## Install (Claude Code users)
 

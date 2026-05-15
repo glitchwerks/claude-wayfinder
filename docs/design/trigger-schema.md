@@ -1,6 +1,6 @@
 # Trigger Schema
 
-> Status: design · Companion doc: [Deterministic-First Router Design v5](./2026-04-30-deterministic-first-router-design-v5.md) §3.1.1, §3.1.2, §3.1.5, §3.1.6
+> Status: design · Companion doc: [Design rationale](../design.md)
 
 ## 1. Purpose and non-goals
 
@@ -369,7 +369,7 @@ Authors should be aware that `keywords` is the only bucket fed by free-form text
 
 ## 4. Matching rules
 
-Per the v5 design §3.1.2, the per-entry score is:
+Per the scoring algorithm in [`docs/schema.md §4`](../schema.md#4-scoring-and-decision-algorithm), the per-entry score is:
 
 ```python
 def score(entry, features):
@@ -489,7 +489,7 @@ All log lines are written to the catalog generation log. Format: `<ISO-8601> <se
 | **fatal**         | YAML parse error; `triggers:` is not a mapping; `keywords` element is not `{term, weight}`; `weight` not a number; `weight` outside `[0.0, 1.0]`; plugin-override sidecar has invalid `kind` value | Entry **excluded** from catalog |
 | **warning**       | `weight` in `[0.0, 1.0]` but not in `{0.25, 0.5, 1.0}` (clamped to nearest); duplicate `term` in `keywords` (deduplicated, last wins); `keywords` term contains whitespace (keyword dropped); `triggers.file_extensions` declared (field dropped — use `path_globs`); `applicable_*` references non-existent name (dropped); entry has triggers but `applicable_*: []`; `SKILL.md` contains trigger keys (ignored); plugin override targets owned entry (rejected); tombstone targets owned entry (rejected); tombstone targets nonexistent entry; plugin manifest malformed/version-unsupported | Entry **kept** (or override rejected), mutation logged |
 | **info**          | Entry has no `triggers:` block (dormant); plugin manifest absent; plugin entry disabled by tombstone override; override layers on plugin-discovered entry; `applicable_skills` contains plugin-namespaced reference (kept as external reference) | Entry kept or removed per tombstone semantics |
-| **catalog-level** | >25% of entries excluded fatally; entire catalog empty | `[CATALOG ERROR]` banner at session start (v5 §3.1.6) |
+| **catalog-level** | >25% of entries excluded fatally; entire catalog empty | `[CATALOG ERROR]` banner at session start |
 
 Ties (equidistant values) resolve to the larger weight.
 

@@ -3,9 +3,8 @@
 Provides a deterministic 7-decision routing kernel that scores an incoming
 dispatch context against a compiled catalog of agents and skills, then
 returns one of seven routing decisions with scored alternatives and a
-human-readable rationale.  See ``docs/api.md`` for the full API reference
-and ``docs/design/2026-04-30-deterministic-first-router-design-v5.md`` for
-the algorithm specification.
+human-readable rationale.  See ``docs/api.md`` for the full API reference, ``docs/schema.md`` §4 for
+the algorithm specification, and ``docs/design.md`` for the design rationale.
 """
 
 from __future__ import annotations

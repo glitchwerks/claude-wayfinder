@@ -1,8 +1,8 @@
 """Router health reporting tool — v5 §3.3.4 metrics.
 
 Reports pre-ship CI invariants and runtime telemetry for the deterministic
-dispatch system described in
-docs/design/2026-04-30-deterministic-first-router-design-v5.md.
+dispatch system. Observability design and action thresholds: docs/schema.md §5.
+Design rationale: docs/design.md.
 
 Two output modes:
   --ci      Pre-ship CI invariants only; exits non-zero on failure.
