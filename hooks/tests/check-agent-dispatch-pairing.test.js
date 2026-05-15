@@ -52,7 +52,7 @@ function agentPayload(history = [], toolInput = {}) {
     session_id: "test-session",
     tool_name: "Agent",
     tool_input: {
-      subagent_type: "code-writer",
+      subagent_type: "writer",
       prompt: "Do some work.",
       ...toolInput,
     },
@@ -106,7 +106,7 @@ function agentEntry() {
       {
         type: "tool_use",
         name: "Agent",
-        input: { subagent_type: "ops", prompt: "prior dispatch" },
+        input: { subagent_type: "reader", prompt: "prior dispatch" },
       },
     ],
   };
@@ -486,7 +486,7 @@ test("check-agent-dispatch-pairing: drift event includes session_id from input",
   const payload = {
     session_id: "specific-session-xyz",
     tool_name: "Agent",
-    tool_input: { subagent_type: "code-writer", prompt: "task" },
+    tool_input: { subagent_type: "writer", prompt: "task" },
     conversation_history: [],
   };
   runHook(payload, { ROUTER_DRIFT_PATH: driftPath });
@@ -501,7 +501,7 @@ test("check-agent-dispatch-pairing: no conversation_history field → bypass eve
   const payload = {
     session_id: "test-no-history",
     tool_name: "Agent",
-    tool_input: { subagent_type: "ops", prompt: "task" },
+    tool_input: { subagent_type: "reader", prompt: "task" },
     // no conversation_history field
   };
   const result = runHook(payload, { ROUTER_DRIFT_PATH: driftPath });

@@ -6,6 +6,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (Breaking)
+
+- **`harness_version` field renamed to `plugin_version` in `router-drift.jsonl` events** — all
+  five event types emitted by `router-drift-scanner.js` (`advisory_override`,
+  `self_handle_unaided_invocation`, `needs_more_detail_repeat`, `catalog_degraded_session`,
+  `skill_mediated_delegation`) now carry `plugin_version` instead of `harness_version`. (#56)
+  External consumers of the drift log must update their field references.
+  - `getHarnessVersion()` (in `hooks/lib/`) renamed to `getPluginVersion()`.
+  - `hooks/lib/harness-version.js` renamed to `hooks/lib/plugin-version.js`.
+  - `HARNESS_VERSION_OVERRIDE` test-injection env var renamed to `PLUGIN_VERSION_OVERRIDE`.
+
 ### Added
 
 - **`docs/dispatch-discipline.md`** — reference doc describing the four routing-shape

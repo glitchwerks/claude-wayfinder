@@ -7,7 +7,7 @@
  *   - Integration: log-agent-dispatch.js reads stdin correctly and skips non-target tools
  *
  * Note: log-skill-invocation.js is not part of the Tier 1 hooks ported to this plugin.
- * Tests for that hook live in the upstream private harness.
+ * Tests for the `lib/dispatch-log.js` helpers that the `log-agent-dispatch.js` hook uses to write `dispatch-log.jsonl` entries.
  */
 
 const { test } = require("node:test");
@@ -303,7 +303,7 @@ test("extractSkillsFromPrompt: prompt with skills from a real session", () => {
 test("appendLogLine: writes one JSON line followed by newline", () => {
   const { appendLogLine } = loadLib();
   const logPath = tmpLogPath();
-  const event = { type: "agent_dispatch", ts: "2026-04-24T00:00:00.000Z", agent: "code-writer" };
+  const event = { type: "agent_dispatch", ts: "2026-04-24T00:00:00.000Z", agent: "writer" };
 
   appendLogLine(event, logPath);
 
@@ -387,7 +387,7 @@ test("log-agent-dispatch: exits 0 for an Agent tool dispatch", () => {
     session_id: "test-session-001",
     tool_name: "Agent",
     tool_input: {
-      subagent_type: "code-writer",
+      subagent_type: "writer",
       prompt: "Use the `refactoring-discipline` skill to reorganize this module.",
     },
   };
@@ -409,7 +409,7 @@ test("log-agent-dispatch: writes agent_dispatch event to log", () => {
     session_id: "test-session-002",
     tool_name: "Agent",
     tool_input: {
-      subagent_type: "code-writer",
+      subagent_type: "writer",
       prompt: "Use the `refactoring-discipline` skill to reorganize this module.",
     },
   };
@@ -423,7 +423,7 @@ test("log-agent-dispatch: writes agent_dispatch event to log", () => {
     const event = JSON.parse(line);
     assert.equal(event.type, "agent_dispatch");
     assert.equal(event.session_id, "test-session-002");
-    assert.equal(event.agent, "code-writer");
+    assert.equal(event.agent, "writer");
     assert.deepEqual(event.skills_in_prompt, ["refactoring-discipline"]);
     assert.ok(typeof event.ts === "string" && event.ts.endsWith("Z"), "ts must be UTC ISO 8601");
     assert.ok(event.task_excerpt.length <= 200, "task_excerpt must be at most 200 chars");
@@ -489,27 +489,27 @@ test("log-agent-dispatch: exits 0 even on a bad log path (fail-open)", () => {
   assert.equal(result.exitCode, 0);
 });
 
-// ── harness_version stamping ──────────────────────────────────────────────────
+// ── plugin_version stamping ──────────────────────────────────────────────────
 
 const SENTINEL_SHA = "deadbeef1234567890abcdef1234567890abcdef";
 
-test("log-agent-dispatch: emits harness_version field on agent_dispatch events", () => {
+test("log-agent-dispatch: emits plugin_version field on agent_dispatch events", () => {
   const logPath = tmpLogPath();
   const payload = {
     session_id: "test-session-020",
     tool_name: "Agent",
     tool_input: {
-      subagent_type: "code-writer",
+      subagent_type: "writer",
       prompt: "Do some work.",
     },
   };
   runHook("log-agent-dispatch.js", payload, {
     DISPATCH_LOG_PATH: logPath,
-    HARNESS_VERSION_OVERRIDE: SENTINEL_SHA,
+    PLUGIN_VERSION_OVERRIDE: SENTINEL_SHA,
   });
 
   const event = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
-  assert.equal(event.harness_version, SENTINEL_SHA, "harness_version must equal the injected SHA");
+  assert.equal(event.plugin_version, SENTINEL_SHA, "plugin_version must equal the injected SHA");
 });
 
 // ── buildAgentDispatchEvent unit tests ───────────────────────────────────────
@@ -518,13 +518,13 @@ const { buildAgentDispatchEvent } = require("../log-agent-dispatch");
 
 test("buildAgentDispatchEvent stamps agent_rev + agent_content_hash for owned agent", async () => {
   const event = await buildAgentDispatchEvent({
-    tool_input: { subagent_type: "code-writer", prompt: "do the thing" },
+    tool_input: { subagent_type: "writer", prompt: "do the thing" },
     session_id: "s1",
-    harness_version: "deadbeef".repeat(5),
+    plugin_version: "deadbeef".repeat(5),
     getComponentVersion: () => ({ rev: 3, content_hash: "a3f9c1d2e4b8" }),
   });
   assert.equal(event.type, "agent_dispatch");
-  assert.equal(event.agent, "code-writer");
+  assert.equal(event.agent, "writer");
   assert.equal(event.agent_rev, 3);
   assert.equal(event.agent_content_hash, "a3f9c1d2e4b8");
 });
@@ -533,7 +533,7 @@ test("buildAgentDispatchEvent stamps null fields when helper returns null", asyn
   const event = await buildAgentDispatchEvent({
     tool_input: { subagent_type: "ghost", prompt: "" },
     session_id: "s1",
-    harness_version: "abc",
+    plugin_version: "abc",
     getComponentVersion: () => ({ rev: null, content_hash: null }),
   });
   assert.equal(event.agent_rev, null);
@@ -547,21 +547,21 @@ test("buildAgentDispatchEvent omits component fields entirely when helper return
       prompt: "",
     },
     session_id: "s1",
-    harness_version: "abc",
+    plugin_version: "abc",
     getComponentVersion: () => ({ rev: undefined, content_hash: undefined }),
   });
   assert.equal("agent_rev" in event, false);
   assert.equal("agent_content_hash" in event, false);
 });
 
-test("buildAgentDispatchEvent works when harness_version is a Promise (async contract)", async () => {
+test("buildAgentDispatchEvent works when plugin_version is a Promise (async contract)", async () => {
   const event = await buildAgentDispatchEvent({
-    tool_input: { subagent_type: "code-writer", prompt: "x" },
+    tool_input: { subagent_type: "writer", prompt: "x" },
     session_id: "s1",
-    harness_version: Promise.resolve("deadbeef".repeat(5)),
+    plugin_version: Promise.resolve("deadbeef".repeat(5)),
     getComponentVersion: () => ({ rev: 3, content_hash: "a3f9c1d2e4b8" }),
   });
-  assert.equal(event.harness_version, "deadbeef".repeat(5));
+  assert.equal(event.plugin_version, "deadbeef".repeat(5));
 });
 
 // ── E2E smoke test: subprocess fires actual hook against fixture tree ─────────
@@ -569,14 +569,14 @@ test("buildAgentDispatchEvent works when harness_version is a Promise (async con
 const crypto = require("node:crypto");
 
 function makeFixtureHome({
-  agentBody = "---\nname: code-writer\n---\nagent body\n",
+  agentBody = "---\nname: writer\n---\nagent body\n",
   sidecar = null,
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-e2e-"));
   fs.mkdirSync(path.join(dir, "agents"));
   fs.mkdirSync(path.join(dir, "skills"));
   fs.mkdirSync(path.join(dir, "state"));
-  fs.writeFileSync(path.join(dir, "agents", "code-writer.md"), agentBody);
+  fs.writeFileSync(path.join(dir, "agents", "writer.md"), agentBody);
   if (sidecar) {
     fs.writeFileSync(path.join(dir, "state", "component-revisions.json"), JSON.stringify(sidecar));
   }
@@ -584,14 +584,14 @@ function makeFixtureHome({
 }
 
 test("E2E: log-agent-dispatch stamps agent_rev + agent_content_hash for owned agent with matching sidecar", () => {
-  const agentBody = "---\nname: code-writer\n---\nagent body\n";
+  const agentBody = "---\nname: writer\n---\nagent body\n";
   const hash = crypto.createHash("sha256").update(agentBody).digest("hex").slice(0, 12);
   const home = makeFixtureHome({
     agentBody,
     sidecar: {
       version: 1,
       components: {
-        "agent:code-writer": { rev: 5, content_hash: hash },
+        "agent:writer": { rev: 5, content_hash: hash },
       },
     },
   });
@@ -607,7 +607,7 @@ test("E2E: log-agent-dispatch stamps agent_rev + agent_content_hash for owned ag
     session_id: "e2e-session-001",
     tool_name: "Agent",
     tool_input: {
-      subagent_type: "code-writer",
+      subagent_type: "writer",
       prompt: "Use the `refactoring-discipline` skill to clean up.",
     },
   };
@@ -621,7 +621,7 @@ test("E2E: log-agent-dispatch stamps agent_rev + agent_content_hash for owned ag
       DISPATCH_LOG_PATH: logPath,
       CLAUDE_CONFIG_DIR: home,
       DISPATCH_CATALOG_PATH: catalogPath,
-      HARNESS_VERSION_OVERRIDE: SENTINEL_SHA,
+      PLUGIN_VERSION_OVERRIDE: SENTINEL_SHA,
     },
   });
 
@@ -632,8 +632,8 @@ test("E2E: log-agent-dispatch stamps agent_rev + agent_content_hash for owned ag
 
   assert.equal(event.type, "agent_dispatch");
   assert.equal(event.session_id, "e2e-session-001");
-  assert.equal(event.agent, "code-writer");
-  assert.equal(event.harness_version, SENTINEL_SHA);
+  assert.equal(event.agent, "writer");
+  assert.equal(event.plugin_version, SENTINEL_SHA);
   assert.equal(event.agent_rev, 5, "agent_rev must equal sidecar rev when hashes match");
   assert.equal(
     event.agent_content_hash,
