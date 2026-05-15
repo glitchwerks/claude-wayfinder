@@ -10,13 +10,17 @@ This guide is for consumers who want to use claude-wayfinder as the actual dispa
 
 ---
 
-## 1. One-time catalog build
+## Core integration
+
+Required to make `/dispatch` route real traffic. Read end-to-end before attempting the optional extras.
+
+### 1. Build a catalog
 
 The matcher operates against a catalog you build from your own skill and agent frontmatter. There are no defaults for the output path or log path — both must be supplied explicitly.
 
 The `catalog build` subcommand reads `SKILL.md` files and agent frontmatter `.md` files, applies source-tagged precedence, and writes a `dispatch-catalog.json` and a build log.
 
-### User-scope-only sources
+#### User-scope-only sources
 
 Catalog built from user-level skills and agents only (nothing project-local):
 
@@ -28,7 +32,7 @@ claude-wayfinder catalog build \
   --log ~/.claude/dispatch-catalog-build.log
 ```
 
-### User-scope with project-local overlay
+#### User-scope with project-local overlay
 
 Adds repo-local `.claude/agents/` and `.claude/skills/` on top of the user-scope sources. Project-local entries take the highest precedence in the source-tagged model.
 
@@ -43,7 +47,7 @@ claude-wayfinder catalog build \
 
 `--project-root` may be omitted if the current working directory is the project root — the CLI auto-detects via `git rev-parse --show-toplevel`. Supply it explicitly when running from a worktree or from a script where the cwd is not the repo root.
 
-### User-scope with plugin overrides
+#### User-scope with plugin overrides
 
 Adds plugin-supplied skill overrides (trigger weight customizations) and plugin discovery:
 
@@ -61,7 +65,35 @@ claude-wayfinder catalog build \
 
 ---
 
-## 2. Router-agent prompt snippet
+### 2. Configure `$DISPATCH_CATALOG_PATH`
+
+The `/dispatch` skill reads this environment variable to locate your catalog. Without it, the skill runs in demo mode against bundled fixtures — that is not routing your tasks.
+
+```bash
+export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
+```
+
+Add this to your shell profile or Claude Code environment configuration so it is available in every session. On PowerShell:
+
+```powershell
+$env:DISPATCH_CATALOG_PATH = "$env:USERPROFILE\.claude\dispatch-catalog.json"
+```
+
+---
+
+### 3. Tools-frontmatter prerequisite
+
+Your router agent must include `Skill` in its `tools:` frontmatter for `/dispatch` to be invocable. Example of correct frontmatter:
+
+```
+tools: Glob, Grep, Read, Edit, Write, Bash, Skill, ToolSearch
+```
+
+Without `Skill` in the tools list, the `/dispatch` slash command is not available to the agent and the dispatch loop cannot run.
+
+---
+
+### 4. Router-agent prompt snippet
 
 Drop the following block into your router agent's system prompt or operational instructions. It covers the full dispatch loop: composing the context, invoking `/dispatch`, parsing the returned decision, and branching on all seven decision types.
 
@@ -196,37 +228,83 @@ in the session transcript so operators can replay and inspect routing choices.
 
 ---
 
-## 3. Tools-frontmatter prerequisite
+### 5. Troubleshooting
 
-Your router agent must include `Skill` in its `tools:` frontmatter for `/dispatch` to be invocable. Example of correct frontmatter:
+#### Catalog missing
 
+**Symptom:** The skill emits a `[CATALOG ERROR]` banner on stderr and exits non-zero. The decision JSON is not produced. Routing falls back to LLM judgment.
+
+**Cause — env var not set:** `$DISPATCH_CATALOG_PATH` is absent from the environment. The skill runs in demo mode (bundled fixtures) instead of routing your task. Demo mode prints `no catalog configured — running in demo mode` to stdout.
+
+Fix: set the env var before starting Claude Code:
+
+```bash
+export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
 ```
-tools: Glob, Grep, Read, Edit, Write, Bash, Skill, ToolSearch
-```
 
-Without `Skill` in the tools list, the `/dispatch` slash command is not available to the agent and the dispatch loop cannot run.
+Or add it to your shell profile / Claude Code env configuration so it is available in every session.
 
----
+**Cause — env var set but file is missing:** `$DISPATCH_CATALOG_PATH` points to a path that does not exist. The skill pre-validates the path and emits `[CATALOG ERROR] ... file not found at <path>`.
 
-## 4. Catalog refresh
-
-The catalog must be rebuilt whenever your skill or agent frontmatter changes. Three patterns are supported.
-
-### Manual refresh
-
-Run the same `catalog build` command used during initial setup:
+Fix: run `catalog build` to create the catalog at the configured path, then verify the file exists:
 
 ```bash
 claude-wayfinder catalog build \
   --skills-dir ~/.claude/skills \
   --agents-dir ~/.claude/agents \
-  --out ~/.claude/dispatch-catalog.json \
+  --out "$DISPATCH_CATALOG_PATH" \
   --log ~/.claude/dispatch-catalog-build.log
 ```
 
-### Pre-commit hook
+**Cause — file present but invalid JSON:** The skill emits `[CATALOG ERROR] ... malformed JSON`. The catalog file may be truncated (interrupted build), corrupted, or contain a syntax error.
 
-Add a git hook that regenerates the catalog when skill or agent files change. Using [pre-commit](https://pre-commit.com/):
+Fix: delete the catalog and rebuild from scratch. The build log at `--log` will indicate whether the build completed cleanly.
+
+#### Catalog stale
+
+**Symptom:** The skill emits a `[DISPATCH WARNING] Catalog mtime is older than source files: ...` to stderr. The dispatch proceeds with the stale catalog — routing is not blocked, but trigger weights may not reflect recent skill or agent edits.
+
+**When it fires:** Only when both `$DISPATCH_SKILLS_DIR` and `$DISPATCH_AGENTS_DIR` (or at least one) are set and point to directories that contain files newer than the catalog. If neither env var is set, no staleness check runs.
+
+Fix: rebuild the catalog:
+
+```bash
+claude-wayfinder catalog build \
+  --skills-dir "$DISPATCH_SKILLS_DIR" \
+  --agents-dir "$DISPATCH_AGENTS_DIR" \
+  --out "$DISPATCH_CATALOG_PATH" \
+  --log ~/.claude/dispatch-catalog-build.log
+```
+
+#### Decision unexpected
+
+When the matcher returns a decision that does not match your expectation for a given task, inspect the decision at two levels.
+
+**Level 1 — Read the rationale field.** The `rationale` string in the decision JSON names the specific triggers and weights that fired. It will tell you which keyword, path glob, or tool mention matched (or did not match) and which agent or skill scored highest.
+
+**Level 2 — Inspect the catalog entry.** Open your catalog JSON at `$DISPATCH_CATALOG_PATH` and locate the entry for the agent or skill in question. The `triggers` block contains the keywords, path globs, tool names, and command prefixes that are scored against the dispatch context. Compare against the features you sent.
+
+To inspect how features are extracted from your dispatch context, run the matcher directly against `claude-wayfinder-match` (the lower-level entry point) and examine the output:
+
+```bash
+echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
+  | DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json \
+    claude-wayfinder dispatch
+```
+
+This returns the same decision JSON the router would receive. Adjust the dispatch context fields until the output matches the decision you expect, then verify that your router's composition step is producing equivalent context.
+
+**No `--verbose` flag exists** in the current CLI. Feature-level inspection is available through the Python API (`build_features`, `score` from `claude_wayfinder`) if you need lower-level debugging — see [`docs/api.md`](api.md).
+
+---
+
+## Optional integrations
+
+Operational extras. Reach for these once your core integration is working.
+
+### Catalog refresh — pre-commit hook
+
+The catalog must be rebuilt whenever your skill or agent frontmatter changes. Add a git hook that regenerates the catalog when skill or agent files change. Using [pre-commit](https://pre-commit.com/):
 
 ```yaml
 # .pre-commit-config.yaml
@@ -266,7 +344,7 @@ fi
 
 Make the file executable: `chmod +x .git/hooks/pre-commit`
 
-### CI job
+### Catalog refresh — GitHub Actions CI job
 
 Add a step to your CI pipeline that rebuilds and validates the catalog on pull requests touching skill or agent files:
 
@@ -313,9 +391,19 @@ jobs:
 
 Adjust `--skills-dir` and `--agents-dir` to the paths relevant to your CI environment. If your skills and agents live inside the repo, use repo-relative paths (e.g. `${{ github.workspace }}/.claude/skills`).
 
----
+### Catalog refresh — manual command
 
-## 5. Drift telemetry
+Run the same `catalog build` command used during initial setup:
+
+```bash
+claude-wayfinder catalog build \
+  --skills-dir ~/.claude/skills \
+  --agents-dir ~/.claude/agents \
+  --out ~/.claude/dispatch-catalog.json \
+  --log ~/.claude/dispatch-catalog-build.log
+```
+
+### Drift telemetry
 
 After deploying the dispatch loop, the matcher's observability layer tracks routing decisions against actual tool-use behavior. The signal this produces — drift events — tells you whether the router is following the decisions the matcher returns.
 
@@ -329,76 +417,6 @@ Key points:
 - The session recap surfaces a recent drift summary; the health checker provides a full report on demand.
 - Action thresholds by drift type are defined in §3.3.3. `catalog_degraded_session` events warrant immediate action; others are informational until thresholds are exceeded.
 - **Staleness is not an error.** When `$DISPATCH_SKILLS_DIR` and/or `$DISPATCH_AGENTS_DIR` are set and any source file is newer than the catalog, the skill emits a `[DISPATCH WARNING]` to stderr and proceeds. Rebuild the catalog to clear the warning.
-
----
-
-## Troubleshooting
-
-### Catalog missing
-
-**Symptom:** The skill emits a `[CATALOG ERROR]` banner on stderr and exits non-zero. The decision JSON is not produced. Routing falls back to LLM judgment.
-
-**Cause — env var not set:** `$DISPATCH_CATALOG_PATH` is absent from the environment. The skill runs in demo mode (bundled fixtures) instead of routing your task. Demo mode prints `no catalog configured — running in demo mode` to stdout.
-
-Fix: set the env var before starting Claude Code:
-
-```bash
-export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
-```
-
-Or add it to your shell profile / Claude Code env configuration so it is available in every session.
-
-**Cause — env var set but file is missing:** `$DISPATCH_CATALOG_PATH` points to a path that does not exist. The skill pre-validates the path and emits `[CATALOG ERROR] ... file not found at <path>`.
-
-Fix: run `catalog build` to create the catalog at the configured path, then verify the file exists:
-
-```bash
-claude-wayfinder catalog build \
-  --skills-dir ~/.claude/skills \
-  --agents-dir ~/.claude/agents \
-  --out "$DISPATCH_CATALOG_PATH" \
-  --log ~/.claude/dispatch-catalog-build.log
-```
-
-**Cause — file present but invalid JSON:** The skill emits `[CATALOG ERROR] ... malformed JSON`. The catalog file may be truncated (interrupted build), corrupted, or contain a syntax error.
-
-Fix: delete the catalog and rebuild from scratch. The build log at `--log` will indicate whether the build completed cleanly.
-
-### Catalog stale
-
-**Symptom:** The skill emits a `[DISPATCH WARNING] Catalog mtime is older than source files: ...` to stderr. The dispatch proceeds with the stale catalog — routing is not blocked, but trigger weights may not reflect recent skill or agent edits.
-
-**When it fires:** Only when both `$DISPATCH_SKILLS_DIR` and `$DISPATCH_AGENTS_DIR` (or at least one) are set and point to directories that contain files newer than the catalog. If neither env var is set, no staleness check runs.
-
-Fix: rebuild the catalog:
-
-```bash
-claude-wayfinder catalog build \
-  --skills-dir "$DISPATCH_SKILLS_DIR" \
-  --agents-dir "$DISPATCH_AGENTS_DIR" \
-  --out "$DISPATCH_CATALOG_PATH" \
-  --log ~/.claude/dispatch-catalog-build.log
-```
-
-### Decision unexpected
-
-When the matcher returns a decision that does not match your expectation for a given task, inspect the decision at two levels.
-
-**Level 1 — Read the rationale field.** The `rationale` string in the decision JSON names the specific triggers and weights that fired. It will tell you which keyword, path glob, or tool mention matched (or did not match) and which agent or skill scored highest.
-
-**Level 2 — Inspect the catalog entry.** Open your catalog JSON at `$DISPATCH_CATALOG_PATH` and locate the entry for the agent or skill in question. The `triggers` block contains the keywords, path globs, tool names, and command prefixes that are scored against the dispatch context. Compare against the features you sent.
-
-To inspect how features are extracted from your dispatch context, run the matcher directly against `claude-wayfinder-match` (the lower-level entry point) and examine the output:
-
-```bash
-echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
-  | DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json \
-    claude-wayfinder dispatch
-```
-
-This returns the same decision JSON the router would receive. Adjust the dispatch context fields until the output matches the decision you expect, then verify that your router's composition step is producing equivalent context.
-
-**No `--verbose` flag exists** in the current CLI. Feature-level inspection is available through the Python API (`build_features`, `score` from `claude_wayfinder`) if you need lower-level debugging — see [`docs/api.md`](api.md).
 
 ---
 
