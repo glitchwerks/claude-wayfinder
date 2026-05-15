@@ -6,6 +6,57 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-15
+
+End-to-end integration flow. v0.1 shipped the matcher as an evaluation surface
+that ran against bundled fixtures; v0.2 makes the plugin a real router for the
+power-user-with-existing-router audience — they can build a catalog from their
+own skills and agents, point the dispatch skill at it via an environment
+variable, and route real session traffic through the matcher.
+
+### Added
+
+- **`claude-wayfinder catalog build`** — first-class CLI subcommand that
+  exposes the full parameter surface of the underlying catalog builder. Plus
+  a new `claude-wayfinder-match` console script for direct matcher invocation.
+  (#39, PR #43)
+- **Mode-aware `/dispatch` skill** — detects `$DISPATCH_CATALOG_PATH`: when
+  unset, runs demo mode against bundled fixtures with an explicit banner;
+  when set and valid, runs real-catalog mode against the consumer's catalog.
+  A set-but-broken catalog path surfaces `[CATALOG ERROR]` and never falls
+  back to demo. Stale-mtime emits a warning but proceeds. (#40, PR #44)
+- **`docs/integration.md`** — power-user integration guide covering one-time
+  catalog build, router-agent prompt snippet with branch logic for all 7
+  decision types, tools-frontmatter prerequisite, catalog refresh (pre-commit
+  hook + CI job + manual command), drift telemetry pointer, and
+  troubleshooting. Linked from a new "Power-user integration" README section.
+  (#41, PR #45)
+- **`docs/schema.md`** — versioned contract document covering catalog entry
+  schema (including `routable` and the five `source` tags), dispatch context
+  schema, decision output schema for all 7 decision types (including
+  `ask_user` reserved-status note), schema version declaration, and a
+  minimal worked example catalog. (#42, PR #46)
+- **v0.2 integration design doc** — `docs/design/2026-05-14-v0.2-integration-design.md`
+  captures the decision rationale: skill-primary, deliberate invocation, no
+  shipped router agent, no auto-firing hook (deferred to v0.3 pending real
+  adoption signal). (#37, PR #38)
+
+### Changed
+
+- **`/dispatch` skill body** rewritten end-to-end to support both modes; the
+  `triggers:` block stays `command_prefixes: [/dispatch]` — no proactive
+  natural-language firing. (#40, PR #44)
+- **README** gains a "Power-user integration" section pointing at
+  `docs/integration.md`. (#41, PR #45)
+
+### Deferred
+
+- **#6 — bundled-runtime distribution spike** explicitly deferred to v0.3+
+  per the v0.2 design's non-goals; v0.2 assumes a Python prerequisite, which
+  the power-user audience already has.
+
+[0.2.0]: https://github.com/glitchwerks/claude-wayfinder/releases/tag/v0.2.0
+
 ## [0.1.0] — 2026-05-14
 
 First public release. Ships the deterministic 7-decision dispatch matcher as a
