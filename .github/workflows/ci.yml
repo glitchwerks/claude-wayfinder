@@ -81,6 +81,24 @@ jobs:
         run: uv run --no-sync pytest -v
 
   # ---------------------------------------------------------------------------
+  # Tests — Node 20 (hook scripts)
+  # ---------------------------------------------------------------------------
+  test-node:
+    name: Test (Node)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run hook tests
+        run: node --test hooks/tests/*.test.js
+
+  # ---------------------------------------------------------------------------
   # Validate plugin manifest
   # ---------------------------------------------------------------------------
   validate-manifest:

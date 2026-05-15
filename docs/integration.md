@@ -302,6 +302,27 @@ This returns the same decision JSON the router would receive. Adjust the dispatc
 
 Operational extras. Reach for these once your core integration is working.
 
+### Bundled hooks
+
+The plugin ships five Claude Code hooks in `hooks/`. Once installed via `/plugin install`, they fire automatically — no manual wiring required.
+
+| Event | Script | Purpose |
+|---|---|---|
+| `SessionStart` | `check-catalog-health.js` | Emit `[CATALOG ERROR]` or `[CATALOG STALE]` banner when the catalog is missing, empty, unparseable, or older than a source file. |
+| `UserPromptSubmit` | `refresh-catalog-on-stale.js` | Auto-rebuild the catalog when a source file is newer or the current project has changed since the last build. Emits `[CATALOG REFRESH FAILED]` on generator error but never blocks the prompt. |
+| `PreToolUse (Agent)` | `log-agent-dispatch.js` | Append an `agent_dispatch` event to `~/.claude/state/dispatch-log.jsonl` for every Agent tool call. |
+| `PreToolUse (Agent)` | `check-agent-dispatch-pairing.js` | Classify each Agent call as `router_mediated`, `skill_mediated`, `bypass`, or `stale_dispatch`; write drift events to `router-drift.jsonl` for non-router-mediated cases. |
+| `Stop` | `router-drift-scanner.js` | Scan the completed session transcript and append five additional drift event types (`advisory_override`, `self_handle_unaided_invocation`, `needs_more_detail_repeat`, `catalog_degraded_session`, `skill_mediated_delegation`) to `router-drift.jsonl`. |
+
+All hooks:
+- Exit 0 in all conditions — none ever block a session.
+- Write only to `~/.claude/state/` (or paths overridden by env vars). No project files are modified.
+- Accept env var overrides for testing (see each script's header for the full list).
+
+**Required env var for catalog hooks:** `DISPATCH_CATALOG_PATH` must be set and point to a valid catalog (see [§2](#2-configure-dispatch_catalog_path)). Without it, the health check and auto-refresh hooks will report a catalog error on every session start.
+
+---
+
 ### Catalog refresh — pre-commit hook
 
 The catalog must be rebuilt whenever your skill or agent frontmatter changes. Add a git hook that regenerates the catalog when skill or agent files change. Using [pre-commit](https://pre-commit.com/):
@@ -413,10 +434,13 @@ The telemetry design, drift event types, action thresholds, and the health check
 
 Key points:
 
-- Drift events are written to a log (`router-drift.jsonl`) by a Stop hook.
+- **Seven drift event types** are tracked across two hooks:
+  - `bypass` and `stale_dispatch` — written by `check-agent-dispatch-pairing.js` (PreToolUse) as each Agent call is classified.
+  - `advisory_override`, `self_handle_unaided_invocation`, `needs_more_detail_repeat`, `catalog_degraded_session`, and `skill_mediated_delegation` — written by `router-drift-scanner.js` (Stop) by scanning the completed session transcript.
+- All events are appended as JSONL lines to `~/.claude/state/router-drift.jsonl`.
 - The session recap surfaces a recent drift summary; the health checker provides a full report on demand.
 - Action thresholds by drift type are defined in §3.3.3. `catalog_degraded_session` events warrant immediate action; others are informational until thresholds are exceeded.
-- **Staleness is not an error.** When `$DISPATCH_SKILLS_DIR` and/or `$DISPATCH_AGENTS_DIR` are set and any source file is newer than the catalog, the skill emits a `[DISPATCH WARNING]` to stderr and proceeds. Rebuild the catalog to clear the warning.
+- **Staleness is not an error.** When any source file is newer than the catalog, the `check-catalog-health.js` hook emits a `[CATALOG STALE]` banner and the `refresh-catalog-on-stale.js` hook triggers a rebuild. Neither hook blocks session start or prompt submission.
 
 ---
 

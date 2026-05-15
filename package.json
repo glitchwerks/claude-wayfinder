@@ -1,0 +1,11 @@
+{
+  "name": "claude-wayfinder-hooks",
+  "version": "0.2.0",
+  "description": "Tier 1 drift-telemetry hooks for claude-wayfinder",
+  "scripts": {
+    "test:hooks": "node --test hooks/tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

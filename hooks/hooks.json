@@ -1,0 +1,31 @@
+{
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "script": "hooks/check-catalog-health.js",
+      "description": "Emit a banner when the dispatch catalog is missing, empty, unparseable, or stale relative to source files."
+    },
+    {
+      "event": "UserPromptSubmit",
+      "script": "hooks/refresh-catalog-on-stale.js",
+      "description": "Auto-rebuild the dispatch catalog when any source file (skills/**/SKILL.md or agents/*.md) has a newer mtime than the catalog, or when the catalog was built for a different project."
+    },
+    {
+      "event": "PreToolUse",
+      "tool": "Agent",
+      "script": "hooks/log-agent-dispatch.js",
+      "description": "Record an agent_dispatch event to dispatch-log.jsonl whenever an Agent tool is invoked."
+    },
+    {
+      "event": "PreToolUse",
+      "tool": "Agent",
+      "script": "hooks/check-agent-dispatch-pairing.js",
+      "description": "Detect Agent dispatch that bypasses the dispatch skill; write bypass or stale_dispatch drift events to router-drift.jsonl."
+    },
+    {
+      "event": "Stop",
+      "script": "hooks/router-drift-scanner.js",
+      "description": "Scan the completed session transcript for routing-quality drift events and append them to router-drift.jsonl."
+    }
+  ]
+}
