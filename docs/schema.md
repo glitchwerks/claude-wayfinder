@@ -299,6 +299,21 @@ The router agent is excluded from the scored-agents pool via the `routable: fals
 
 The matcher's observability layer tracks routing decisions against actual tool-use behavior. This section summarizes the telemetry shape; the full drift design rationale is in [`docs/design.md`](design.md).
 
+### Drift event common fields
+
+Every event written to `router-drift.jsonl` carries these top-level fields:
+
+| Field           | Type     | Notes                                                                    |
+| --------------- | -------- | ------------------------------------------------------------------------ |
+| `type`          | `string` | Event type name (see table below).                                       |
+| `ts`            | `string` | ISO 8601 timestamp of when the event was emitted.                        |
+| `session_id`    | `string` | Claude Code session UUID.                                                |
+| `plugin_version`| `string` | Plugin version string (e.g. `"claude-wayfinder@0.3.0"`) or `"unknown"`. |
+
+> **Breaking change (pre-1.0):** The `plugin_version` field was named `harness_version` prior to
+> this version. External consumers of `router-drift.jsonl` must update field references. See
+> `CHANGELOG.md` for the version that introduced this rename.
+
 ### Drift event types and action thresholds
 
 Drift events are written to `router-drift.jsonl` by a Stop hook and a PreToolUse floor hook.

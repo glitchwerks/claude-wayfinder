@@ -2,7 +2,7 @@ const os = require("node:os");
 const path = require("node:path");
 const parseInput = require("./parse-input");
 const { extractSkillsFromPrompt, appendLogLine } = require("./lib/dispatch-log");
-const { getHarnessVersion } = require("./lib/harness-version");
+const { getPluginVersion } = require("./lib/plugin-version");
 const { getComponentVersion } = require("./lib/component-version");
 
 /** Default log path — can be overridden in tests via DISPATCH_LOG_PATH. */
@@ -26,7 +26,7 @@ function makeExcerpt(text) {
 /**
  * Build the agent_dispatch event object.
  *
- * Async-tolerant: harness_version may be a string OR a Promise<string>.
+ * Async-tolerant: plugin_version may be a string OR a Promise<string>.
  * Tests inject pre-resolved values; production passes the awaited Promise.
  * Same code path either way — await handles both.
  *
@@ -38,27 +38,27 @@ function makeExcerpt(text) {
  * @param {object} opts
  * @param {object} opts.tool_input        - Raw tool_input from the hook payload
  * @param {string} opts.session_id        - Session ID from the hook payload
- * @param {string|Promise<string>} opts.harness_version - Harness version string or promise
+ * @param {string|Promise<string>} opts.plugin_version - Plugin version string or promise
  * @param {Function} [opts.getComponentVersion] - Injected for testing; defaults to real helper
  * @returns {Promise<object>}
  */
 async function buildAgentDispatchEvent({
   tool_input,
   session_id,
-  harness_version,
+  plugin_version,
   getComponentVersion: getCV = getComponentVersion,
 }) {
   const agent = tool_input?.subagent_type ?? "unknown";
   const prompt = tool_input?.prompt ?? "";
   const cv = getCV(agent, "agent");
-  const resolvedHarnessVersion = await harness_version;
+  const resolvedPluginVersion = await plugin_version;
 
   const event = {
     type: "agent_dispatch",
     ts: new Date().toISOString(),
     session_id,
     agent,
-    harness_version: resolvedHarnessVersion,
+    plugin_version: resolvedPluginVersion,
     skills_in_prompt: extractSkillsFromPrompt(prompt),
     task_excerpt: makeExcerpt(prompt),
   };
@@ -88,7 +88,7 @@ if (require.main === module) {
         const event = await buildAgentDispatchEvent({
           tool_input: input.tool_input ?? {},
           session_id: input.session_id ?? "",
-          harness_version: getHarnessVersion(), // Promise — builder awaits internally
+          plugin_version: getPluginVersion(), // Promise — builder awaits internally
         });
 
         appendLogLine(event, resolveLogPath());

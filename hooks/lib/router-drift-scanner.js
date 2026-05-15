@@ -287,7 +287,7 @@ function detectSkillMediatedDelegation(events) {
  * complete list of drift/informational events to be written to the log.
  *
  * Events always include `type`, `ts` (ISO timestamp), `session_id`, and
- * `harness_version` (plugin version string, or "unknown").
+ * `plugin_version` (plugin version string, or "unknown").
  *
  * Component version stamping:
  *   Two event types name specific agents and receive version fields:
@@ -307,20 +307,20 @@ function detectSkillMediatedDelegation(events) {
  *     cv.rev === null      → include fields with null values
  *     cv.rev is integer    → include fields with their values
  *
- * @param {{ entries: object[], sessionId: string, harnessVersion?: string, getComponentVersion?: Function }} opts
+ * @param {{ entries: object[], sessionId: string, pluginVersion?: string, getComponentVersion?: Function }} opts
  *   - entries:             Parsed transcript entry array.
  *   - sessionId:           Session UUID.
- *   - harnessVersion:      Pre-resolved version string from getHarnessVersion().
+ *   - pluginVersion:       Pre-resolved version string from getPluginVersion().
  *                          Defaults to "unknown" when absent.
  *   - getComponentVersion: Optional injected helper for testing. Defaults to the
  *                          real getComponentVersion from lib/component-version.js.
  * @returns {object[]}  Array of structured event objects ready for JSONL.
  */
-function scanSession({ entries, sessionId, harnessVersion, getComponentVersion: getCV }) {
+function scanSession({ entries, sessionId, pluginVersion, getComponentVersion: getCV }) {
   const ts = new Date().toISOString();
   const sid = sessionId || "";
-  // Resolve the harness version once; default to "unknown" when not provided.
-  const hv = harnessVersion || "unknown";
+  // Resolve the plugin version once; default to "unknown" when not provided.
+  const hv = pluginVersion || "unknown";
   // Use injected helper (for tests) or fall back to the real one.
   const resolveCV = getCV || defaultGetComponentVersion;
   const events = parseTranscript(entries);
@@ -332,7 +332,7 @@ function scanSession({ entries, sessionId, harnessVersion, getComponentVersion: 
       type: e.type,
       ts,
       session_id: sid,
-      harness_version: hv,
+      plugin_version: hv,
       recommended_agent: e.recommended_agent,
       actual_agent: e.actual_agent,
     };
@@ -353,14 +353,14 @@ function scanSession({ entries, sessionId, harnessVersion, getComponentVersion: 
       type: "self_handle_unaided_invocation",
       ts,
       session_id: sid,
-      harness_version: hv,
+      plugin_version: hv,
       count: shu.count,
     });
   }
 
   // 3. needs_more_detail_repeat
   for (const e of detectNeedsMoreDetailRepeat(events)) {
-    const ev = { type: e.type, ts, session_id: sid, harness_version: hv, agent: e.agent };
+    const ev = { type: e.type, ts, session_id: sid, plugin_version: hv, agent: e.agent };
     // Stamp component version for the repeated target agent.
     const cv = resolveCV(e.agent, "agent");
     if (cv.rev !== undefined) ev.agent_rev = cv.rev;
@@ -370,7 +370,7 @@ function scanSession({ entries, sessionId, harnessVersion, getComponentVersion: 
 
   // 4. catalog_degraded_session (uses raw entries, not parsed events; component-agnostic)
   if (detectCatalogDegraded(entries)) {
-    result.push({ type: "catalog_degraded_session", ts, session_id: sid, harness_version: hv });
+    result.push({ type: "catalog_degraded_session", ts, session_id: sid, plugin_version: hv });
   }
 
   // 5. skill_mediated_delegation (informational — always emit when count > 0; component-agnostic)
@@ -380,7 +380,7 @@ function scanSession({ entries, sessionId, harnessVersion, getComponentVersion: 
       type: "skill_mediated_delegation",
       ts,
       session_id: sid,
-      harness_version: hv,
+      plugin_version: hv,
       count: smd.count,
     });
   }

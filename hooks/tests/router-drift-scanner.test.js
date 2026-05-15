@@ -786,12 +786,12 @@ test("hook script: idempotent — running twice on same transcript produces same
 });
 
 // ---------------------------------------------------------------------------
-// harness_version stamping on all emitted drift events
+// plugin_version stamping on all emitted drift events
 // ---------------------------------------------------------------------------
 
 const DRIFT_SENTINEL_SHA = "cafebabe1234567890abcdef1234567890abcdef";
 
-test("scanSession: harness_version is stamped on advisory_override events", () => {
+test("scanSession: plugin_version is stamped on advisory_override events", () => {
   const { scanSession } = loadLib();
   const entries = [
     {
@@ -814,14 +814,14 @@ test("scanSession: harness_version is stamped on advisory_override events", () =
   const result = scanSession({
     entries,
     sessionId: "hv-sess-001",
-    harnessVersion: DRIFT_SENTINEL_SHA,
+    pluginVersion: DRIFT_SENTINEL_SHA,
   });
   const overrides = result.filter((e) => e.type === "advisory_override");
   assert.equal(overrides.length, 1);
-  assert.equal(overrides[0].harness_version, DRIFT_SENTINEL_SHA);
+  assert.equal(overrides[0].plugin_version, DRIFT_SENTINEL_SHA);
 });
 
-test("scanSession: harness_version is stamped on self_handle_unaided_invocation events", () => {
+test("scanSession: plugin_version is stamped on self_handle_unaided_invocation events", () => {
   const { scanSession } = loadLib();
   const entries = [
     dispatchAuditEntry("self_handle_unaided"),
@@ -830,14 +830,14 @@ test("scanSession: harness_version is stamped on self_handle_unaided_invocation 
   const result = scanSession({
     entries,
     sessionId: "hv-sess-002",
-    harnessVersion: DRIFT_SENTINEL_SHA,
+    pluginVersion: DRIFT_SENTINEL_SHA,
   });
   const shu = result.filter((e) => e.type === "self_handle_unaided_invocation");
   assert.equal(shu.length, 1);
-  assert.equal(shu[0].harness_version, DRIFT_SENTINEL_SHA);
+  assert.equal(shu[0].plugin_version, DRIFT_SENTINEL_SHA);
 });
 
-test("scanSession: harness_version is stamped on needs_more_detail_repeat events", () => {
+test("scanSession: plugin_version is stamped on needs_more_detail_repeat events", () => {
   const { scanSession } = loadLib();
   const entries = [
     dispatchAuditEntry("needs_more_detail", "writer"),
@@ -846,14 +846,14 @@ test("scanSession: harness_version is stamped on needs_more_detail_repeat events
   const result = scanSession({
     entries,
     sessionId: "hv-sess-003",
-    harnessVersion: DRIFT_SENTINEL_SHA,
+    pluginVersion: DRIFT_SENTINEL_SHA,
   });
   const nmd = result.filter((e) => e.type === "needs_more_detail_repeat");
   assert.equal(nmd.length, 1);
-  assert.equal(nmd[0].harness_version, DRIFT_SENTINEL_SHA);
+  assert.equal(nmd[0].plugin_version, DRIFT_SENTINEL_SHA);
 });
 
-test("scanSession: harness_version is stamped on catalog_degraded_session events", () => {
+test("scanSession: plugin_version is stamped on catalog_degraded_session events", () => {
   const { scanSession } = loadLib();
   const entries = [
     assistantTextEntry("[CATALOG ERROR] Dispatch catalog is degraded: catalog file missing."),
@@ -861,33 +861,33 @@ test("scanSession: harness_version is stamped on catalog_degraded_session events
   const result = scanSession({
     entries,
     sessionId: "hv-sess-004",
-    harnessVersion: DRIFT_SENTINEL_SHA,
+    pluginVersion: DRIFT_SENTINEL_SHA,
   });
   const degraded = result.filter((e) => e.type === "catalog_degraded_session");
   assert.equal(degraded.length, 1);
-  assert.equal(degraded[0].harness_version, DRIFT_SENTINEL_SHA);
+  assert.equal(degraded[0].plugin_version, DRIFT_SENTINEL_SHA);
 });
 
-test("scanSession: harness_version is stamped on skill_mediated_delegation events", () => {
+test("scanSession: plugin_version is stamped on skill_mediated_delegation events", () => {
   const { scanSession } = loadLib();
   const entries = [skillCallEntry("dispatch"), agentCallEntry("writer")];
   const result = scanSession({
     entries,
     sessionId: "hv-sess-005",
-    harnessVersion: DRIFT_SENTINEL_SHA,
+    pluginVersion: DRIFT_SENTINEL_SHA,
   });
   const smd = result.filter((e) => e.type === "skill_mediated_delegation");
   assert.equal(smd.length, 1);
-  assert.equal(smd[0].harness_version, DRIFT_SENTINEL_SHA);
+  assert.equal(smd[0].plugin_version, DRIFT_SENTINEL_SHA);
 });
 
-test("scanSession: harness_version defaults to 'unknown' when not provided", () => {
+test("scanSession: plugin_version defaults to 'unknown' when not provided", () => {
   const { scanSession } = loadLib();
   const entries = [dispatchAuditEntry("self_handle_unaided")];
   const result = scanSession({ entries, sessionId: "hv-sess-006" });
   const shu = result.filter((e) => e.type === "self_handle_unaided_invocation");
   assert.equal(shu.length, 1);
-  assert.equal(shu[0].harness_version, "unknown");
+  assert.equal(shu[0].plugin_version, "unknown");
 });
 
 // ---------------------------------------------------------------------------

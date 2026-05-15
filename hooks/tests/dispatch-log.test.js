@@ -489,11 +489,11 @@ test("log-agent-dispatch: exits 0 even on a bad log path (fail-open)", () => {
   assert.equal(result.exitCode, 0);
 });
 
-// ── harness_version stamping ──────────────────────────────────────────────────
+// ── plugin_version stamping ──────────────────────────────────────────────────
 
 const SENTINEL_SHA = "deadbeef1234567890abcdef1234567890abcdef";
 
-test("log-agent-dispatch: emits harness_version field on agent_dispatch events", () => {
+test("log-agent-dispatch: emits plugin_version field on agent_dispatch events", () => {
   const logPath = tmpLogPath();
   const payload = {
     session_id: "test-session-020",
@@ -505,11 +505,11 @@ test("log-agent-dispatch: emits harness_version field on agent_dispatch events",
   };
   runHook("log-agent-dispatch.js", payload, {
     DISPATCH_LOG_PATH: logPath,
-    HARNESS_VERSION_OVERRIDE: SENTINEL_SHA,
+    PLUGIN_VERSION_OVERRIDE: SENTINEL_SHA,
   });
 
   const event = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
-  assert.equal(event.harness_version, SENTINEL_SHA, "harness_version must equal the injected SHA");
+  assert.equal(event.plugin_version, SENTINEL_SHA, "plugin_version must equal the injected SHA");
 });
 
 // ── buildAgentDispatchEvent unit tests ───────────────────────────────────────
@@ -520,7 +520,7 @@ test("buildAgentDispatchEvent stamps agent_rev + agent_content_hash for owned ag
   const event = await buildAgentDispatchEvent({
     tool_input: { subagent_type: "writer", prompt: "do the thing" },
     session_id: "s1",
-    harness_version: "deadbeef".repeat(5),
+    plugin_version: "deadbeef".repeat(5),
     getComponentVersion: () => ({ rev: 3, content_hash: "a3f9c1d2e4b8" }),
   });
   assert.equal(event.type, "agent_dispatch");
@@ -533,7 +533,7 @@ test("buildAgentDispatchEvent stamps null fields when helper returns null", asyn
   const event = await buildAgentDispatchEvent({
     tool_input: { subagent_type: "ghost", prompt: "" },
     session_id: "s1",
-    harness_version: "abc",
+    plugin_version: "abc",
     getComponentVersion: () => ({ rev: null, content_hash: null }),
   });
   assert.equal(event.agent_rev, null);
@@ -547,21 +547,21 @@ test("buildAgentDispatchEvent omits component fields entirely when helper return
       prompt: "",
     },
     session_id: "s1",
-    harness_version: "abc",
+    plugin_version: "abc",
     getComponentVersion: () => ({ rev: undefined, content_hash: undefined }),
   });
   assert.equal("agent_rev" in event, false);
   assert.equal("agent_content_hash" in event, false);
 });
 
-test("buildAgentDispatchEvent works when harness_version is a Promise (async contract)", async () => {
+test("buildAgentDispatchEvent works when plugin_version is a Promise (async contract)", async () => {
   const event = await buildAgentDispatchEvent({
     tool_input: { subagent_type: "writer", prompt: "x" },
     session_id: "s1",
-    harness_version: Promise.resolve("deadbeef".repeat(5)),
+    plugin_version: Promise.resolve("deadbeef".repeat(5)),
     getComponentVersion: () => ({ rev: 3, content_hash: "a3f9c1d2e4b8" }),
   });
-  assert.equal(event.harness_version, "deadbeef".repeat(5));
+  assert.equal(event.plugin_version, "deadbeef".repeat(5));
 });
 
 // ── E2E smoke test: subprocess fires actual hook against fixture tree ─────────
@@ -621,7 +621,7 @@ test("E2E: log-agent-dispatch stamps agent_rev + agent_content_hash for owned ag
       DISPATCH_LOG_PATH: logPath,
       CLAUDE_CONFIG_DIR: home,
       DISPATCH_CATALOG_PATH: catalogPath,
-      HARNESS_VERSION_OVERRIDE: SENTINEL_SHA,
+      PLUGIN_VERSION_OVERRIDE: SENTINEL_SHA,
     },
   });
 
@@ -633,7 +633,7 @@ test("E2E: log-agent-dispatch stamps agent_rev + agent_content_hash for owned ag
   assert.equal(event.type, "agent_dispatch");
   assert.equal(event.session_id, "e2e-session-001");
   assert.equal(event.agent, "writer");
-  assert.equal(event.harness_version, SENTINEL_SHA);
+  assert.equal(event.plugin_version, SENTINEL_SHA);
   assert.equal(event.agent_rev, 5, "agent_rev must equal sidecar rev when hashes match");
   assert.equal(
     event.agent_content_hash,

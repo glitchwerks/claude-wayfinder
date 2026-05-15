@@ -24,7 +24,7 @@ const path = require("node:path");
 const parseInput = require("./parse-input");
 const { appendLogLine } = require("./lib/dispatch-log");
 const { scanSession } = require("./lib/router-drift-scanner");
-const { getHarnessVersion } = require("./lib/harness-version");
+const { getPluginVersion } = require("./lib/plugin-version");
 const { computeProjectSlug } = require("./lib/session-slug");
 
 // ---------------------------------------------------------------------------
@@ -124,11 +124,11 @@ let stdinData = "";
 process.stdin.on("data", (chunk) => (stdinData += chunk));
 process.stdin.on("end", () => {
   // Resolve the plugin version once for this hook invocation, then run main.
-  // getHarnessVersion() never rejects — it always resolves (to version or "unknown").
-  getHarnessVersion()
-    .then((harnessVersion) => {
+  // getPluginVersion() never rejects — it always resolves (to version or "unknown").
+  getPluginVersion()
+    .then((pluginVersion) => {
       try {
-        main(stdinData, harnessVersion);
+        main(stdinData, pluginVersion);
       } catch (err) {
         // Top-level safety net — must never crash or block session end.
         process.stderr.write(
@@ -138,7 +138,7 @@ process.stdin.on("end", () => {
       }
     })
     .catch(() => {
-      // Defensive: getHarnessVersion should never reject, but if it somehow does,
+      // Defensive: getPluginVersion should never reject, but if it somehow does,
       // fall back to running main with "unknown".
       try {
         main(stdinData, "unknown");
@@ -153,9 +153,9 @@ process.stdin.on("end", () => {
 
 /**
  * @param {string} rawStdin
- * @param {string} harnessVersion - Pre-resolved version string (or "unknown").
+ * @param {string} pluginVersion - Pre-resolved version string (or "unknown").
  */
-function main(rawStdin, harnessVersion) {
+function main(rawStdin, pluginVersion) {
   // Parse hook payload.
   let payload;
   try {
@@ -199,7 +199,7 @@ function main(rawStdin, harnessVersion) {
   // Run all detectors
   let driftEvents;
   try {
-    driftEvents = scanSession({ entries, sessionId, harnessVersion });
+    driftEvents = scanSession({ entries, sessionId, pluginVersion });
   } catch (err) {
     process.stderr.write(`[router-drift-scanner] error during scan: ${err.message}\n`);
     return;

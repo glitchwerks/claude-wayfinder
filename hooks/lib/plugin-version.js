@@ -1,16 +1,14 @@
 /**
- * harness-version.js — plugin version resolver.
+ * plugin-version.js — plugin version resolver.
  *
  * In the plugin context, there is no git repo to hash. Version info is read
  * from the plugin's own plugin.json instead.
  *
- * The exported function is named getHarnessVersion() to preserve compatibility
- * with callers in this hooks tree (log-agent-dispatch.js, router-drift-scanner.js).
  * It resolves to a version string of the form "<name>@<version>" using the
  * plugin.json at the plugin root.
  *
  * Test injection:
- *   HARNESS_VERSION_OVERRIDE — when set, returned immediately without reading
+ *   PLUGIN_VERSION_OVERRIDE — when set, returned immediately without reading
  *   plugin.json. Lets hook tests inject deterministic values without touching
  *   the filesystem.
  *
@@ -23,14 +21,14 @@
 const path = require("node:path");
 const fs = require("node:fs");
 
-async function getHarnessVersion() {
-  if (process.env.HARNESS_VERSION_OVERRIDE) {
-    return process.env.HARNESS_VERSION_OVERRIDE;
+async function getPluginVersion() {
+  if (process.env.PLUGIN_VERSION_OVERRIDE) {
+    return process.env.PLUGIN_VERSION_OVERRIDE;
   }
 
   try {
     // Plugin root is two directories up from this file:
-    //   hooks/lib/harness-version.js  →  .claude-plugin/plugin.json
+    //   hooks/lib/plugin-version.js  →  .claude-plugin/plugin.json
     const pluginJsonPath = path.resolve(__dirname, "..", "..", ".claude-plugin", "plugin.json");
     const raw = fs.readFileSync(pluginJsonPath, "utf8");
     const parsed = JSON.parse(raw);
@@ -45,4 +43,4 @@ async function getHarnessVersion() {
   }
 }
 
-module.exports = { getHarnessVersion };
+module.exports = { getPluginVersion };
