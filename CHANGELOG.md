@@ -6,6 +6,30 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-05-16
+
+Patch release shipping the `hooks/hooks.json` schema migration. The flat-array shape
+the plugin had been shipping since v0.1.0 (`[{event, script, description}]`) failed
+`claude plugin validate` with `hooks: Invalid input: expected record, received array` —
+non-conformant with Anthropic's documented schema. v0.3.2 ships the documented
+nested form with `${CLAUDE_PLUGIN_ROOT}` substitution, so consumers' Claude Code
+installs actually wire all six hooks per the loader's documented contract.
+
+This is the first release in which all six hooks are guaranteed to be reachable via
+the documented loader path. If the previous flat-array shape was silently dropping
+hooks under the fallback loader, drift telemetry volume in `~/.claude/state/router-drift.jsonl`
+and `dispatch-log.jsonl` will change after upgrading.
+
+### Fixed
+
+- **`hooks/hooks.json` migrated to documented nested schema.** Top-level `hooks` is
+  now an object keyed by event name; entries use `type: "command"` + `command: "..."`
+  rather than the undocumented `script:` shorthand; tool filtering uses `matcher:
+  "<regex>"` on the parent entry; script paths use `${CLAUDE_PLUGIN_ROOT}` substitution
+  per Anthropic's hook-troubleshooting guidance. All six hooks (`SessionStart`,
+  `UserPromptSubmit`, `PreToolUse(Agent)` × 2, `PostToolUse(Skill)`, `Stop`) remap
+  1:1; no behavioral change in any hook script itself. Closes #70. (#71)
+
 ## [0.3.1] — 2026-05-16
 
 Patch release fixing two Tier 1 hook regressions caught immediately after v0.3.0. Both
