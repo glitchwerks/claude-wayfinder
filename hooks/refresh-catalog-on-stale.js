@@ -26,7 +26,8 @@
 //   DISPATCH_CATALOG_PATH   — override the catalog file path. Defaults to
 //                             <CLAUDE_HOME>/state/dispatch-catalog.json
 //   DISPATCH_GENERATOR_CMD  — override the generator command (for testing).
-//                             Defaults to: claude-wayfinder catalog build
+//                             Defaults to:
+//                               python -m claude_wayfinder catalog build
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -38,15 +39,27 @@ const claudeHome = process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude")
 const DEFAULT_CATALOG_PATH = path.join(claudeHome, "state", "dispatch-catalog.json");
 const catalogPath = process.env.DISPATCH_CATALOG_PATH || DEFAULT_CATALOG_PATH;
 
-// Default generator: invoke the plugin's own CLI subcommand.
-// `claude-wayfinder` is installed on PATH by pip/uv via the [project.scripts]
-// entry point in pyproject.toml. `catalog build` is the subcommand that
-// regenerates the dispatch catalog.
+// Default generator: invoke the plugin's CLI as a Python module.
+//
+// We use `python -m claude_wayfinder catalog build` rather than the bare
+// `claude-wayfinder` entry-point shim. The shim is registered by
+// pyproject.toml's [project.scripts] and lives in the venv's bin/Scripts
+// directory — it is on PATH only when the venv is activated, which the
+// plugin's hook child process cannot rely on. Invoking the module directly
+// works as long as `python` on PATH has the `claude_wayfinder` package
+// importable, which is the documented Pattern A install (README → Install).
+//
+// Known limitation: if `python` on PATH lacks the package (e.g. consumer
+// installed into a non-activated venv), this still fails — but with a
+// diagnosable `No module named claude_wayfinder` rather than the previous
+// opaque `ENOENT`. The fully-robust fix is the ${CLAUDE_PLUGIN_DATA}
+// SessionStart-materialized venv pattern per Anthropic's plugin docs § 4;
+// that is a v0.4 architectural change tracked separately.
 //
 // DISPATCH_GENERATOR_CMD overrides this entirely (e.g. for tests:
-// `node fake_gen.js`). The override path is the primary integration seam for
-// the test suite — see hooks/tests/refresh-catalog-on-stale.test.js.
-const DEFAULT_GENERATOR_CMD = "claude-wayfinder catalog build";
+// `node fake_gen.js`). The override path is the primary integration seam
+// for the test suite — see hooks/tests/refresh-catalog-on-stale.test.js.
+const DEFAULT_GENERATOR_CMD = "python -m claude_wayfinder catalog build";
 const generatorCmd = process.env.DISPATCH_GENERATOR_CMD || DEFAULT_GENERATOR_CMD;
 
 // ---------------------------------------------------------------------------
