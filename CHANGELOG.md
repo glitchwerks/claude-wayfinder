@@ -6,6 +6,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-15
+
+Closes the gap between documented behavior and shipped behavior. Tier 1 hooks
+make the observability layer described in `docs/schema.md` §5 actually
+reachable for clean-install consumers. The `/refresh-catalog` skill gives
+manual parity with the auto-refresh hook. `docs/dispatch-discipline.md`
+documents the four routing-shape rules wayfinder describes but does not
+enforce. A new design doc replaces the v5 private-audience artifact with
+public-audience rationale.
+
+**Breaking:** the `harness_version` field in `router-drift.jsonl` events is
+renamed to `plugin_version`. External consumers of the drift log must update
+their field references.
+
 ### Changed (Breaking)
 
 - **`harness_version` field renamed to `plugin_version` in `router-drift.jsonl` events** — all
@@ -59,6 +73,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in GitHub Actions on every push and pull request. 143 tests. (#53)
 - **143 hook unit tests** across five test files using the built-in
   `node:test` runner; no npm dependencies required. (#53)
+
+[0.3.0]: https://github.com/glitchwerks/claude-wayfinder/releases/tag/v0.3.0
 
 ## [0.2.0] — 2026-05-15
 
