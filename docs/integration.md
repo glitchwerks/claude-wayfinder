@@ -424,6 +424,12 @@ claude-wayfinder catalog build \
   --log ~/.claude/dispatch-catalog-build.log
 ```
 
+### Catalog refresh — `/refresh-catalog` skill
+
+The plugin bundles a `/refresh-catalog` skill that wraps the manual command above with mtime-before/after capture, entry counting by `kind`, and warning-extraction from the build log. Trigger it via the slash command or natural-language phrasings like "regenerate catalog", "rebuild dispatch catalog", or "refresh the catalog". The skill is registered in the dispatch catalog via its own `triggers.yml` sidecar — see `skills/refresh-catalog/`.
+
+Use this when the auto-refresh hook misses a source change (e.g. a sidecar edit that does not bump a watched path's mtime), when diagnosing a `[CATALOG ERROR]` or `[CATALOG STALE]` banner, or when you want a structured before/after report rather than just running `catalog build` and reading the exit code.
+
 ### Drift telemetry
 
 After deploying the dispatch loop, the matcher's observability layer tracks routing decisions against actual tool-use behavior. The signal this produces — drift events — tells you whether the router is following the decisions the matcher returns.

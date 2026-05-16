@@ -19,6 +19,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`/refresh-catalog` skill** — bundled skill at `skills/refresh-catalog/` for manually
+  regenerating the dispatch catalog with a structured before/after report (mtime delta,
+  entry counts by `kind`, warning extraction from the build log). Complements the
+  auto-refresh hook for cases the mtime heuristic misses or when diagnosing catalog
+  errors. Closes #58.
 - **`docs/dispatch-discipline.md`** — reference doc describing the four routing-shape
   rules the matcher assumes (self-dispatch prohibition, Opus-native nested dispatch
   carve-out, skill propagation, one-dispatch-per-Agent-call), with failure modes and
