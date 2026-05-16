@@ -23,6 +23,12 @@
       "description": "Detect Agent dispatch that bypasses the dispatch skill; write bypass or stale_dispatch drift events to router-drift.jsonl."
     },
     {
+      "event": "PostToolUse",
+      "tool": "Skill",
+      "script": "hooks/log-skill-invocation.js",
+      "description": "Write a sidecar entry to recent-skill-invocations.jsonl after every Skill invocation, so the dispatch-pairing hook can detect same-turn Skill(dispatch) → Agent sequences."
+    },
+    {
       "event": "Stop",
       "script": "hooks/router-drift-scanner.js",
       "description": "Scan the completed session transcript for routing-quality drift events and append them to router-drift.jsonl."
