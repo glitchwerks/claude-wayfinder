@@ -1,6 +1,6 @@
 {
   "name": "claude-wayfinder",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A typed, auditable dispatch matcher for Claude Code — post-cognitive routing with a deterministic-first scoring kernel.",
   "author": {
     "name": "Christopher Beaulieu",
