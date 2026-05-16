@@ -26,7 +26,7 @@
 //   DISPATCH_CATALOG_PATH   — override the catalog file path. Defaults to
 //                             <CLAUDE_HOME>/state/dispatch-catalog.json
 //   DISPATCH_GENERATOR_CMD  — override the generator command (for testing).
-//                             Defaults to: python <scripts path>/build_dispatch_catalog.py
+//                             Defaults to: claude-wayfinder catalog build
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -38,11 +38,15 @@ const claudeHome = process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude")
 const DEFAULT_CATALOG_PATH = path.join(claudeHome, "state", "dispatch-catalog.json");
 const catalogPath = process.env.DISPATCH_CATALOG_PATH || DEFAULT_CATALOG_PATH;
 
-// Default generator: invoke `python` from PATH running the build script.
-// The python binary is resolved via PATH — no hardcoded venv path.
-// DISPATCH_GENERATOR_CMD overrides this entirely (e.g. for tests: `node fake_gen.js`).
-const DEFAULT_GENERATOR_CMD =
-  `python "${path.join(claudeHome, "scripts", "build_dispatch_catalog.py")}"`;
+// Default generator: invoke the plugin's own CLI subcommand.
+// `claude-wayfinder` is installed on PATH by pip/uv via the [project.scripts]
+// entry point in pyproject.toml. `catalog build` is the subcommand that
+// regenerates the dispatch catalog.
+//
+// DISPATCH_GENERATOR_CMD overrides this entirely (e.g. for tests:
+// `node fake_gen.js`). The override path is the primary integration seam for
+// the test suite — see hooks/tests/refresh-catalog-on-stale.test.js.
+const DEFAULT_GENERATOR_CMD = "claude-wayfinder catalog build";
 const generatorCmd = process.env.DISPATCH_GENERATOR_CMD || DEFAULT_GENERATOR_CMD;
 
 // ---------------------------------------------------------------------------

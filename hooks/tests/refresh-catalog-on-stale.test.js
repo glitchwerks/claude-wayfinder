@@ -557,3 +557,70 @@ test("missing installed_plugins.json is silently skipped — no crash", () => {
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout.trim(), "");
 });
+
+test("default generator command uses plugin CLI — not legacy python script path", () => {
+  // Regression guard for issue #64: the hook previously defaulted to
+  //   python <CLAUDE_HOME>/scripts/build_dispatch_catalog.py
+  // which does not exist on fresh plugin installs. The correct default is
+  //   claude-wayfinder catalog build
+  // (the [project.scripts] entry point registered by pyproject.toml).
+  //
+  // When DISPATCH_GENERATOR_CMD is NOT set the hook will try to spawn
+  // `claude-wayfinder catalog build`. In a test runner where the binary may
+  // not be on PATH the spawn fails — but the hook must still exit 0 and emit
+  // additionalContext describing the failure (not silently swallow it, and
+  // definitely not attempt the old python path).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-default-cmd-"));
+  const { skillFile, catalogFile } = makeFakeClaudeHome(tmp);
+
+  // Stale catalog so a rebuild is attempted.
+  writeCatalog(catalogFile);
+  const pastTime = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(catalogFile, pastTime, pastTime);
+  fs.utimesSync(skillFile, new Date(), new Date());
+
+  // Build env without DISPATCH_GENERATOR_CMD so the hook uses its default.
+  const env = { ...process.env };
+  delete env.DISPATCH_GENERATOR_CMD;
+
+  const r = spawnSync("node", [HOOK], {
+    input: JSON.stringify({ prompt: "hello" }),
+    encoding: "utf8",
+    timeout: 15_000,
+    env: { ...env, CLAUDE_HOME: tmp, DISPATCH_CATALOG_PATH: catalogFile },
+  });
+
+  const stdout = r.stdout ?? "";
+  const stderr = r.stderr ?? "";
+  const exitCode = r.status ?? 0;
+
+  // The hook must always exit 0 — never block the prompt.
+  assert.equal(exitCode, 0, `Expected exit 0 but got ${exitCode}. stderr: ${stderr}`);
+
+  // When the binary is absent the hook emits additionalContext describing the
+  // failure. If it happens to be installed and succeeds, stdout may be empty —
+  // both are valid outcomes for this test. What must NOT happen is the hook
+  // attempting the legacy `build_dispatch_catalog.py` path.
+  if (stdout.trim()) {
+    const parsed = JSON.parse(stdout);
+    const ctx = parsed.hookSpecificOutput?.additionalContext ?? "";
+    // The error message must NOT reference the legacy private-harness script.
+    assert.ok(
+      !ctx.includes("build_dispatch_catalog.py"),
+      `additionalContext must not reference the legacy python script. Got: ${ctx}`
+    );
+    // Must not emit a deny decision.
+    assert.ok(
+      !parsed.hookSpecificOutput?.permissionDecision,
+      "Hook must not emit permissionDecision"
+    );
+  }
+
+  // The combined output (stdout + stderr from the hook process itself) must not
+  // reference the old private-harness path under any circumstances.
+  const combined = stdout + stderr;
+  assert.ok(
+    !combined.includes("build_dispatch_catalog.py"),
+    `Hook output must not reference legacy python path. combined: ${combined}`
+  );
+});
