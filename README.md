@@ -29,6 +29,32 @@ Inside Claude Code, run these two commands:
 /plugin install claude-wayfinder@claude-wayfinder
 ```
 
+### Troubleshooting: `[CATALOG REFRESH FAILED] ... No module named claude_wayfinder`
+
+If the hook reports it cannot import `claude_wayfinder`, the `python` on your
+interactive shell PATH does not have the package installed (typical when you
+installed into a non-activated venv).
+
+Set `CLAUDE_WAYFINDER_PYTHON` in your environment to the absolute path of a
+Python interpreter that has the package:
+
+```sh
+# POSIX — add to ~/.bashrc or ~/.zshrc
+export CLAUDE_WAYFINDER_PYTHON=/path/to/.venv/bin/python
+
+# Windows (PowerShell profile)
+$env:CLAUDE_WAYFINDER_PYTHON = "C:\Users\you\.venv\Scripts\python.exe"
+```
+
+Or activate your venv before launching Claude Code so the correct `python` is
+first on `$PATH`.
+
+`CLAUDE_WAYFINDER_PYTHON` is a v0.3.4 stopgap. The canonical fix — a
+`${CLAUDE_PLUGIN_DATA}` SessionStart-materialised venv so the hook always uses
+the right interpreter — is tracked in
+[#81](https://github.com/glitchwerks/claude-wayfinder/issues/81) and deferred
+to a future release.
+
 ## How to use it
 
 ### In Claude Code: `/dispatch`

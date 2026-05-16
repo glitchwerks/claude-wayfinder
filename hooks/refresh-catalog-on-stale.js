@@ -49,18 +49,27 @@ const catalogPath = process.env.DISPATCH_CATALOG_PATH || DEFAULT_CATALOG_PATH;
 // works as long as `python` on PATH has the `claude_wayfinder` package
 // importable, which is the documented Pattern A install (README → Install).
 //
-// Known limitation: if `python` on PATH lacks the package (e.g. consumer
-// installed into a non-activated venv), this still fails — but with a
-// diagnosable `No module named claude_wayfinder` rather than the previous
-// opaque `ENOENT`. The fully-robust fix is the ${CLAUDE_PLUGIN_DATA}
-// SessionStart-materialized venv pattern per Anthropic's plugin docs § 4;
-// that is a v0.4 architectural change tracked separately.
+// CLAUDE_WAYFINDER_PYTHON env-var override (v0.3.4 stopgap — issue #82,
+// closes #80): consumers whose `python` on PATH does not have the package
+// importable (e.g. installed into a non-activated venv) can point this var
+// at the absolute path of a Python interpreter that does. When unset, the
+// hook falls back to bare `python` (v0.3.3 behaviour). Spawn uses an
+// explicit args array so paths with spaces (e.g. Windows
+// "C:\Program Files\Python311\python.exe") are never split on whitespace.
+// The canonical fix (${CLAUDE_PLUGIN_DATA} SessionStart-materialised venv)
+// is deferred to a future release and tracked in issue #81.
 //
 // DISPATCH_GENERATOR_CMD overrides this entirely (e.g. for tests:
 // `node fake_gen.js`). The override path is the primary integration seam
 // for the test suite — see hooks/tests/refresh-catalog-on-stale.test.js.
+// When DISPATCH_GENERATOR_CMD is set, the hook falls back to the string-
+// parse path (parseCmd) to preserve the existing test seam unchanged.
 const DEFAULT_GENERATOR_CMD = "python -m claude_wayfinder catalog build";
 const generatorCmd = process.env.DISPATCH_GENERATOR_CMD || DEFAULT_GENERATOR_CMD;
+
+// Resolve the Python interpreter for the args-array spawn path.
+// Only used when DISPATCH_GENERATOR_CMD is not set.
+const pythonProg = process.env.CLAUDE_WAYFINDER_PYTHON || "python";
 
 // ---------------------------------------------------------------------------
 // Project root detection
@@ -256,6 +265,10 @@ if (!needsRefresh) {
 // a quoted path followed by a quoted path (the default), as well as simple
 // space-separated tokens (test overrides use `node /path/to/script.js`).
 // Strategy: split on spaces, but keep quoted segments together.
+//
+// Only used when DISPATCH_GENERATOR_CMD is set (the test-override path).
+// The default (non-override) path uses an explicit args array with pythonProg
+// so that interpreter paths with spaces are never split on whitespace.
 function parseCmd(cmd) {
   const tokens = [];
   const re = /"([^"]+)"|(\S+)/g;
@@ -266,19 +279,34 @@ function parseCmd(cmd) {
   return tokens;
 }
 
-const [prog, ...args] = parseCmd(generatorCmd);
+// projectRootArgs appended to both spawn paths when a project root is detected.
+const projectRootArgs = currentProjectRoot ? ["--project-root", currentProjectRoot] : [];
 
-// Append --project-root when a project root is detected so the generator
-// produces a catalog tagged with the correct built_for_project path.
-if (currentProjectRoot) {
-  args.push("--project-root", currentProjectRoot);
+let result;
+if (process.env.DISPATCH_GENERATOR_CMD) {
+  // Test-override path: preserve the existing parseCmd seam so that all
+  // existing tests (which inject `node fake_gen.js`) continue to work.
+  const [prog, ...args] = parseCmd(generatorCmd);
+  if (currentProjectRoot) {
+    args.push("--project-root", currentProjectRoot);
+  }
+  result = spawnSync(prog, args, {
+    encoding: "utf8",
+    timeout: 60_000, // 60s hard ceiling
+    shell: false,
+  });
+} else {
+  // Default path: explicit args array with pythonProg resolved from
+  // CLAUDE_WAYFINDER_PYTHON (or bare "python" as fallback). Passing the
+  // program as a separate argument to spawnSync — not through parseCmd —
+  // means interpreter paths with spaces are never split on whitespace.
+  // See issue #82 and the comment above for context.
+  result = spawnSync(pythonProg, ["-m", "claude_wayfinder", "catalog", "build", ...projectRootArgs], {
+    encoding: "utf8",
+    timeout: 60_000, // 60s hard ceiling
+    shell: false,
+  });
 }
-
-const result = spawnSync(prog, args, {
-  encoding: "utf8",
-  timeout: 60_000, // 60s hard ceiling
-  shell: false,
-});
 
 if (result.status === 0) {
   // Success — silent no-op (catalog is now fresh).
