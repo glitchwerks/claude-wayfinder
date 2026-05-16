@@ -1,0 +1,10 @@
+triggers:
+  command_prefixes:
+    - "/refresh-catalog"
+  keywords:
+    - { term: "catalog", weight: 1.0 }
+    - { term: "regenerate", weight: 0.5 }
+    - { term: "rebuild", weight: 0.5 }
+    - { term: "dispatch", weight: 0.25 }
+    - { term: "refresh", weight: 0.25 }
+applicable_agents: []  # router-only; catalog regeneration is a maintenance operation
