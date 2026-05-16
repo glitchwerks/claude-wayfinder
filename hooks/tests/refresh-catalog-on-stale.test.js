@@ -558,18 +558,26 @@ test("missing installed_plugins.json is silently skipped — no crash", () => {
   assert.equal(result.stdout.trim(), "");
 });
 
-test("default generator command uses plugin CLI — not legacy python script path", () => {
-  // Regression guard for issue #64: the hook previously defaulted to
-  //   python <CLAUDE_HOME>/scripts/build_dispatch_catalog.py
-  // which does not exist on fresh plugin installs. The correct default is
-  //   claude-wayfinder catalog build
-  // (the [project.scripts] entry point registered by pyproject.toml).
+test("default generator command uses python module invocation — not legacy python script path", () => {
+  // Regression guard for issue #76 (and the earlier #64 guard it extends):
   //
-  // When DISPATCH_GENERATOR_CMD is NOT set the hook will try to spawn
-  // `claude-wayfinder catalog build`. In a test runner where the binary may
-  // not be on PATH the spawn fails — but the hook must still exit 0 and emit
-  // additionalContext describing the failure (not silently swallow it, and
-  // definitely not attempt the old python path).
+  //   v0.3.1 default:  python <CLAUDE_HOME>/scripts/build_dispatch_catalog.py
+  //   v0.3.2 default:  claude-wayfinder catalog build   ← regressed ENOENT (#76)
+  //   v0.3.3 default:  python -m claude_wayfinder catalog build  ← this fix
+  //
+  // The entry-point shim `claude-wayfinder` lives in the venv's bin/Scripts
+  // directory and is only on PATH when the venv is activated — a condition the
+  // hook's child process cannot rely on. Module invocation is robust whenever
+  // `python` on PATH has `claude_wayfinder` importable (Pattern A install).
+  //
+  // This test asserts two things about the hook's DEFAULT_GENERATOR_CMD:
+  //   1. It does NOT reference the legacy `build_dispatch_catalog.py` path.
+  //   2. It spawns `python` with args that include `-m claude_wayfinder`.
+  //
+  // When DISPATCH_GENERATOR_CMD is NOT set and the spawn fails (e.g. `python`
+  // not on PATH in the test runner, or claude_wayfinder not importable), the
+  // hook must still exit 0 and emit additionalContext — never block the prompt.
+  // We assert on the command the hook *attempts* to spawn, not on success.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-default-cmd-"));
   const { skillFile, catalogFile } = makeFakeClaudeHome(tmp);
 
@@ -597,18 +605,31 @@ test("default generator command uses plugin CLI — not legacy python script pat
   // The hook must always exit 0 — never block the prompt.
   assert.equal(exitCode, 0, `Expected exit 0 but got ${exitCode}. stderr: ${stderr}`);
 
-  // When the binary is absent the hook emits additionalContext describing the
-  // failure. If it happens to be installed and succeeds, stdout may be empty —
-  // both are valid outcomes for this test. What must NOT happen is the hook
-  // attempting the legacy `build_dispatch_catalog.py` path.
+  // Inspect additionalContext when the spawn fails (expected in most CI/test
+  // environments). The error message must:
+  //   - NOT reference the legacy private-harness script.
+  //   - NOT indicate `claude-wayfinder` (bare entry-point shim, v0.3.2 regression).
+  //   - Reflect that `python` was the program attempted (module invocation).
   if (stdout.trim()) {
     const parsed = JSON.parse(stdout);
     const ctx = parsed.hookSpecificOutput?.additionalContext ?? "";
-    // The error message must NOT reference the legacy private-harness script.
+
+    // Guard 1 (issue #64 regression): no legacy script path.
     assert.ok(
       !ctx.includes("build_dispatch_catalog.py"),
       `additionalContext must not reference the legacy python script. Got: ${ctx}`
     );
+
+    // Guard 2 (issue #76 regression): no bare entry-point shim.
+    // If the error mentions 'claude-wayfinder' as the failed program, the hook
+    // is still using the v0.3.2 shim invocation, not the module invocation.
+    // Allow "claude_wayfinder" (module name with underscore) — only block the
+    // hyphenated entry-point binary name appearing as the first token.
+    assert.ok(
+      !ctx.includes("'claude-wayfinder'") && !ctx.includes('"claude-wayfinder"'),
+      `additionalContext must not indicate the bare entry-point shim failed. Got: ${ctx}`
+    );
+
     // Must not emit a deny decision.
     assert.ok(
       !parsed.hookSpecificOutput?.permissionDecision,
@@ -616,11 +637,36 @@ test("default generator command uses plugin CLI — not legacy python script pat
     );
   }
 
-  // The combined output (stdout + stderr from the hook process itself) must not
-  // reference the old private-harness path under any circumstances.
+  // The combined output must not reference the old private-harness path.
   const combined = stdout + stderr;
   assert.ok(
     !combined.includes("build_dispatch_catalog.py"),
     `Hook output must not reference legacy python path. combined: ${combined}`
+  );
+});
+
+test("DEFAULT_GENERATOR_CMD constant is python module invocation form", () => {
+  // Structural assertion: read the hook source and verify the DEFAULT_GENERATOR_CMD
+  // literal is the expected module-invocation string. This catches a regression
+  // at the source level — independent of whether `python` is on PATH — so the
+  // test is fully deterministic in all environments.
+  //
+  // This test would have caught the v0.3.2 regression (#76) where the constant
+  // was changed to `claude-wayfinder catalog build` (bare shim invocation).
+  const hookSource = fs.readFileSync(HOOK, "utf8");
+
+  // The constant must be assigned the module-invocation form.
+  assert.ok(
+    hookSource.includes('DEFAULT_GENERATOR_CMD = "python -m claude_wayfinder catalog build"'),
+    "DEFAULT_GENERATOR_CMD must be 'python -m claude_wayfinder catalog build'. " +
+      "If you see this failure, the hook was changed back to a bare entry-point shim " +
+      "(issue #76 regression) or some other non-module invocation."
+  );
+
+  // Belt-and-suspenders: must NOT be the v0.3.2 regression value.
+  assert.ok(
+    !hookSource.includes('DEFAULT_GENERATOR_CMD = "claude-wayfinder catalog build"'),
+    "DEFAULT_GENERATOR_CMD must not be the bare entry-point shim 'claude-wayfinder catalog build' " +
+      "(that was the v0.3.2 regression fixed in #76)."
   );
 });
