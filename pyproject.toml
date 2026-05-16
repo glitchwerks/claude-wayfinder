@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-wayfinder"
-version = "0.3.0"
+version = "0.3.1"
 description = "A typed, auditable dispatch matcher for Claude Code — post-cognitive routing with a deterministic-first scoring kernel."
 readme = "README.md"
 license = { text = "MIT" }

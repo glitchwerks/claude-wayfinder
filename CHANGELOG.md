@@ -6,6 +6,32 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-05-16
+
+Patch release fixing two Tier 1 hook regressions caught immediately after v0.3.0. Both
+were partial-port omissions from the private harness — the sidecar producer for
+`check-agent-dispatch-pairing.js` was missing entirely, and the catalog-refresh hook
+still referenced the private-harness Python script path instead of the plugin's own
+`claude-wayfinder catalog build` CLI. Both hooks now match what v0.3.0's documentation
+already described.
+
+### Fixed
+
+- **`log-skill-invocation.js` PostToolUse(Skill) sidecar writer ported.** The Tier 1 hooks
+  port in v0.3.0 shipped `check-agent-dispatch-pairing.js` (which reads
+  `~/.claude/state/recent-skill-invocations.jsonl` to classify same-turn `Skill(dispatch) → Agent`
+  sequences) but not the hook that writes the sidecar. With no producer, the pairing hook
+  silently misclassified router-mediated dispatches as `bypass`, inflating false-positive
+  drift metrics. Closes #65. (#66)
+- **`refresh-catalog-on-stale.js` now invokes the plugin's own CLI.** The hook previously
+  shelled out to `python <CLAUDE_HOME>/scripts/build_dispatch_catalog.py` — a
+  private-harness path that does not exist on fresh plugin installs. The hook exited 0
+  with `additionalContext` describing a generator failure, so the catalog silently never
+  rebuilt. Default generator command flipped to `claude-wayfinder catalog build`, the
+  entry-point registered by `pyproject.toml`. Closes #64. (#67)
+
+[0.3.1]: https://github.com/glitchwerks/claude-wayfinder/releases/tag/v0.3.1
+
 ## [0.3.0] — 2026-05-15
 
 Closes the gap between documented behavior and shipped behavior. Tier 1 hooks
