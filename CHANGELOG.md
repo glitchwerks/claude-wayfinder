@@ -6,6 +6,29 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-05-16
+
+Patch release fixing a regression introduced in v0.3.2 (technically PR #67, which
+shipped in v0.3.2 via the hooks.json migration). The `refresh-catalog-on-stale.js`
+hook called `claude-wayfinder catalog build` as a bare PATH command, but the
+`[project.scripts]` entry-point shim only resolves on PATH inside the venv it was
+installed into — not from the plugin's hook child process. Result: `spawnSync
+claude-wayfinder ENOENT` on every prompt with a loud stale-catalog banner. v0.3.3
+switches to `python -m claude_wayfinder catalog build`, which works whenever
+`python` on PATH has the package importable (the documented Pattern A install).
+
+A more robust fix using `${CLAUDE_PLUGIN_DATA}` SessionStart-materialized venvs
+is tracked separately as v0.4 architectural work.
+
+### Fixed
+
+- **`refresh-catalog-on-stale.js` invocation no longer assumes a venv-activated PATH.**
+  Default generator command changed from `claude-wayfinder catalog build` (which
+  failed `ENOENT` on every prompt for consumers whose install venv wasn't on the
+  interactive PATH) to `python -m claude_wayfinder catalog build`. The override
+  path `DISPATCH_GENERATOR_CMD` is unchanged; tests already covered the override
+  shape and continue to pass. Closes #76. (#77)
+
 ## [0.3.2] — 2026-05-16
 
 Patch release shipping the `hooks/hooks.json` schema migration. The flat-array shape
