@@ -210,6 +210,14 @@ Run the linter:
 python -m ruff check src/ tests/
 ```
 
+Validate the plugin manifest:
+
+```bash
+claude plugin validate .claude-plugin/plugin.json
+```
+
+`claude plugin validate` is the canonical manifest check and runs as a CI gate on every push and PR (inside the `Validate Plugin Manifest` job). The project also ships `tests/test_plugin_manifests.py`, which covers field-level conventions (name, description, author, etc.) that the official validator does not enforce — both checks are complementary.
+
 Run the demo (confirms the matcher works end-to-end against bundled fixtures):
 
 ```bash

@@ -298,6 +298,20 @@ This returns the same decision JSON the router would receive. Adjust the dispatc
 
 ---
 
+## Plugin manifest validation
+
+`claude plugin validate` is the canonical check for `.claude-plugin/plugin.json`. It enforces the official schema — including `hooks/hooks.json` structure, `userConfig` blocks, and component-path overrides — and runs as a CI gate on every push and PR inside the `Validate Plugin Manifest` job (`.github/workflows/ci.yml`).
+
+The project also ships `tests/test_plugin_manifests.py`, which covers field-level conventions the official validator does not (name, description, author, keywords). Both checks are complementary: the official validator knows the full schema; the homegrown test enforces project-specific field requirements.
+
+To run locally (requires `@anthropic-ai/claude-code` installed globally):
+
+```bash
+claude plugin validate .claude-plugin/plugin.json
+```
+
+---
+
 ## Optional integrations
 
 Operational extras. Reach for these once your core integration is working.
