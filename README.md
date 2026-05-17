@@ -218,6 +218,8 @@ claude plugin validate .claude-plugin/plugin.json
 
 `claude plugin validate` is the canonical manifest check and runs as a CI gate on every push and PR (inside the `Validate Plugin Manifest` job). The project also ships `tests/test_plugin_manifests.py`, which covers field-level conventions (name, description, author, etc.) that the official validator does not enforce — both checks are complementary.
 
+The `@anthropic-ai/claude-code` version pinned in `.github/workflows/ci.yml` is tracked by [Renovate](https://github.com/apps/renovate) via `renovate.json`. Bump PRs are opened weekly and require manual review — schema changes in `claude plugin validate` are exactly what the CI gate exists to surface.
+
 Run the demo (confirms the matcher works end-to-end against bundled fixtures):
 
 ```bash
