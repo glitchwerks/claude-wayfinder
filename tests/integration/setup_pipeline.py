@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -90,10 +91,10 @@ def discover_python(prior_interpreter: str | None = None) -> str:
     for candidate in candidates:
         try:
             args = candidate.split() + ["-c", probe]
-            result = subprocess.run(args, capture_output=True, check=False)
+            result = subprocess.run(args, capture_output=True, check=False, timeout=10)
             if result.returncode == 0:
                 return candidate
-        except FileNotFoundError:
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
     raise SetupError(
         f"No Python ≥3.11 found. Tried: {candidates}. "
@@ -135,7 +136,11 @@ def create_venv(python_cmd: str, venv_dir: Path) -> None:
             callers can surface them to the user verbatim.
     """
     args = python_cmd.split() + ["-m", "venv", str(venv_dir)]
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=60)
+    except subprocess.TimeoutExpired as e:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        raise SetupError(f"python -m venv timed out after {e.timeout}s") from e
     if result.returncode != 0:
         raise SetupError(
             f"python -m venv failed (exit {result.returncode}):\n"
@@ -169,11 +174,21 @@ def pip_install(venv_dir: Path, version: str) -> None:
     rather than the system site-packages. On failure the partial venv is
     wiped (always-wipe invariant, spec § 6 F3) before raising.
 
+    Honors ``$CLAUDE_WAYFINDER_PIP_SPEC`` as a test-only override of the
+    package spec — when set, replaces the default
+    ``claude-wayfinder==<version>`` with the literal env-var value. This
+    exists so pre-v0.4.0 PyPI-publication CI can install from the local
+    plugin root (set to the repo path or ``-e <repo>``). Not part of the
+    production skill body — production always uses the default PyPI
+    install. Phase 7 publishes v0.4.0 and removes the need for this
+    override in CI.
+
     Args:
         venv_dir: Root path of the virtual environment created by
             :func:`create_venv`.
         version: Exact package version string to pin (e.g. ``"0.3.6"``).
-            Installed as ``claude-wayfinder==<version>``.
+            Installed as ``claude-wayfinder==<version>`` unless
+            ``$CLAUDE_WAYFINDER_PIP_SPEC`` is set.
 
     Raises:
         SetupError: If pip exits nonzero. The partial venv is removed
@@ -181,13 +196,23 @@ def pip_install(venv_dir: Path, version: str) -> None:
             half-built installation.
     """
     venv_python = get_venv_python(venv_dir)
-    args = [str(venv_python), "-m", "pip", "install", f"claude-wayfinder=={version}"]
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    pip_spec = os.environ.get(
+        "CLAUDE_WAYFINDER_PIP_SPEC",
+        f"claude-wayfinder=={version}",
+    )
+    # shlex.split handles both plain package specs and path/editable forms
+    # (e.g. "/path/to/repo" or "-e /path/to/repo").
+    args = [str(venv_python), "-m", "pip", "install", *shlex.split(pip_spec)]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=180)
+    except subprocess.TimeoutExpired as e:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        raise SetupError(f"pip install timed out after {e.timeout}s — check network") from e
     if result.returncode != 0:
         # Wipe partial state per spec § 6 F3
         shutil.rmtree(venv_dir, ignore_errors=True)
         raise SetupError(
-            f"pip install claude-wayfinder=={version} failed (exit {result.returncode}):\n"
+            f"pip install {pip_spec!r} failed (exit {result.returncode}):\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
 
@@ -210,7 +235,11 @@ def verify_import(venv_dir: Path) -> None:
     """
     venv_python = get_venv_python(venv_dir)
     args = [str(venv_python), "-c", "import claude_wayfinder"]
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=15)
+    except subprocess.TimeoutExpired as e:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        raise SetupError(f"import check timed out after {e.timeout}s") from e
     if result.returncode != 0:
         shutil.rmtree(venv_dir, ignore_errors=True)
         raise SetupError(
