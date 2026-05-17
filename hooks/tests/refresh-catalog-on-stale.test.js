@@ -80,15 +80,60 @@ function makeFakeGenerator(tmpDir, sentinelFile, exitCode = 0) {
 }
 
 /**
+ * Create a valid setup-state flag in a temp directory so the flag-guard
+ * in refresh-catalog-on-stale.js passes. The venv python placeholder is a
+ * real file (not executable — the default branch uses the flag's venv_path
+ * to resolve spawnSync(venvPython, ...) which will fail/ENOENT, but that only
+ * matters when the generator is actually invoked via the default path, not
+ * the DISPATCH_GENERATOR_CMD test seam).
+ *
+ * @param {string} tmpDir - directory to create flag in (e.g. a per-test tmp)
+ * @returns {{ pluginDataDir: string }} - directory containing setup-state.json
+ */
+function createValidSetupStateFlag(tmpDir) {
+  const pluginDataDir = path.join(tmpDir, "plugin-data");
+  const venvDir = path.join(pluginDataDir, "venv");
+  const venvBin = path.join(venvDir, process.platform === "win32" ? "Scripts" : "bin");
+  const pythonBin = path.join(venvBin, process.platform === "win32" ? "python.exe" : "python");
+  fs.mkdirSync(venvBin, { recursive: true });
+  fs.writeFileSync(pythonBin, "placeholder");
+  const { getCurrentVersion } = require("../lib/setup-state.js");
+  fs.writeFileSync(
+    path.join(pluginDataDir, "setup-state.json"),
+    JSON.stringify({
+      version: getCurrentVersion(),
+      venv_path: venvDir,
+      interpreter: pythonBin,
+      installed_at: new Date().toISOString(),
+    })
+  );
+  return { pluginDataDir };
+}
+
+const REPO_ROOT = path.resolve(__dirname, "..", "..");
+
+/**
  * Run the hook with the given env overrides and an empty UserPromptSubmit
- * payload on stdin.
+ * payload on stdin. Automatically provides a valid setup-state flag so
+ * the Phase 2 flag-guard passes for all existing catalog-health tests.
  *
  * @param {Record<string, string>} envOverrides
  * @returns {{ stdout: string, stderr: string, exitCode: number }}
  */
 function runHook(envOverrides) {
-  const env = { ...process.env, ...envOverrides };
-  const r = spawnSync("node", [HOOK], {
+  // Create a valid flag in a sub-dir of any provided CLAUDE_HOME, or a fresh tmp.
+  const baseDir = envOverrides.CLAUDE_HOME
+    ? envOverrides.CLAUDE_HOME
+    : fs.mkdtempSync(path.join(os.tmpdir(), "rcos-flagtmp-"));
+  const { pluginDataDir } = createValidSetupStateFlag(baseDir);
+
+  const env = {
+    ...process.env,
+    CLAUDE_PLUGIN_DATA: pluginDataDir,
+    CLAUDE_PLUGIN_ROOT: REPO_ROOT,
+    ...envOverrides,
+  };
+  const r = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ prompt: "hello" }),
     encoding: "utf8",
     timeout: 15_000,
@@ -716,65 +761,41 @@ function makeFakeArgvGenerator(tmpDir, argvFile, exitCode = 0) {
   return scriptPath;
 }
 
-test("CLAUDE_WAYFINDER_PYTHON unset — hook uses bare 'python' as the interpreter", () => {
-  // When CLAUDE_WAYFINDER_PYTHON is not set, the new args-array spawn path must
-  // still use "python" as the program (same as the v0.3.3 behavior before this
-  // change). DISPATCH_GENERATOR_CMD is also unset so the new code path fires.
-  //
-  // Because `python` may not be on PATH in the test environment, we cannot rely
-  // on the spawn succeeding. Instead we assert:
-  //   1. The hook exits 0 (fail-open discipline always applies).
-  //   2. When the spawn fails, the additionalContext error does NOT blame a
-  //      custom interpreter path — it either mentions "python" or contains no
-  //      program reference at all (ENOENT on "python").
-  //
-  // A structural source assertion provides the deterministic guarantee: the
-  // env-var resolution must fall back to "python" when the var is unset.
+test("hook uses venvPython from setup-state flag as the interpreter (v0.4 design)", () => {
+  // Phase 2 (Issue #104): the hook now resolves the Python interpreter from the
+  // setup-state.json flag (venvPython = getVenvPython(flag.venv_path)) rather than
+  // the v0.3.x CLAUDE_WAYFINDER_PYTHON env-var approach. This test guards that
+  // the source uses `venvPython` and not the legacy `pythonProg` / `CLAUDE_WAYFINDER_PYTHON`.
   const hookSource = fs.readFileSync(HOOK, "utf8");
+
+  // The hook must reference venvPython (resolved from setup-state flag).
   assert.ok(
-    hookSource.includes('process.env.CLAUDE_WAYFINDER_PYTHON || "python"'),
-    'Hook must resolve pythonProg as: process.env.CLAUDE_WAYFINDER_PYTHON || "python"'
+    hookSource.includes("venvPython"),
+    "Hook source must use venvPython variable resolved from setup-state flag"
   );
-
-  // Runtime assertion: hook exits 0 with DISPATCH_GENERATOR_CMD unset and
-  // CLAUDE_WAYFINDER_PYTHON unset.
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-py-override-"));
-  const { skillFile, catalogFile } = makeFakeClaudeHome(tmp);
-
-  writeCatalog(catalogFile);
-  const pastTime = new Date(Date.now() - 10 * 60 * 1000);
-  fs.utimesSync(catalogFile, pastTime, pastTime);
-  fs.utimesSync(skillFile, new Date(), new Date());
-
-  const env = { ...process.env, CLAUDE_HOME: tmp, DISPATCH_CATALOG_PATH: catalogFile };
-  delete env.DISPATCH_GENERATOR_CMD;
-  delete env.CLAUDE_WAYFINDER_PYTHON;
-
-  const r = spawnSync("node", [HOOK], {
-    input: JSON.stringify({ prompt: "hello" }),
-    encoding: "utf8",
-    timeout: 15_000,
-    env,
+  // The hook must NOT use the v0.3.x pythonProg variable outside of the parseCmd seam.
+  // (pythonProg was the CLAUDE_WAYFINDER_PYTHON || "python" fallback, now removed.)
+  assert.ok(
+    !hookSource.includes("process.env.CLAUDE_WAYFINDER_PYTHON"),
+    "Hook must not reference CLAUDE_WAYFINDER_PYTHON env var (v0.3.x removed in Phase 2)"
+  );
+  // The default spawn must use venvPython, not the old pythonProg.
+  assert.ok(
+    hookSource.includes("spawnSync(venvPython,"),
+    "Hook must spawn using the venvPython variable (args-array form: spawnSync(venvPython, [...]))"
+  );
+  // The hook must still exit 0 fail-open (runtime guard).
+  // When the generator fails (venv python doesn't exist or module not installed),
+  // the hook must emit additionalContext but not block the prompt.
+  const result = runHook({
+    DISPATCH_CATALOG_PATH: "/nonexistent/path/catalog.json", // force stale/missing
   });
-
-  assert.equal(
-    r.status ?? 0,
-    0,
-    `Hook must exit 0 (fail-open) when CLAUDE_WAYFINDER_PYTHON is unset. stderr: ${r.stderr}`
-  );
+  assert.equal(result.exitCode, 0, `Hook must exit 0 (fail-open). stderr: ${result.stderr}`);
 });
 
-test("CLAUDE_WAYFINDER_PYTHON set — hook spawns that exact interpreter path", () => {
-  // When CLAUDE_WAYFINDER_PYTHON=/usr/local/bin/python3.11 is set, the hook must
-  // use that exact path as the program argument, not bare "python".
-  //
-  // We use a wrapper script: set CLAUDE_WAYFINDER_PYTHON to "node" and
-  // DISPATCH_GENERATOR_CMD to a fake that records argv, but also verify via
-  // source inspection that the env-var is plumbed through to spawnSync.
-  //
-  // The runtime approach: point CLAUDE_WAYFINDER_PYTHON at a Node.js-executable
-  // wrapper that records its argv and exits 0. Because both "node" and the fake
-  // generator are real executables, this exercises the actual spawn path.
+test("CLAUDE_WAYFINDER_PYTHON env var is no longer used — DISPATCH_GENERATOR_CMD seam still works", () => {
+  // Regression guard: the v0.3.x CLAUDE_WAYFINDER_PYTHON env-var override is
+  // removed in Phase 2. The DISPATCH_GENERATOR_CMD test seam must still work.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-py-override-path-"));
   const { skillFile, catalogFile, sentinelFile } = makeFakeClaudeHome(tmp);
 
@@ -783,51 +804,20 @@ test("CLAUDE_WAYFINDER_PYTHON set — hook spawns that exact interpreter path", 
   fs.utimesSync(catalogFile, pastTime, pastTime);
   fs.utimesSync(skillFile, new Date(), new Date());
 
-  // The fake generator just writes the sentinel and exits 0 — it doesn't care
-  // what interpreter drove it.
   const generatorScript = makeFakeGenerator(tmp, sentinelFile, 0);
 
-  // We cannot set CLAUDE_WAYFINDER_PYTHON to a real python3.11 path in a
-  // portable test. Instead we use source inspection: verify the hook reads
-  // CLAUDE_WAYFINDER_PYTHON and uses it as the spawn program argument.
-  const hookSource = fs.readFileSync(HOOK, "utf8");
-  assert.ok(
-    hookSource.includes("CLAUDE_WAYFINDER_PYTHON"),
-    "Hook source must reference CLAUDE_WAYFINDER_PYTHON env var"
-  );
-  assert.ok(
-    hookSource.includes("pythonProg"),
-    "Hook source must use a pythonProg variable derived from CLAUDE_WAYFINDER_PYTHON"
-  );
-  // The new args-array spawn must reference pythonProg as the program argument.
-  assert.ok(
-    hookSource.includes("spawnSync(pythonProg,"),
-    "Hook must spawn using the pythonProg variable (args-array form: spawnSync(pythonProg, [...]))"
-  );
-
-  // Runtime portion: verify that with a custom CLAUDE_WAYFINDER_PYTHON and no
-  // DISPATCH_GENERATOR_CMD, the hook still exits 0 (fail-open) even when the
-  // custom interpreter doesn't exist.
-  const env = {
-    ...process.env,
+  // DISPATCH_GENERATOR_CMD seam must still work regardless of CLAUDE_WAYFINDER_PYTHON.
+  const result = runHook({
     CLAUDE_HOME: tmp,
     DISPATCH_CATALOG_PATH: catalogFile,
-    CLAUDE_WAYFINDER_PYTHON: "/usr/local/bin/python3.11",
-  };
-  delete env.DISPATCH_GENERATOR_CMD;
-
-  const r = spawnSync("node", [HOOK], {
-    input: JSON.stringify({ prompt: "hello" }),
-    encoding: "utf8",
-    timeout: 15_000,
-    env,
+    DISPATCH_GENERATOR_CMD: `node ${generatorScript}`,
   });
 
-  assert.equal(
-    r.status ?? 0,
-    0,
-    `Hook must exit 0 (fail-open) even when the custom interpreter path does not exist. stderr: ${r.stderr}`
+  assert.ok(
+    fs.existsSync(sentinelFile),
+    `Generator was not called via DISPATCH_GENERATOR_CMD seam. stdout: ${result.stdout}`
   );
+  assert.equal(result.exitCode, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -875,86 +865,93 @@ test("DEFAULT_GENERATOR_CMD spawns bare invocation — no extra args injected by
 
   // The default spawn must be the bare module invocation with no extra path args.
   // (--project-root is permitted — it is not a defaulted arg.)
+  // Phase 2: uses venvPython instead of the v0.3.x pythonProg variable.
   assert.ok(
     hookSource.includes(
-      'spawnSync(pythonProg, ["-m", "claude_wayfinder", "catalog", "build", ...projectRootArgs]'
+      'spawnSync(venvPython, ["-m", "claude_wayfinder", "catalog", "build", ...projectRootArgs]'
     ),
-    'Default spawn must be: spawnSync(pythonProg, ["-m", "claude_wayfinder", "catalog", "build", ' +
+    'Default spawn must be: spawnSync(venvPython, ["-m", "claude_wayfinder", "catalog", "build", ' +
       "...projectRootArgs]). The hook must not inject path args — those are now CLI defaults."
   );
 });
 
-test("CLAUDE_WAYFINDER_PYTHON with spaces — path is passed as single argument, not split", () => {
-  // Defense against the Windows-path-with-spaces bug: a path like
-  // "C:\\Program Files\\Python311\\python.exe" must be passed as a single
-  // program argument to spawnSync, not split on the space.
-  //
-  // With the old string-parse path (parseCmd on DEFAULT_GENERATOR_CMD), a
-  // consumer who set CLAUDE_WAYFINDER_PYTHON to a path with spaces and relied
-  // on it being substituted into the command string would have it split at the
-  // space. The new args-array path avoids this entirely because the program
-  // is passed as a separate string argument to spawnSync, never through
-  // parseCmd.
+test("venvPython path with spaces is passed as single argument, not split (v0.4 design)", () => {
+  // Phase 2: venvPython replaces the v0.3.x pythonProg/CLAUDE_WAYFINDER_PYTHON approach.
+  // The venv path (from setup-state.json flag.venv_path) may contain spaces on Windows
+  // (e.g. "C:\\Users\\My User\\venv"). The spawnSync call must pass venvPython as a
+  // single program argument — not split by parseCmd — to handle these paths correctly.
   //
   // Verification strategy: source inspection confirms the spawn uses an explicit
-  // args array (not parseCmd) for the non-DISPATCH_GENERATOR_CMD path; runtime
-  // test confirms the hook exits 0 (fail-open) even with a path containing a
-  // space that doesn't exist.
+  // args array with venvPython (not parseCmd) for the non-DISPATCH_GENERATOR_CMD path.
   const hookSource = fs.readFileSync(HOOK, "utf8");
 
-  // The new path must spawn with an explicit args array, not use parseCmd on
-  // the python program.
+  // The default path must spawn with an explicit args array using venvPython (not parseCmd).
   assert.ok(
-    hookSource.includes('spawnSync(pythonProg, ["-m", "claude_wayfinder", "catalog", "build"'),
-    'Hook must use explicit args array: spawnSync(pythonProg, ["-m", "claude_wayfinder", "catalog", "build", ...]). ' +
-      "This is the defense against Windows paths with spaces in the interpreter path."
+    hookSource.includes('spawnSync(venvPython, ["-m", "claude_wayfinder", "catalog", "build"'),
+    'Hook must use explicit args array: spawnSync(venvPython, ["-m", "claude_wayfinder", "catalog", "build", ...]). ' +
+      "This is the defense against Windows paths with spaces in the venv interpreter path."
+  );
+  // parseCmd must NOT be used on venvPython (only used for DISPATCH_GENERATOR_CMD seam).
+  assert.ok(
+    !hookSource.includes("parseCmd(venvPython)") && !hookSource.includes("parseCmd(pythonProg)"),
+    "Hook must not pass venvPython through parseCmd — that would split paths with spaces."
   );
 
-  // Runtime: hook exits 0 even with a spaced interpreter path that doesn't exist.
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-py-spaces-"));
-  const { skillFile, catalogFile } = makeFakeClaudeHome(tmp);
-
-  writeCatalog(catalogFile);
-  const pastTime = new Date(Date.now() - 10 * 60 * 1000);
-  fs.utimesSync(catalogFile, pastTime, pastTime);
-  fs.utimesSync(skillFile, new Date(), new Date());
-
-  const spacedPath =
-    process.platform === "win32"
-      ? "C:\\Program Files\\Python311\\python.exe"
-      : "/opt/My App/python";
-
-  const env = {
-    ...process.env,
-    CLAUDE_HOME: tmp,
-    DISPATCH_CATALOG_PATH: catalogFile,
-    CLAUDE_WAYFINDER_PYTHON: spacedPath,
-  };
-  delete env.DISPATCH_GENERATOR_CMD;
-
-  const r = spawnSync("node", [HOOK], {
-    input: JSON.stringify({ prompt: "hello" }),
-    encoding: "utf8",
-    timeout: 15_000,
-    env,
+  // Runtime: hook exits 0 (fail-open) — the venv python fails to run the module
+  // but the hook never blocks the prompt.
+  const result = runHook({
+    DISPATCH_CATALOG_PATH: "/nonexistent/path/catalog.json",
   });
-
   assert.equal(
-    r.status ?? 0,
+    result.exitCode,
     0,
-    `Hook must exit 0 (fail-open) with a spaced interpreter path. stderr: ${r.stderr}`
+    `Hook must exit 0 (fail-open). stderr: ${result.stderr}`
   );
+});
 
-  // The error banner must reflect that the spaced path was attempted as a
-  // single program argument — it should mention the path (or ENOENT), not split
-  // the path on the space and complain about only the first token.
-  if (r.stdout && r.stdout.trim()) {
-    const parsed = JSON.parse(r.stdout);
-    const ctx = parsed.hookSpecificOutput?.additionalContext ?? "";
-    // The error should NOT claim "My" failed (first token after split).
+// ---------------------------------------------------------------------------
+// Setup-state gate tests (Phase 2 — Issue #104)
+// ---------------------------------------------------------------------------
+
+test("refresh-catalog-on-stale exits silently when setup-state is MISSING", () => {
+  // To get a reliable RED/GREEN distinction, set up a stale catalog scenario
+  // AND no flag file. Without the flag guard, the hook would attempt a refresh
+  // and either call the generator (which may emit output) or use the
+  // DISPATCH_GENERATOR_CMD seam. Here we use a fake generator that writes a
+  // sentinel — if the generator was called, the sentinel exists. The flag guard
+  // must prevent that call when MISSING.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-refreshtest-"));
+  try {
+    const { skillFile, catalogFile, sentinelFile } = makeFakeClaudeHome(tmp);
+    const generatorScript = makeFakeGenerator(tmp, sentinelFile, 0);
+
+    // Stale catalog — without the flag guard, the hook would call the generator.
+    writeCatalog(catalogFile);
+    const pastTime = new Date(Date.now() - 10 * 60 * 1000);
+    fs.utimesSync(catalogFile, pastTime, pastTime);
+    fs.utimesSync(skillFile, new Date(), new Date());
+
+    // No flag file in tmp (pluginData) — MISSING state.
+    const result = spawnSync(process.execPath, [HOOK], {
+      input: "{}",
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_DATA: tmp,
+        CLAUDE_PLUGIN_ROOT: path.resolve(__dirname, "..", ".."),
+        CLAUDE_HOME: tmp,
+        DISPATCH_CATALOG_PATH: catalogFile,
+        DISPATCH_GENERATOR_CMD: `node ${generatorScript}`,
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `Hook should exit 0; got ${result.status}: ${result.stderr}`);
+    assert.equal(result.stdout.trim(), "", "Hook should produce no stdout when flag MISSING");
+    // Generator must NOT have been called — the flag guard should prevent it.
     assert.ok(
-      !ctx.includes("'My'") && !ctx.includes('"My"'),
-      `additionalContext must not blame just the first token of a spaced path. Got: ${ctx}`
+      !fs.existsSync(sentinelFile),
+      "Generator must not be called when setup-state is MISSING"
     );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

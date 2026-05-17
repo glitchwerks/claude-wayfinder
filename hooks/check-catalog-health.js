@@ -13,6 +13,104 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const { readSetupState, getCurrentVersion, getVenvPython } = require("./lib/setup-state.js");
+
+// ---------------------------------------------------------------------------
+// Setup-state gate (Phase 2 — Issue #104)
+// ---------------------------------------------------------------------------
+// If setup has not been completed (MISSING), is out of date (STALE), or the
+// venv is broken (BROKEN), emit a banner and exit cleanly — skip catalog checks.
+// If VALID, run a one-per-session import probe; if that fails, delete the flag
+// so the next session sees MISSING and prompts the user to re-run setup.
+
+(function checkSetupState() {
+  const currentVersion = getCurrentVersion();
+  const setupState = readSetupState(currentVersion);
+
+  if (setupState.status !== "VALID") {
+    let banner;
+    if (setupState.status === "MISSING") {
+      banner =
+        "⚠ claude-wayfinder requires setup. Run /setup-wayfinder to materialize the Python venv. The dispatch matcher and catalog refresh are disabled until setup completes.";
+    } else if (setupState.status === "STALE") {
+      banner = `⚠ claude-wayfinder venv is for v${setupState.flag.version} but plugin is v${currentVersion}. Run /setup-wayfinder to refresh.`;
+    } else if (setupState.status === "BROKEN") {
+      banner = `⚠ claude-wayfinder venv at ${setupState.flag.venv_path} is unreachable or corrupt. Run /setup-wayfinder.`;
+    }
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: banner,
+        },
+      })
+    );
+    process.exit(0);
+  }
+
+  // VALID case: run one-per-session import probe.
+  // If it fails, downgrade to MISSING by deleting the flag, then emit banner.
+  //
+  // CLAUDE_WAYFINDER_PROBE_CMD env override (test seam): when set, the probe
+  // runs the given command instead of the venv Python. Split on whitespace
+  // like DISPATCH_GENERATOR_CMD — program + args. Intended for CI/test use
+  // where fake-python shims (Node scripts) replace the real venv interpreter.
+  let probeResult;
+  if (process.env.CLAUDE_WAYFINDER_PROBE_CMD) {
+    // Test seam: value is a JSON array ["prog", "arg1", ...]
+    let probeProg, probeArgs;
+    try {
+      [probeProg, ...probeArgs] = JSON.parse(process.env.CLAUDE_WAYFINDER_PROBE_CMD);
+    } catch (err) {
+      // Malformed JSON in the test seam — fall through to the default probe path
+      // rather than crashing, so the hook remains usable even with a bad override.
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "SessionStart",
+            additionalContext: `⚠ claude-wayfinder internal error: CLAUDE_WAYFINDER_PROBE_CMD malformed JSON — ${err.message}. Falling back to default probe.`,
+          },
+        })
+      );
+      probeProg = null; // sentinel: skip the CLAUDE_WAYFINDER_PROBE_CMD branch
+    }
+    if (probeProg !== null) {
+      probeResult = spawnSync(probeProg, probeArgs, { encoding: "utf8" });
+    }
+  }
+  if (!probeResult) {
+    probeResult = spawnSync(
+      getVenvPython(setupState.flag.venv_path),
+      ["-c", "import claude_wayfinder"],
+      { encoding: "utf8" }
+    );
+  }
+  if (probeResult.status !== 0 || probeResult.error) {
+    // Flag is structurally valid but the venv is corrupt. Delete the flag so the
+    // next session sees MISSING and re-prompts the user.
+    const { _computePluginDataDir } = require("./lib/setup-state.js");
+    const flagDir = process.env.CLAUDE_PLUGIN_DATA || _computePluginDataDir();
+    const flagPath = path.join(flagDir, "setup-state.json");
+    try {
+      fs.unlinkSync(flagPath);
+    } catch (_err) {
+      // best-effort cleanup; ignore
+    }
+    const banner = `⚠ claude-wayfinder venv at ${setupState.flag.venv_path} fails import probe (likely corrupt). Run /setup-wayfinder to rebuild.`;
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: banner,
+        },
+      })
+    );
+    process.exit(0);
+  }
+
+  // VALID + probe passed: fall through to existing catalog-health logic.
+})();
 
 const claudeHome = process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude");
 const DEFAULT_PATH = path.join(claudeHome, "state", "dispatch-catalog.json");

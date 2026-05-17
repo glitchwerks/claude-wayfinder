@@ -6,6 +6,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const HOOK = path.join(__dirname, "..", "check-catalog-health.js");
+const REPO_ROOT_FOR_HELPER = path.resolve(__dirname, "..", "..");
 
 // Build a minimal fake ~/.claude tree rooted at `base`:
 //   base/state/dispatch-catalog.json
@@ -17,15 +18,59 @@ function makeFakeClaudeHome(base) {
   fs.mkdirSync(path.join(base, "agents"), { recursive: true });
 }
 
+const FAKE_PYTHON_OK = path.resolve(__dirname, "fixtures", "fake-python-ok.js");
+const FAKE_PYTHON_FAIL = path.resolve(__dirname, "fixtures", "fake-python-fail.js");
+
+/**
+ * Plant a VALID setup-state flag into `pluginDataDir`.
+ * Creates a fake venv structure so getVenvPython() resolves to a real file.
+ * Also returns the CLAUDE_WAYFINDER_PROBE_CMD env value to inject (cross-platform probe override).
+ *
+ * @param {string} pluginDataDir
+ * @param {"ok"|"fail"} probeOutcome - whether the import probe should pass or fail
+ * @returns {{ pluginDataDir: string, probeCmdEnv: string }}
+ */
+function plantValidFlag(pluginDataDir, probeOutcome = "ok") {
+  const venvDir = path.join(pluginDataDir, "venv");
+  const venvBin = path.join(venvDir, process.platform === "win32" ? "Scripts" : "bin");
+  const pythonBin = path.join(venvBin, process.platform === "win32" ? "python.exe" : "python");
+  fs.mkdirSync(venvBin, { recursive: true });
+  // Write a placeholder file so getVenvPython() path exists (readSetupState VALID check).
+  // The probe itself is overridden via CLAUDE_WAYFINDER_PROBE_CMD (cross-platform seam).
+  fs.writeFileSync(pythonBin, "placeholder");
+  const { getCurrentVersion } = require("../lib/setup-state.js");
+  fs.writeFileSync(
+    path.join(pluginDataDir, "setup-state.json"),
+    JSON.stringify({
+      version: getCurrentVersion(),
+      venv_path: venvDir,
+      interpreter: pythonBin,
+      installed_at: new Date().toISOString(),
+    })
+  );
+  const shimPath = probeOutcome === "ok" ? FAKE_PYTHON_OK : FAKE_PYTHON_FAIL;
+  // JSON array format: ["node_path", "shim_path"] — avoids whitespace-splitting issues
+  // on paths with spaces (e.g. "C:\Program Files\nodejs\node.exe").
+  const probeCmdEnv = JSON.stringify([process.execPath, shimPath]);
+  return { pluginDataDir, probeCmdEnv };
+}
+
 function runHook(catalogPath, claudeHome) {
+  // Plant a valid setup-state flag so the gate passes and catalog checks run.
+  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hookpd-"));
+  const { probeCmdEnv } = plantValidFlag(pluginDataDir, "ok");
   const env = {
     ...process.env,
     DISPATCH_CATALOG_PATH: catalogPath,
+    CLAUDE_PLUGIN_DATA: pluginDataDir,
+    CLAUDE_PLUGIN_ROOT: REPO_ROOT_FOR_HELPER,
+    CLAUDE_WAYFINDER_PROBE_CMD: probeCmdEnv,
   };
   if (claudeHome !== undefined) {
     env.CLAUDE_HOME = claudeHome;
   }
-  const r = spawnSync("node", [HOOK], { env, input: "{}", encoding: "utf8" });
+  const r = spawnSync(process.execPath, [HOOK], { env, input: "{}", encoding: "utf8" });
+  fs.rmSync(pluginDataDir, { recursive: true, force: true });
   return { stdout: r.stdout, status: r.status };
 }
 
@@ -146,4 +191,144 @@ test("fresh catalog (newer than all sources) is silent", () => {
   const out = runHook(catalogFile, home);
   assert.equal(out.status, 0);
   assert.equal(out.stdout.trim(), "");
+});
+
+// ---------------------------------------------------------------------------
+// Setup-state gate tests (Phase 2 — Issue #104)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the hook with a CLAUDE_PLUGIN_DATA directory override.
+ * Accepts an optional probeCmdEnv for the import probe override.
+ */
+function runHookWithPluginData({ pluginData, catalogPath, claudeHome, probeCmdEnv } = {}) {
+  const env = {
+    ...process.env,
+    CLAUDE_PLUGIN_DATA: pluginData,
+    CLAUDE_PLUGIN_ROOT: REPO_ROOT_FOR_HELPER,
+  };
+  if (catalogPath !== undefined) env.DISPATCH_CATALOG_PATH = catalogPath;
+  if (claudeHome !== undefined) env.CLAUDE_HOME = claudeHome;
+  if (probeCmdEnv !== undefined) env.CLAUDE_WAYFINDER_PROBE_CMD = probeCmdEnv;
+  const r = spawnSync(process.execPath, [HOOK], {
+    input: "{}",
+    env,
+    encoding: "utf8",
+  });
+  return { stdout: r.stdout, stderr: r.stderr, status: r.status };
+}
+
+test("check-catalog-health emits MISSING banner when no setup-state flag", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const result = runHookWithPluginData({ pluginData: tmp });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    assert.match(
+      result.stdout,
+      /claude-wayfinder requires setup.*\/setup-wayfinder/s,
+      "Expected MISSING-state banner in stdout"
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("check-catalog-health emits BROKEN banner when venv path doesn't exist", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const { getCurrentVersion } = require("../lib/setup-state.js");
+    fs.writeFileSync(
+      path.join(tmp, "setup-state.json"),
+      JSON.stringify({
+        version: getCurrentVersion(),
+        venv_path: "/nonexistent/path",
+        interpreter: "/usr/bin/python3.12",
+        installed_at: "2026-05-17T19:00:00Z",
+      })
+    );
+    const result = runHookWithPluginData({ pluginData: tmp });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    assert.match(result.stdout, /unreachable or corrupt.*\/setup-wayfinder/s);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("check-catalog-health emits STALE banner when flag version differs from plugin version", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const venvDir = path.join(tmp, "venv");
+    fs.mkdirSync(path.join(venvDir, process.platform === "win32" ? "Scripts" : "bin"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(tmp, "setup-state.json"),
+      JSON.stringify({
+        version: "0.0.0-old",
+        venv_path: venvDir,
+        interpreter: "/usr/bin/python3.12",
+        installed_at: "2026-05-17T19:00:00Z",
+      })
+    );
+    const result = runHookWithPluginData({ pluginData: tmp });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    assert.match(result.stdout, /venv is for v0\.0\.0-old but plugin is v/s);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("check-catalog-health proceeds silently when flag VALID and import probe passes", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const { pluginDataDir, probeCmdEnv } = plantValidFlag(tmp, "ok");
+    // Point catalog to a non-existent file — if the probe gate doesn't short-circuit,
+    // the hook will emit a CATALOG ERROR banner (not a setup banner).
+    // We just verify no setup banner appears.
+    const result = runHookWithPluginData({
+      pluginData: pluginDataDir,
+      probeCmdEnv,
+    });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    // No setup banner should appear when probe passes.
+    assert.doesNotMatch(result.stdout, /requires setup/s);
+    assert.doesNotMatch(result.stdout, /fails import probe/s);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("check-catalog-health falls back to default probe when PROBE_CMD contains malformed JSON", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const { pluginDataDir } = plantValidFlag(tmp, "ok");
+    const result = runHookWithPluginData({
+      pluginData: pluginDataDir,
+      probeCmdEnv: "this is not valid json {{{",
+    });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    // Should emit the internal-error warning about the malformed seam.
+    assert.match(result.stdout, /CLAUDE_WAYFINDER_PROBE_CMD malformed JSON/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("check-catalog-health deletes flag and emits BROKEN banner when import probe fails", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const { pluginDataDir, probeCmdEnv } = plantValidFlag(tmp, "fail");
+    const flagPath = path.join(pluginDataDir, "setup-state.json");
+    assert.ok(fs.existsSync(flagPath), "Flag should exist before hook run");
+    const result = runHookWithPluginData({
+      pluginData: pluginDataDir,
+      probeCmdEnv,
+    });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    assert.match(result.stdout, /fails import probe.*\/setup-wayfinder/s);
+    // Flag should have been deleted on probe failure.
+    assert.ok(!fs.existsSync(flagPath), "flag file should have been deleted on probe failure");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
