@@ -4,9 +4,40 @@ This guide is for consumers who want to use claude-wayfinder as the actual dispa
 
 **Prerequisites:**
 
-- Python >= 3.11 on your `$PATH`
-- `claude-wayfinder` installed:  `pip install claude-wayfinder` or `pip install -e ".[dev]"` from a clone
-- The `/dispatch` skill installed in your Claude Code environment (via `/plugin install`)
+- Python >= 3.11 (does not need to be on `$PATH` — the setup skill discovers it)
+- The plugin installed in your Claude Code environment (via `/plugin marketplace add glitchwerks/claude-wayfinder`)
+
+---
+
+## One-time setup
+
+The plugin materializes its Python venv on demand via the `/setup-wayfinder` skill, not automatically on plugin install. This design eliminates the class of bootstrap failures that affected v0.3.x, where the hook had to discover a usable Python interpreter at hook-fire time (see epic [#99](https://github.com/glitchwerks/claude-wayfinder/issues/99) and the architecture spec at `docs/superpowers/specs/2026-05-17-setup-skill-architecture-design.md`).
+
+### First-time install
+
+1. Install the plugin: `/plugin marketplace add glitchwerks/claude-wayfinder`
+2. Open a new session. The `check-catalog-health.js` SessionStart hook emits a banner via `additionalContext`:
+
+   > ⚠ claude-wayfinder requires setup. Run /setup-wayfinder to materialize the Python venv.
+
+3. Run `/setup-wayfinder`. The skill discovers Python >= 3.11, creates a venv at `~/.claude/plugins/data/claude-wayfinder-claude-wayfinder/venv/`, installs `claude-wayfinder` from PyPI, verifies the import, and writes a setup-state flag.
+4. Open a new session — hooks read the flag at session start and proceed normally.
+
+### After a plugin update
+
+When you run `/plugin update`, the next SessionStart hook detects a version mismatch between the installed venv and the new plugin version and emits:
+
+> ⚠ claude-wayfinder venv is for v0.4.0 but plugin is v0.4.1. Run /setup-wayfinder to refresh.
+
+Run `/setup-wayfinder` again. The skill always wipes and rebuilds the venv, ensuring a clean state.
+
+### Cross-machine setup
+
+Per-machine setup is the supported model. If you share `~/.claude` across machines via OneDrive, Dropbox, or similar sync, the setup-state flag's recorded venv path will not resolve on a different machine and a `BROKEN` banner will fire. Run `/setup-wayfinder` once per machine. This is intentional — machine-agnostic venvs would re-introduce most of the complexity this architecture eliminates.
+
+### Advanced: Python pipeline import
+
+The setup skill's core pipeline is also importable as Python (`tests/integration/setup_pipeline.py`) for CI environments or advanced scripting. Most users should use `/setup-wayfinder` directly.
 
 ---
 
