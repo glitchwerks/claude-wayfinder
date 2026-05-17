@@ -99,6 +99,31 @@ jobs:
         run: node --test hooks/tests/*.test.js
 
   # ---------------------------------------------------------------------------
+  # Skill smoke (Ubuntu)
+  # ---------------------------------------------------------------------------
+  skill-smoke-ubuntu:
+    name: Skill smoke (Ubuntu)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # verified 2026-05-13 via gh api repos/astral-sh/setup-uv/git/refs/tags/v8.1.0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          python-version: "3.12"
+          activate-environment: "true"
+
+      - name: Install pytest
+        run: uv pip install pytest
+
+      - name: Run skill smoke test
+        env:
+          CLAUDE_WAYFINDER_PIP_SPEC: ${{ github.workspace }}
+        run: uv run --no-sync pytest tests/integration/test_setup_skill.py tests/test_skill_pipeline_sync.py -v
+
+  # ---------------------------------------------------------------------------
   # Validate plugin manifest
   # ---------------------------------------------------------------------------
   validate-manifest:
