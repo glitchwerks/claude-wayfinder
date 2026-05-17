@@ -251,7 +251,7 @@ def write_flag(
     }
     flag_path = plugin_data_dir / "setup-state.json"
     flag_path.parent.mkdir(parents=True, exist_ok=True)
-    flag_path.write_text(json.dumps(flag, indent=2))
+    flag_path.write_text(json.dumps(flag, indent=2), encoding="utf-8")
     return flag_path
 
 
