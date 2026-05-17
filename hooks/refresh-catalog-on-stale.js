@@ -33,11 +33,27 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { readSetupState, getCurrentVersion, getVenvPython } = require("./lib/setup-state.js");
 
 const claudeHome = process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude");
 
 const DEFAULT_CATALOG_PATH = path.join(claudeHome, "state", "dispatch-catalog.json");
 const catalogPath = process.env.DISPATCH_CATALOG_PATH || DEFAULT_CATALOG_PATH;
+
+// ---------------------------------------------------------------------------
+// Setup-state gate (Phase 2 — Issue #104)
+// ---------------------------------------------------------------------------
+// If setup has not been completed (MISSING), is out of date (STALE), or the
+// venv is broken (BROKEN), exit silently. The SessionStart banner in
+// check-catalog-health.js surfaces the issue to the user. Per spec § 4.4.
+const _setupState = readSetupState(getCurrentVersion());
+if (_setupState.status !== "VALID") {
+  process.exit(0);
+}
+
+// Setup is VALID: resolve the venv Python interpreter for catalog generation.
+// This replaces the v0.3.x CLAUDE_WAYFINDER_PYTHON discovery scaffolding.
+const venvPython = getVenvPython(_setupState.flag.venv_path);
 
 // Default generator: invoke the plugin's CLI as a Python module.
 //
@@ -58,27 +74,16 @@ const catalogPath = process.env.DISPATCH_CATALOG_PATH || DEFAULT_CATALOG_PATH;
 // that prevents the class of regression seen in v0.3.2 (ENOENT), v0.3.3
 // (wrong interpreter), and v0.3.4 (missing args, issue #87).
 //
-// CLAUDE_WAYFINDER_PYTHON env-var override (v0.3.4 stopgap — issue #82,
-// closes #80): consumers whose `python` on PATH does not have the package
-// importable (e.g. installed into a non-activated venv) can point this var
-// at the absolute path of a Python interpreter that does. When unset, the
-// hook falls back to bare `python` (v0.3.3 behaviour). Spawn uses an
-// explicit args array so paths with spaces (e.g. Windows
-// "C:\Program Files\Python311\python.exe") are never split on whitespace.
-// The canonical fix (${CLAUDE_PLUGIN_DATA} SessionStart-materialised venv)
-// is deferred to a future release and tracked in issue #81.
+// venvPython is now resolved from the setup-state flag (Phase 2, Issue #104).
+// This replaces the v0.3.x CLAUDE_WAYFINDER_PYTHON env-var override approach.
 //
-// DISPATCH_GENERATOR_CMD overrides this entirely (e.g. for tests:
+// DISPATCH_GENERATOR_CMD overrides the generator entirely (e.g. for tests:
 // `node fake_gen.js`). The override path is the primary integration seam
 // for the test suite — see hooks/tests/refresh-catalog-on-stale.test.js.
-// When DISPATCH_GENERATOR_CMD is set, the hook falls back to the string-
-// parse path (parseCmd) to preserve the existing test seam unchanged.
+// When DISPATCH_GENERATOR_CMD is set, the hook uses the string-parse path
+// (parseCmd) to preserve the existing test seam unchanged.
 const DEFAULT_GENERATOR_CMD = "python -m claude_wayfinder catalog build";
 const generatorCmd = process.env.DISPATCH_GENERATOR_CMD || DEFAULT_GENERATOR_CMD;
-
-// Resolve the Python interpreter for the args-array spawn path.
-// Only used when DISPATCH_GENERATOR_CMD is not set.
-const pythonProg = process.env.CLAUDE_WAYFINDER_PYTHON || "python";
 
 // ---------------------------------------------------------------------------
 // Project root detection
@@ -305,12 +310,13 @@ if (process.env.DISPATCH_GENERATOR_CMD) {
     shell: false,
   });
 } else {
-  // Default path: explicit args array with pythonProg resolved from
-  // CLAUDE_WAYFINDER_PYTHON (or bare "python" as fallback). Passing the
-  // program as a separate argument to spawnSync — not through parseCmd —
-  // means interpreter paths with spaces are never split on whitespace.
-  // See issue #82 and the comment above for context.
-  result = spawnSync(pythonProg, ["-m", "claude_wayfinder", "catalog", "build", ...projectRootArgs], {
+  // Default path: explicit args array with venvPython resolved from the
+  // setup-state flag. Passing the program as a separate argument to spawnSync
+  // — not through parseCmd — means interpreter paths with spaces are never
+  // split on whitespace (see issue #82). The CLAUDE_WAYFINDER_PYTHON env-var
+  // override (v0.3.x stopgap) is no longer used; the venv path comes from the
+  // setup-state.json flag written by /setup-wayfinder (Phase 2, Issue #104).
+  result = spawnSync(venvPython, ["-m", "claude_wayfinder", "catalog", "build", ...projectRootArgs], {
     encoding: "utf8",
     timeout: 60_000, // 60s hard ceiling
     shell: false,
