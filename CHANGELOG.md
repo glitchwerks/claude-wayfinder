@@ -6,6 +6,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-05-17
+
+Patch release shipping CLI-side defaults for `catalog build`. v0.3.4 fixed the
+interpreter-discovery problem but exposed the next layer: the bundled hook's
+bare `python -m claude_wayfinder catalog build` invocation was missing the
+four required path args, exiting 2 on every prompt. v0.3.5 makes those args
+optional with sensible defaults anchored to `${CLAUDE_HOME}` (falling back to
+`~/.claude`), so the hook's bare invocation Just Works.
+
+This breaks the regression chain — v0.3.2 ENOENT, v0.3.3 wrong interpreter,
+v0.3.4 missing args — by moving the defaults to where they belong: the CLI
+knows how to be useful by itself, the hook ships a bare invocation, and
+consumers needing custom paths still have `DISPATCH_GENERATOR_CMD`.
+
 ### Fixed
 
 - **`catalog build` bare invocation now succeeds without `DISPATCH_GENERATOR_CMD` override.**
