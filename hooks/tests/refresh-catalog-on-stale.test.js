@@ -830,6 +830,60 @@ test("CLAUDE_WAYFINDER_PYTHON set — hook spawns that exact interpreter path", 
   );
 });
 
+// ---------------------------------------------------------------------------
+// Issue #87 regression guard: bare DEFAULT_GENERATOR_CMD ships no extra args
+// ---------------------------------------------------------------------------
+//
+// The bundled hook's DEFAULT_GENERATOR_CMD is `python -m claude_wayfinder
+// catalog build`.  After issue #87's fix (CLI-side defaults for --skills-dir,
+// --agents-dir, --out, --log), that bare invocation must succeed without any
+// extra arguments appended by the hook.  This test locks in the contract:
+//   - The hook spawns exactly ["python", "-m", "claude_wayfinder", "catalog",
+//     "build", ...projectRootArgs] — no --skills-dir, --agents-dir, --out,
+//     or --log appended at the hook layer.
+//
+// If this test fails, someone added argument injection to the hook, breaking
+// the structural fix (defaults at the CLI, not at the hook).
+
+test("DEFAULT_GENERATOR_CMD spawns bare invocation — no extra args injected by the hook", () => {
+  // Structural assertion: verify the source does NOT append the four args.
+  const hookSource = fs.readFileSync(HOOK, "utf8");
+
+  // The hook must NOT pass --skills-dir, --agents-dir, --out, or --log
+  // when building the args array for the default (non-DISPATCH_GENERATOR_CMD)
+  // spawn path.  These must come from CLI defaults (issue #87), not from the hook.
+  assert.ok(
+    !hookSource.includes('"--skills-dir"'),
+    'Hook must NOT inject "--skills-dir" into the spawn args. ' +
+      "Issue #87 fix: defaults live at the CLI, not the hook."
+  );
+  assert.ok(
+    !hookSource.includes('"--agents-dir"'),
+    'Hook must NOT inject "--agents-dir" into the spawn args. ' +
+      "Issue #87 fix: defaults live at the CLI, not the hook."
+  );
+  assert.ok(
+    !hookSource.includes('"--out"'),
+    'Hook must NOT inject "--out" into the spawn args. ' +
+      "Issue #87 fix: defaults live at the CLI, not the hook."
+  );
+  assert.ok(
+    !hookSource.includes('"--log"'),
+    'Hook must NOT inject "--log" into the spawn args. ' +
+      "Issue #87 fix: defaults live at the CLI, not the hook."
+  );
+
+  // The default spawn must be the bare module invocation with no extra path args.
+  // (--project-root is permitted — it is not a defaulted arg.)
+  assert.ok(
+    hookSource.includes(
+      'spawnSync(pythonProg, ["-m", "claude_wayfinder", "catalog", "build", ...projectRootArgs]'
+    ),
+    'Default spawn must be: spawnSync(pythonProg, ["-m", "claude_wayfinder", "catalog", "build", ' +
+      "...projectRootArgs]). The hook must not inject path args — those are now CLI defaults."
+  );
+});
+
 test("CLAUDE_WAYFINDER_PYTHON with spaces — path is passed as single argument, not split", () => {
   // Defense against the Windows-path-with-spaces bug: a path like
   // "C:\\Program Files\\Python311\\python.exe" must be passed as a single

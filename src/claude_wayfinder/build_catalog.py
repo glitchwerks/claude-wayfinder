@@ -1931,6 +1931,53 @@ def build(
     return 2 if degraded else 0
 
 
+def _resolve_catalog_build_defaults(
+    skills_dir: Path | None,
+    agents_dir: Path | None,
+    out: Path | None,
+    log: Path | None,
+) -> dict[str, Path]:
+    """Resolve the four catalog-build paths, substituting defaults when None.
+
+    The default base directory is ``${CLAUDE_HOME}`` when the env var is set,
+    otherwise ``Path.home() / ".claude"``.  Individual args that were supplied
+    explicitly (non-None) are returned unchanged; only ``None`` entries are
+    filled from the defaults.
+
+    This helper is the single source of truth for the default-resolution
+    logic, called both from :func:`run_catalog_build` and directly by the
+    test suite (which mocks ``Path.home()`` and ``os.environ``).
+
+    Args:
+        skills_dir: Explicit ``--skills-dir`` value, or ``None`` to use the
+            default (``<base>/skills``).
+        agents_dir: Explicit ``--agents-dir`` value, or ``None`` to use the
+            default (``<base>/agents``).
+        out: Explicit ``--out`` value, or ``None`` to use the default
+            (``<base>/state/dispatch-catalog.json``).
+        log: Explicit ``--log`` value, or ``None`` to use the default
+            (``<base>/state/catalog-generation.log``).
+
+    Returns:
+        A dict with keys ``"skills_dir"``, ``"agents_dir"``, ``"out"``, and
+        ``"log"``, each containing a resolved ``Path``.
+    """
+    import os
+
+    claude_home_env = os.environ.get("CLAUDE_HOME")
+    if claude_home_env:
+        base = Path(claude_home_env)
+    else:
+        base = Path.home() / ".claude"
+
+    return {
+        "skills_dir": skills_dir if skills_dir is not None else base / "skills",
+        "agents_dir": agents_dir if agents_dir is not None else base / "agents",
+        "out": out if out is not None else base / "state" / "dispatch-catalog.json",
+        "log": log if log is not None else base / "state" / "catalog-generation.log",
+    }
+
+
 def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
     """Register all ``catalog build`` flags onto *parser*.
 
@@ -1939,20 +1986,35 @@ def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
     ``catalog build`` sub-subparser can share an identical parameter
     surface without duplication.
 
+    The four previously-required args (``--skills-dir``, ``--agents-dir``,
+    ``--out``, ``--log``) are now optional with ``default=None``.  When not
+    supplied, :func:`run_catalog_build` resolves them via
+    :func:`_resolve_catalog_build_defaults`, anchoring to ``${CLAUDE_HOME}``
+    (or ``~/.claude`` when unset).  This allows the bundled
+    ``refresh-catalog-on-stale.js`` hook's bare ``python -m claude_wayfinder
+    catalog build`` invocation to succeed without requiring
+    ``DISPATCH_GENERATOR_CMD`` override (issue #87).
+
     Args:
         parser: An ``ArgumentParser`` (or sub-parser) to populate.
     """
     parser.add_argument(
         "--skills-dir",
         type=Path,
-        required=True,
-        help="Directory containing skill SKILL.md files.",
+        default=None,
+        help=(
+            "Directory containing skill SKILL.md files.  "
+            "Defaults to ${CLAUDE_HOME}/skills (or ~/.claude/skills)."
+        ),
     )
     parser.add_argument(
         "--agents-dir",
         type=Path,
-        required=True,
-        help="Directory containing agent frontmatter .md files.",
+        default=None,
+        help=(
+            "Directory containing agent frontmatter .md files.  "
+            "Defaults to ${CLAUDE_HOME}/agents (or ~/.claude/agents)."
+        ),
     )
     parser.add_argument(
         "--plugin-overrides-dir",
@@ -1987,14 +2049,22 @@ def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--out",
         type=Path,
-        required=True,
-        help="Output path for dispatch-catalog.json.",
+        default=None,
+        help=(
+            "Output path for dispatch-catalog.json.  "
+            "Defaults to ${CLAUDE_HOME}/state/dispatch-catalog.json "
+            "(or ~/.claude/state/dispatch-catalog.json)."
+        ),
     )
     parser.add_argument(
         "--log",
         type=Path,
-        required=True,
-        help="Output path for the catalog-generation log.",
+        default=None,
+        help=(
+            "Output path for the catalog-generation log.  "
+            "Defaults to ${CLAUDE_HOME}/state/catalog-generation.log "
+            "(or ~/.claude/state/catalog-generation.log)."
+        ),
     )
     parser.add_argument(
         "--project-root",
@@ -2011,38 +2081,52 @@ def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
 def run_catalog_build(args: argparse.Namespace) -> int:
     """Execute a catalog build from a pre-parsed argument namespace.
 
-    Resolves the project root (explicit flag or auto-detection) and
-    delegates to :func:`build`.  Extracted so that both the standalone
-    ``build_catalog`` entry point and the ``cli.py`` ``catalog build``
-    subcommand share identical post-parse behaviour without duplication.
+    Resolves the four optional path args (``skills_dir``, ``agents_dir``,
+    ``out``, ``log``) via :func:`_resolve_catalog_build_defaults` when they
+    were not supplied, then resolves the project root (explicit flag or
+    auto-detection) and delegates to :func:`build`.
+
+    Extracted so that both the standalone ``build_catalog`` entry point and
+    the ``cli.py`` ``catalog build`` subcommand share identical post-parse
+    behaviour without duplication.
 
     Args:
-        args: A parsed ``argparse.Namespace`` that must carry all
-            attributes registered by :func:`add_catalog_build_args`.
+        args: A parsed ``argparse.Namespace`` carrying all attributes
+            registered by :func:`add_catalog_build_args`.  The four path
+            attrs (``skills_dir``, ``agents_dir``, ``out``, ``log``) may be
+            ``None`` when not supplied; this function resolves them before
+            delegating to :func:`build`.
 
     Returns:
         Integer exit code: ``0`` on a clean build, ``2`` when the
         catalog is degraded (see :func:`build`).
     """
+    # Resolve the four formerly-required path args from CLAUDE_HOME defaults
+    # when not explicitly provided.  This is the structural fix for issue #87:
+    # defaults live at the CLI, not at the hook.
+    resolved = _resolve_catalog_build_defaults(
+        skills_dir=args.skills_dir,
+        agents_dir=args.agents_dir,
+        out=args.out,
+        log=args.log,
+    )
+
     # Resolve project root: explicit flag takes priority; fall back to
     # auto-detection from the current working directory.
-    # The user_global_dir guard is skipped (None) because the caller must
-    # supply all directory paths explicitly — the guard existed only to
-    # prevent defaulting into ~/.claude when cwd happened to be inside it.
     if args.project_root is not None:
         project_root: Path | None = args.project_root.resolve()
     else:
         project_root = detect_project_root(user_global_dir=None)
 
     return build(
-        skills_dir=args.skills_dir,
-        agents_dir=args.agents_dir,
+        skills_dir=resolved["skills_dir"],
+        agents_dir=resolved["agents_dir"],
         plugin_overrides_dir=args.plugin_overrides_dir,
         plugins_dir=args.plugins_dir,
         builtin_agents_dir=args.builtin_agents_dir,
         corpus_path=args.corpus,
-        out_path=args.out,
-        log_path=args.log,
+        out_path=resolved["out"],
+        log_path=resolved["log"],
         project_root=project_root,
     )
 

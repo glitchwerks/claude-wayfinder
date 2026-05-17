@@ -49,6 +49,15 @@ const catalogPath = process.env.DISPATCH_CATALOG_PATH || DEFAULT_CATALOG_PATH;
 // works as long as `python` on PATH has the `claude_wayfinder` package
 // importable, which is the documented Pattern A install (README → Install).
 //
+// No extra path args are needed here (issue #87, v0.3.5 fix): the CLI now
+// ships sensible defaults for --skills-dir, --agents-dir, --out, and --log,
+// all anchored to ${CLAUDE_HOME} (or ~/.claude when unset). Consumers who
+// need custom paths can still set DISPATCH_GENERATOR_CMD to a full command
+// with explicit flags.  The hook intentionally delegates default resolution
+// to the CLI — "defaults at the CLI, not at the hook" is the durable fix
+// that prevents the class of regression seen in v0.3.2 (ENOENT), v0.3.3
+// (wrong interpreter), and v0.3.4 (missing args, issue #87).
+//
 // CLAUDE_WAYFINDER_PYTHON env-var override (v0.3.4 stopgap — issue #82,
 // closes #80): consumers whose `python` on PATH does not have the package
 // importable (e.g. installed into a non-activated venv) can point this var
