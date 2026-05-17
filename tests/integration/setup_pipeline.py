@@ -91,10 +91,10 @@ def discover_python(prior_interpreter: str | None = None) -> str:
     for candidate in candidates:
         try:
             args = candidate.split() + ["-c", probe]
-            result = subprocess.run(args, capture_output=True, check=False)
+            result = subprocess.run(args, capture_output=True, check=False, timeout=10)
             if result.returncode == 0:
                 return candidate
-        except FileNotFoundError:
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
     raise SetupError(
         f"No Python ≥3.11 found. Tried: {candidates}. "
@@ -136,7 +136,11 @@ def create_venv(python_cmd: str, venv_dir: Path) -> None:
             callers can surface them to the user verbatim.
     """
     args = python_cmd.split() + ["-m", "venv", str(venv_dir)]
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=60)
+    except subprocess.TimeoutExpired as e:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        raise SetupError(f"python -m venv timed out after {e.timeout}s") from e
     if result.returncode != 0:
         raise SetupError(
             f"python -m venv failed (exit {result.returncode}):\n"
@@ -199,7 +203,11 @@ def pip_install(venv_dir: Path, version: str) -> None:
     # shlex.split handles both plain package specs and path/editable forms
     # (e.g. "/path/to/repo" or "-e /path/to/repo").
     args = [str(venv_python), "-m", "pip", "install", *shlex.split(pip_spec)]
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=180)
+    except subprocess.TimeoutExpired as e:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        raise SetupError(f"pip install timed out after {e.timeout}s — check network") from e
     if result.returncode != 0:
         # Wipe partial state per spec § 6 F3
         shutil.rmtree(venv_dir, ignore_errors=True)
@@ -227,7 +235,11 @@ def verify_import(venv_dir: Path) -> None:
     """
     venv_python = get_venv_python(venv_dir)
     args = [str(venv_python), "-c", "import claude_wayfinder"]
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=15)
+    except subprocess.TimeoutExpired as e:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        raise SetupError(f"import check timed out after {e.timeout}s") from e
     if result.returncode != 0:
         shutil.rmtree(venv_dir, ignore_errors=True)
         raise SetupError(

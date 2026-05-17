@@ -121,7 +121,7 @@ jobs:
       - name: Run skill smoke test
         env:
           CLAUDE_WAYFINDER_PIP_SPEC: ${{ github.workspace }}
-        run: uv run --no-sync pytest tests/integration/test_setup_skill.py tests/test_skill_pipeline_sync.py -v
+        run: uv run --no-sync pytest tests/integration/test_setup_skill.py -v
 
   # ---------------------------------------------------------------------------
   # Validate plugin manifest
