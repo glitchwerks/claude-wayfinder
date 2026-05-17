@@ -277,3 +277,42 @@ test("check-catalog-health emits STALE banner when flag version differs from plu
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("check-catalog-health proceeds silently when flag VALID and import probe passes", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const { pluginDataDir, probeCmdEnv } = plantValidFlag(tmp, "ok");
+    // Point catalog to a non-existent file — if the probe gate doesn't short-circuit,
+    // the hook will emit a CATALOG ERROR banner (not a setup banner).
+    // We just verify no setup banner appears.
+    const result = runHookWithPluginData({
+      pluginData: pluginDataDir,
+      probeCmdEnv,
+    });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    // No setup banner should appear when probe passes.
+    assert.doesNotMatch(result.stdout, /requires setup/s);
+    assert.doesNotMatch(result.stdout, /fails import probe/s);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("check-catalog-health deletes flag and emits BROKEN banner when import probe fails", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const { pluginDataDir, probeCmdEnv } = plantValidFlag(tmp, "fail");
+    const flagPath = path.join(pluginDataDir, "setup-state.json");
+    assert.ok(fs.existsSync(flagPath), "Flag should exist before hook run");
+    const result = runHookWithPluginData({
+      pluginData: pluginDataDir,
+      probeCmdEnv,
+    });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    assert.match(result.stdout, /fails import probe.*\/setup-wayfinder/s);
+    // Flag should have been deleted on probe failure.
+    assert.ok(!fs.existsSync(flagPath), "flag file should have been deleted on probe failure");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
