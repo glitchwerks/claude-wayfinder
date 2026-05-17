@@ -109,6 +109,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code@2.1.143
+
+      - name: Validate plugin manifest (official)
+        run: claude plugin validate .claude-plugin/plugin.json
+
       # verified 2026-05-13 via gh api repos/astral-sh/setup-uv/git/refs/tags/v8.1.0
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
