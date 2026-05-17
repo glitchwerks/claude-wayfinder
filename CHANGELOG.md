@@ -6,6 +6,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-05-17
+
+Patch release shipping a `CLAUDE_WAYFINDER_PYTHON` env-var override for
+consumers whose `python` on PATH does not have `claude_wayfinder` importable
+(e.g. the package is installed into a non-activated venv that the plugin's
+hook child process cannot discover). This is a v0.3.x stopgap — the canonical
+fix is a `${CLAUDE_PLUGIN_DATA}` SessionStart-materialised venv per Anthropic's
+documented plugin pattern, tracked in #81 and deferred to a future release line.
+
 ### Fixed
 
 - **`refresh-catalog-on-stale.js` now respects `CLAUDE_WAYFINDER_PYTHON` env var.**
