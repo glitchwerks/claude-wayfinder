@@ -46,14 +46,14 @@ const catalogPath = process.env.DISPATCH_CATALOG_PATH || DEFAULT_CATALOG_PATH;
 // If setup has not been completed (MISSING), is out of date (STALE), or the
 // venv is broken (BROKEN), exit silently. The SessionStart banner in
 // check-catalog-health.js surfaces the issue to the user. Per spec § 4.4.
-const _setupState = readSetupState(getCurrentVersion());
-if (_setupState.status !== "VALID") {
+const setupState = readSetupState(getCurrentVersion());
+if (setupState.status !== "VALID") {
   process.exit(0);
 }
 
 // Setup is VALID: resolve the venv Python interpreter for catalog generation.
 // This replaces the v0.3.x CLAUDE_WAYFINDER_PYTHON discovery scaffolding.
-const venvPython = getVenvPython(_setupState.flag.venv_path);
+const venvPython = getVenvPython(setupState.flag.venv_path);
 
 // Default generator: invoke the plugin's CLI as a Python module.
 //

@@ -298,6 +298,22 @@ test("check-catalog-health proceeds silently when flag VALID and import probe pa
   }
 });
 
+test("check-catalog-health falls back to default probe when PROBE_CMD contains malformed JSON", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const { pluginDataDir } = plantValidFlag(tmp, "ok");
+    const result = runHookWithPluginData({
+      pluginData: pluginDataDir,
+      probeCmdEnv: "this is not valid json {{{",
+    });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    // Should emit the internal-error warning about the malformed seam.
+    assert.match(result.stdout, /CLAUDE_WAYFINDER_PROBE_CMD malformed JSON/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("check-catalog-health deletes flag and emits BROKEN banner when import probe fails", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
   try {

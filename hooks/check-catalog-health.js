@@ -59,16 +59,34 @@ const { readSetupState, getCurrentVersion, getVenvPython } = require("./lib/setu
   let probeResult;
   if (process.env.CLAUDE_WAYFINDER_PROBE_CMD) {
     // Test seam: value is a JSON array ["prog", "arg1", ...]
-    const [probeProg, ...probeArgs] = JSON.parse(process.env.CLAUDE_WAYFINDER_PROBE_CMD);
-    probeResult = spawnSync(probeProg, probeArgs, { encoding: "utf8" });
-  } else {
+    let probeProg, probeArgs;
+    try {
+      [probeProg, ...probeArgs] = JSON.parse(process.env.CLAUDE_WAYFINDER_PROBE_CMD);
+    } catch (err) {
+      // Malformed JSON in the test seam — fall through to the default probe path
+      // rather than crashing, so the hook remains usable even with a bad override.
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "SessionStart",
+            additionalContext: `⚠ claude-wayfinder internal error: CLAUDE_WAYFINDER_PROBE_CMD malformed JSON — ${err.message}. Falling back to default probe.`,
+          },
+        })
+      );
+      probeProg = null; // sentinel: skip the CLAUDE_WAYFINDER_PROBE_CMD branch
+    }
+    if (probeProg !== null) {
+      probeResult = spawnSync(probeProg, probeArgs, { encoding: "utf8" });
+    }
+  }
+  if (!probeResult) {
     probeResult = spawnSync(
       getVenvPython(setupState.flag.venv_path),
       ["-c", "import claude_wayfinder"],
       { encoding: "utf8" }
     );
   }
-  if (probeResult.status !== 0) {
+  if (probeResult.status !== 0 || probeResult.error) {
     // Flag is structurally valid but the venv is corrupt. Delete the flag so the
     // next session sees MISSING and re-prompts the user.
     const { _computePluginDataDir } = require("./lib/setup-state.js");
