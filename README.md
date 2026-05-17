@@ -20,7 +20,7 @@ For the design rationale, see [`docs/design.md`](docs/design.md). For the algori
 
 ## Install (Claude Code users)
 
-**Requires Python >= 3.11 on `$PATH`.**
+**Requires Python >= 3.11.** The setup skill discovers Python automatically; it does not need to be on your `$PATH`.
 
 Inside Claude Code, run these two commands:
 
@@ -29,31 +29,30 @@ Inside Claude Code, run these two commands:
 /plugin install claude-wayfinder@claude-wayfinder
 ```
 
-### Troubleshooting: `[CATALOG REFRESH FAILED] ... No module named claude_wayfinder`
+### Troubleshooting
 
-If the hook reports it cannot import `claude_wayfinder`, the `python` on your
-interactive shell PATH does not have the package installed (typical when you
-installed into a non-activated venv).
+#### `claude-wayfinder requires setup` banner on session start
 
-Set `CLAUDE_WAYFINDER_PYTHON` in your environment to the absolute path of a
-Python interpreter that has the package:
+The plugin uses a venv-based architecture introduced in v0.4 ([#99](https://github.com/glitchwerks/claude-wayfinder/issues/99)). On first install you will see a SessionStart banner:
 
-```sh
-# POSIX — add to ~/.bashrc or ~/.zshrc
-export CLAUDE_WAYFINDER_PYTHON=/path/to/.venv/bin/python
+> ⚠ claude-wayfinder requires setup. Run /setup-wayfinder to materialize the Python venv.
 
-# Windows (PowerShell profile)
-$env:CLAUDE_WAYFINDER_PYTHON = "C:\Users\you\.venv\Scripts\python.exe"
-```
+Run `/setup-wayfinder` once. The skill will:
 
-Or activate your venv before launching Claude Code so the correct `python` is
-first on `$PATH`.
+1. Discover a Python >= 3.11 on your machine.
+2. Create a venv at `~/.claude/plugins/data/claude-wayfinder-claude-wayfinder/venv/`.
+3. Install `claude-wayfinder` from PyPI.
+4. Write a setup-state flag so subsequent sessions know setup is complete.
 
-`CLAUDE_WAYFINDER_PYTHON` is a v0.3.4 stopgap. The canonical fix — a
-`${CLAUDE_PLUGIN_DATA}` SessionStart-materialised venv so the hook always uses
-the right interpreter — is tracked in
-[#81](https://github.com/glitchwerks/claude-wayfinder/issues/81) and deferred
-to a future release.
+The same skill runs again after plugin updates — a `STALE` banner will prompt you.
+
+#### "No Python >= 3.11 found"
+
+The skill will ask you for an absolute path. Provide one such as `/usr/local/bin/python3.12` or `C:\Python313\python.exe`. The path is persisted in the setup-state flag for re-runs.
+
+#### Setup completed but dispatch still does not fire
+
+Open a new session. Hooks read the setup-state flag at session start; an in-progress session does not pick up the flag retroactively.
 
 ## How to use it
 
@@ -105,7 +104,9 @@ Minimum path from zero to a working real-catalog `/dispatch`:
 /plugin marketplace add glitchwerks/claude-wayfinder
 ```
 
-**2. Build a catalog** — run this console script once (and again whenever your skill or agent frontmatter changes):
+**2. One-time setup** — when the next session starts, the SessionStart hook will show a setup banner. Run `/setup-wayfinder` once to materialize the Python venv. See [Troubleshooting](#troubleshooting) for details.
+
+**3. Build a catalog** — run this console script once (and again whenever your skill or agent frontmatter changes):
 
 ```bash
 claude-wayfinder catalog build \
@@ -115,7 +116,7 @@ claude-wayfinder catalog build \
   --log ~/.claude/dispatch-catalog-build.log
 ```
 
-**3. Set `$DISPATCH_CATALOG_PATH`** — in your shell profile:
+**4. Set `$DISPATCH_CATALOG_PATH`** — in your shell profile:
 
 ```bash
 export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
@@ -123,7 +124,7 @@ export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
 
 Without this env var, `/dispatch` runs in demo mode against bundled fixtures and does not route your tasks.
 
-**4. Add `Skill` to your router agent's `tools:` frontmatter** — `/dispatch` is invoked as a skill, so the router must have `Skill` in its tool list. See [`docs/integration.md`](docs/integration.md) for the full router-agent prompt snippet and catalog refresh patterns.
+**5. Add `Skill` to your router agent's `tools:` frontmatter** — `/dispatch` is invoked as a skill, so the router must have `Skill` in its tool list. See [`docs/integration.md`](docs/integration.md) for the full router-agent prompt snippet and catalog refresh patterns.
 
 ## Try it (no Claude Code required)
 
