@@ -25,7 +25,23 @@ function readSetupState(currentVersion) {
     return { status: "MISSING" };
   }
   // Required fields per spec § 4.2
-  if (!flag.version || !flag.venv_path) {
+  if (typeof flag.version !== "string" || !flag.version.trim()) {
+    // Flag is present but version field is malformed (empty, null, non-string).
+    // This is corrupt-flag territory, not first-install — log a diagnostic so the
+    // user can see something is wrong (e.g., interrupted setup writes).
+    if (flag.version !== undefined) {
+      process.stderr.write(
+        `[setup-state] flag has malformed version field: ${JSON.stringify(flag.version)}\n`
+      );
+    }
+    return { status: "MISSING" };
+  }
+  if (typeof flag.venv_path !== "string" || !flag.venv_path.trim()) {
+    if (flag.venv_path !== undefined) {
+      process.stderr.write(
+        `[setup-state] flag has malformed venv_path field: ${JSON.stringify(flag.venv_path)}\n`
+      );
+    }
     return { status: "MISSING" };
   }
   if (flag.version !== currentVersion) {
@@ -62,12 +78,12 @@ function getCurrentVersion() {
     const content = fs.readFileSync(pyprojectPath, "utf8");
     // Match `version = "X.Y.Z"` inside the [project] table
     const match = content.match(/\[project\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
-    if (match) return match[1];
+    if (match) return match[1].trim();
   }
   const pluginJsonPath = path.join(pluginRoot, ".claude-plugin", "plugin.json");
   if (fs.existsSync(pluginJsonPath)) {
     const pluginJson = JSON.parse(fs.readFileSync(pluginJsonPath, "utf8"));
-    if (pluginJson.version) return pluginJson.version;
+    if (pluginJson.version) return String(pluginJson.version).trim();
   }
   throw new Error(
     "Cannot resolve plugin version: pyproject.toml and plugin.json both unreadable or version-less"

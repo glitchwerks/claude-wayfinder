@@ -157,6 +157,24 @@ test("getCurrentVersion reads version from pyproject.toml", () => {
   assert.match(result, /^\d+\.\d+\.\d+/, `Expected semver-like version, got: ${result}`);
 });
 
+test("getCurrentVersion trims whitespace from version string", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-root-trim-"));
+  const restore = process.env.CLAUDE_PLUGIN_ROOT;
+  process.env.CLAUDE_PLUGIN_ROOT = tempRoot;
+  try {
+    fs.mkdirSync(path.join(tempRoot, ".claude-plugin"));
+    fs.writeFileSync(
+      path.join(tempRoot, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "test", version: "  0.4.0  " })
+    );
+    assert.equal(getCurrentVersion(), "0.4.0");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+    if (restore === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = restore;
+  }
+});
+
 test("getCurrentVersion falls back to plugin.json when pyproject.toml absent", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-root-"));
   const restore = process.env.CLAUDE_PLUGIN_ROOT;
@@ -175,6 +193,26 @@ test("getCurrentVersion falls back to plugin.json when pyproject.toml absent", (
     if (restore === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
     else process.env.CLAUDE_PLUGIN_ROOT = restore;
   }
+});
+
+test("readSetupState logs diagnostic when flag has malformed version (empty string)", () => {
+  withTempPluginData((dir) => {
+    fs.writeFileSync(
+      path.join(dir, "setup-state.json"),
+      JSON.stringify({ version: "", venv_path: "/tmp/venv", interpreter: "x", installed_at: "y" })
+    );
+    // Capture stderr writes
+    const origWrite = process.stderr.write.bind(process.stderr);
+    let captured = "";
+    process.stderr.write = (chunk) => { captured += chunk; return true; };
+    try {
+      const result = readSetupState("0.4.0");
+      assert.equal(result.status, "MISSING");
+      assert.match(captured, /malformed version field/);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  });
 });
 
 // ─── getVenvPython platform-aware ───────────────────────────────────────────
