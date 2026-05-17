@@ -6,6 +6,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`refresh-catalog-on-stale.js` now respects `CLAUDE_WAYFINDER_PYTHON` env var.**
+  Consumers whose `python` on PATH does not have `claude_wayfinder` importable
+  (e.g. installed into a non-activated venv) can set `CLAUDE_WAYFINDER_PYTHON`
+  to the absolute path of a Python interpreter that does. Spawn is now an
+  explicit args-array invocation, defending against Windows paths with spaces
+  in the override value. The `DISPATCH_GENERATOR_CMD` test-override path is
+  preserved unchanged — all existing tests continue to pass. Closes #82.
+  Refs #80. This is a v0.3.4 stopgap; the canonical fix
+  (`${CLAUDE_PLUGIN_DATA}` SessionStart-materialised venv per Anthropic's
+  documented plugin pattern) is tracked in #81 and deferred to a future
+  release. (#84)
+
 ## [0.3.3] — 2026-05-16
 
 Patch release fixing a regression introduced in v0.3.2 (technically PR #67, which
