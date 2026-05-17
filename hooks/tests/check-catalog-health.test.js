@@ -232,3 +232,27 @@ test("check-catalog-health emits MISSING banner when no setup-state flag", () =>
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("check-catalog-health emits STALE banner when flag version differs from plugin version", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const venvDir = path.join(tmp, "venv");
+    fs.mkdirSync(path.join(venvDir, process.platform === "win32" ? "Scripts" : "bin"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(tmp, "setup-state.json"),
+      JSON.stringify({
+        version: "0.0.0-old",
+        venv_path: venvDir,
+        interpreter: "/usr/bin/python3.12",
+        installed_at: "2026-05-17T19:00:00Z",
+      })
+    );
+    const result = runHookWithPluginData({ pluginData: tmp });
+    assert.equal(result.status, 0, `Hook exited non-zero: ${result.stderr}`);
+    assert.match(result.stdout, /venv is for v0\.0\.0-old but plugin is v/s);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
