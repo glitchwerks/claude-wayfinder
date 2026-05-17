@@ -1,20 +1,26 @@
 """Tests for the ``python -m claude_wayfinder catalog build`` subcommand.
 
-Covers two behaviors:
+Covers three behaviors:
   (a) ``catalog build --help`` exits 0 and lists all expected flags.
   (b) End-to-end smoke — ``catalog build`` on a fixture skills-dir and
       agents-dir produces a valid ``dispatch-catalog.json``.
+  (c) Default arg resolution — ``catalog build`` with no args resolves the
+      four required paths from ``CLAUDE_HOME`` (or ``~/.claude`` when unset).
 
 The tests exercise the real entry point via subprocess so that the full
-argparse / delegation chain is exercised, not mocked internals.
+argparse / delegation chain is exercised, not mocked internals.  The default-
+resolution tests (c) call the internal helper directly to avoid needing a real
+filesystem tree at ``~/.claude``.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -209,3 +215,167 @@ class TestCatalogBuildSmoke:
             f"stderr: {result.stderr}"
         )
         assert result.stdout.strip(), "demo produced no stdout output."
+
+
+# ---------------------------------------------------------------------------
+# (c) Default arg resolution — issue #87
+# ---------------------------------------------------------------------------
+
+
+class TestCatalogBuildDefaults:
+    """``catalog build`` with no args must resolve four paths from CLAUDE_HOME.
+
+    These tests call the internal ``_resolve_catalog_build_defaults`` helper
+    in ``build_catalog`` directly, rather than using subprocess, so they can
+    mock ``Path.home()`` and ``os.environ`` without needing a real
+    ``~/.claude`` tree on disk.
+
+    Three sub-scenarios:
+      1. No args given, ``CLAUDE_HOME`` unset → default to ``Path.home() / ".claude"``.
+      2. No args given, ``CLAUDE_HOME`` set → default to ``Path($CLAUDE_HOME)``.
+      3. Explicit ``--skills-dir foo`` overrides only that arg; the rest default.
+    """
+
+    def test_no_args_defaults_to_home_dot_claude(self, tmp_path: Path) -> None:
+        """With no args and ``CLAUDE_HOME`` unset, all four paths default to
+        ``~/.claude/<subpath>``.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory (unused but required
+                for consistency with sibling tests that write output files).
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        fake_home = tmp_path / "fake_home"
+        with patch("claude_wayfinder.build_catalog.Path.home", return_value=fake_home):
+            env_without_claude_home = {
+                k: v for k, v in os.environ.items() if k != "CLAUDE_HOME"
+            }
+            with patch.dict(os.environ, env_without_claude_home, clear=True):
+                defaults = _resolve_catalog_build_defaults(
+                    skills_dir=None,
+                    agents_dir=None,
+                    out=None,
+                    log=None,
+                )
+
+        expected_base = fake_home / ".claude"
+        assert defaults["skills_dir"] == expected_base / "skills", (
+            f"Expected skills_dir={expected_base / 'skills'}, got {defaults['skills_dir']}"
+        )
+        assert defaults["agents_dir"] == expected_base / "agents", (
+            f"Expected agents_dir={expected_base / 'agents'}, got {defaults['agents_dir']}"
+        )
+        assert defaults["out"] == expected_base / "state" / "dispatch-catalog.json", (
+            f"Expected out={expected_base / 'state' / 'dispatch-catalog.json'}, "
+            f"got {defaults['out']}"
+        )
+        assert defaults["log"] == expected_base / "state" / "catalog-generation.log", (
+            f"Expected log={expected_base / 'state' / 'catalog-generation.log'}, "
+            f"got {defaults['log']}"
+        )
+
+    def test_no_args_with_claude_home_env_set(self, tmp_path: Path) -> None:
+        """With ``CLAUDE_HOME`` set, all four paths default to ``$CLAUDE_HOME/<subpath>``.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory used as a fake
+                ``CLAUDE_HOME``.
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        fake_claude_home = tmp_path / "custom_claude"
+        with patch.dict(os.environ, {"CLAUDE_HOME": str(fake_claude_home)}):
+            defaults = _resolve_catalog_build_defaults(
+                skills_dir=None,
+                agents_dir=None,
+                out=None,
+                log=None,
+            )
+
+        assert defaults["skills_dir"] == fake_claude_home / "skills", (
+            f"Expected skills_dir={fake_claude_home / 'skills'}, "
+            f"got {defaults['skills_dir']}"
+        )
+        assert defaults["agents_dir"] == fake_claude_home / "agents", (
+            f"Expected agents_dir={fake_claude_home / 'agents'}, "
+            f"got {defaults['agents_dir']}"
+        )
+        assert defaults["out"] == fake_claude_home / "state" / "dispatch-catalog.json", (
+            f"Expected out={fake_claude_home / 'state' / 'dispatch-catalog.json'}, "
+            f"got {defaults['out']}"
+        )
+        assert defaults["log"] == fake_claude_home / "state" / "catalog-generation.log", (
+            f"Expected log={fake_claude_home / 'state' / 'catalog-generation.log'}, "
+            f"got {defaults['log']}"
+        )
+
+    def test_explicit_skills_dir_overrides_default(self, tmp_path: Path) -> None:
+        """An explicit ``--skills-dir`` value is preserved; other three args default.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory; its ``skills``
+                subdirectory is used as the explicit skills_dir.
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        explicit_skills = tmp_path / "my_skills"
+        fake_claude_home = tmp_path / "custom_claude"
+        with patch.dict(os.environ, {"CLAUDE_HOME": str(fake_claude_home)}):
+            defaults = _resolve_catalog_build_defaults(
+                skills_dir=explicit_skills,
+                agents_dir=None,
+                out=None,
+                log=None,
+            )
+
+        assert defaults["skills_dir"] == explicit_skills, (
+            f"Explicit skills_dir must not be overridden. Got {defaults['skills_dir']}"
+        )
+        # The other three should still default.
+        assert defaults["agents_dir"] == fake_claude_home / "agents"
+        assert defaults["out"] == fake_claude_home / "state" / "dispatch-catalog.json"
+        assert defaults["log"] == fake_claude_home / "state" / "catalog-generation.log"
+
+    def test_bare_invocation_does_not_emit_argparse_required_error(
+        self, tmp_path: Path
+    ) -> None:
+        """``catalog build`` with no flags must not emit an argparse "required" error.
+
+        Exit code 2 from argparse signals missing required arguments and
+        produces ``error: the following arguments are required`` in stderr.
+        After issue #87 is fixed, the four formerly-required args must be
+        optional so bare invocation gets past argparse without that message.
+
+        Note: the build itself may still exit non-zero or emit other warnings
+        (e.g. "no router agent declared") when the fake ``CLAUDE_HOME`` tree
+        is nearly empty — that is acceptable.  The *only* failure mode we
+        guard against here is argparse rejecting the invocation as if the
+        args were still required.
+
+        Args:
+            tmp_path: Pytest-provided temp directory used as a fake
+                ``CLAUDE_HOME``.
+        """
+        # Run with a fake CLAUDE_HOME that exists but has empty source dirs —
+        # this avoids touching the real ~/.claude while letting the CLI get
+        # past argparse into the actual build stage.
+        fake_home = tmp_path / "fake_claude"
+        fake_home.mkdir()
+        (fake_home / "skills").mkdir()
+        (fake_home / "agents").mkdir()
+        (fake_home / "state").mkdir()
+
+        env = {**os.environ, "CLAUDE_HOME": str(fake_home)}
+        result = subprocess.run(
+            [sys.executable, "-m", "claude_wayfinder", "catalog", "build"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        argparse_required_msg = "the following arguments are required"
+        assert argparse_required_msg not in result.stderr, (
+            "argparse still treats the args as required after issue #87 fix.\n"
+            f"stderr: {result.stderr}"
+        )

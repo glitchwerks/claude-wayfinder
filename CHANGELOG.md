@@ -6,6 +6,21 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`catalog build` bare invocation now succeeds without `DISPATCH_GENERATOR_CMD` override.**
+  The four args `--skills-dir`, `--agents-dir`, `--out`, and `--log` are now optional,
+  resolving at runtime to `${CLAUDE_HOME}/skills`, `/agents`,
+  `/state/dispatch-catalog.json`, and `/state/catalog-generation.log` respectively.
+  `CLAUDE_HOME` defaults to `~/.claude` when unset.  This means the bundled
+  `refresh-catalog-on-stale.js` hook's bare `python -m claude_wayfinder catalog build`
+  invocation Just Works for consumers who do not set `DISPATCH_GENERATOR_CMD`.
+  This is the third regression in three releases — v0.3.2 (ENOENT on the bare
+  entry-point shim), v0.3.3 (wrong interpreter when venv is not activated),
+  v0.3.4 (missing required args, this issue).  The durable structural fix is
+  defaults at the CLI, not at the hook: the hook ships a bare invocation and
+  delegates path resolution to the CLI.  Closes #87.
+
 ## [0.3.4] — 2026-05-17
 
 Patch release shipping a `CLAUDE_WAYFINDER_PYTHON` env-var override for
