@@ -6,6 +6,39 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.6] — 2026-05-17
+
+Patch release tightening consistency and CI coverage with no code-behavior
+changes. Plugin description alignment ensures users see one voice across the
+marketplace listing, post-install fields, and package metadata. The official
+Anthropic validator joining CI closes the gap that allowed the
+`hooks/hooks.json` flat-array schema bug to ship through v0.1.0–v0.3.1 — the
+homegrown manifest test covers field-level conventions; the official validator
+covers documented schema shape. No consumer migration required.
+
+### Changed
+
+- **Plugin description unified to canonical marketplace text across all fields.**
+  `plugin.json`, `pyproject.toml`, and the GitHub repo description now all read:
+  _"Helps Claude make deterministic, auditable choices about which agent and
+  skills to use for a given task — replacing prose-scanning agent/skill
+  selection with a typed scoring kernel."_ Previously the post-install fields
+  used mechanism-focused wording while the marketplace used outcome-focused
+  wording; users now see a consistent voice at every touchpoint.
+  PR #91, closes #75.
+
+### Added
+
+- **`claude plugin validate` added as official manifest gate in CI.**
+  The `Validate Plugin Manifest` job now runs `@anthropic-ai/claude-code@2.1.143`
+  (pinned) alongside the existing `tests/test_plugin_manifests.py`. The official
+  validator enforces the documented manifest schema (`hooks/hooks.json` shape,
+  `userConfig` block, etc.); the homegrown test enforces field-level conventions
+  the validator does not cover. They are complementary. Closes the gap that let
+  the `hooks/hooks.json` flat-array schema bug (#70) ship undetected before
+  being caught and fixed by #71.
+  PR #92, closes #72.
+
 ## [0.3.5] — 2026-05-17
 
 Patch release shipping CLI-side defaults for `catalog build`. v0.3.4 fixed the
