@@ -33,6 +33,9 @@ claude-wayfinder-match = "claude_wayfinder.match:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_wayfinder"]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100
