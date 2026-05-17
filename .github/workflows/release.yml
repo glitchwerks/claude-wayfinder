@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Build sdist + wheel
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # verified 2026-05-17 via gh api repos/astral-sh/setup-uv/git/refs/tags/v8.1.0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          python-version: "3.12"
+          activate-environment: "true"
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Upload built distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # ---------------------------------------------------------------------------
+  # Publish to PyPI (stable tags only — no -rc / -alpha / -beta)
+  # ---------------------------------------------------------------------------
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref, '-rc') && !contains(github.ref, '-alpha') && !contains(github.ref, '-beta') }}
+    environment:
+      name: pypi
+      url: https://pypi.org/p/claude-wayfinder
+    permissions:
+      id-token: write  # Required for trusted publisher OIDC
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        # verified 2026-05-17 via gh api repos/pypa/gh-action-pypi-publish/git/tags/<sha>
+        uses: pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0  # v1.9.0
+
+  # ---------------------------------------------------------------------------
+  # Publish to TestPyPI (pre-release tags: -rc / -alpha / -beta)
+  # ---------------------------------------------------------------------------
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    if: contains(github.ref, '-rc') || contains(github.ref, '-alpha') || contains(github.ref, '-beta')
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/claude-wayfinder
+    permissions:
+      id-token: write  # Required for trusted publisher OIDC
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        # verified 2026-05-17 via gh api repos/pypa/gh-action-pypi-publish/git/tags/<sha>
+        uses: pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0  # v1.9.0
+        with:
+          repository-url: https://test.pypi.org/legacy/
