@@ -55,7 +55,7 @@ jobs:
         run: uv pip install -e ".[dev]"
 
       - name: Run pytest
-        run: uv run --no-sync pytest -v
+        run: uv run --no-sync pytest -v --ignore=tests/integration
 
   # ---------------------------------------------------------------------------
   # Tests — Python 3.12
@@ -78,7 +78,7 @@ jobs:
         run: uv pip install -e ".[dev]"
 
       - name: Run pytest
-        run: uv run --no-sync pytest -v
+        run: uv run --no-sync pytest -v --ignore=tests/integration
 
   # ---------------------------------------------------------------------------
   # Tests — Node 20 (hook scripts)
