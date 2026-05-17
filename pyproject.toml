@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "claude-wayfinder"
 version = "0.3.5"
-description = "A typed, auditable dispatch matcher for Claude Code — post-cognitive routing with a deterministic-first scoring kernel."
+description = "Helps Claude make deterministic, auditable choices about which agent and skills to use for a given task — replacing prose-scanning agent/skill selection with a typed scoring kernel."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Christopher Beaulieu" }]
