@@ -2035,11 +2035,15 @@ EOF
 
 ---
 
-## Phase 5 — CI matrix expansion (macOS + Windows)
+## Phase 5 — CI matrix expansion (macOS + Windows) — **DEFERRED**
 
-**Sub-issue:** "Add macOS and Windows skill-smoke jobs to CI matrix"
+> **Status (2026-05-17): DEFERRED indefinitely.** Skipped to avoid burning GitHub Actions runner-minutes on platforms the project's sole current user does not run. The maintainer develops on Windows, and macOS / Linux smoke coverage is unjustified at the current adoption level. Inquisitor pass-2 charge 18 ("macOS missing from CI") is acknowledged and accepted as a YAGNI trade-off; revisit if the project gains external adoption.
+>
+> If revived, this section becomes the implementation template — task structure below is preserved verbatim. The phase numbering shifts accordingly: what was Phase 6 (Documentation) and Phase 7 (PyPI publication) proceed without a Phase 5 PR.
 
-**PR scope:** One file modification. Closes inquisitor pass-2 charge 18.
+**Sub-issue:** "Add macOS and Windows skill-smoke jobs to CI matrix" — _not filed; will be filed if/when this phase is revived._
+
+**PR scope:** One file modification. _Would close_ inquisitor pass-2 charge 18.
 
 **Files:**
 - Modify: `.github/workflows/ci.yml`
