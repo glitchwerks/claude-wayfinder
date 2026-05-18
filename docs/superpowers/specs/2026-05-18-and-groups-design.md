@@ -1,9 +1,25 @@
+---
+touches:
+  - src/claude_wayfinder/match.py
+  - src/claude_wayfinder/build_catalog.py
+  - src/claude_wayfinder/_dispatch.py
+  - tests/test_match.py
+  - tests/test_build_catalog.py
+  - docs/design/trigger-schema.md
+skills_relevant:
+  - project-review
+tracking: glitchwerks/claude-wayfinder#135
+related: glitchwerks/claude-wayfinder#138
+status: approved
+---
+
 # AND-group conjunctive triggers — design
 
 Tracking issue: [#135](https://github.com/glitchwerks/claude-wayfinder/issues/135)
 Related: [#138](https://github.com/glitchwerks/claude-wayfinder/issues/138) (mixed-content disambiguation — follow-up, orthogonal)
 Author: brainstorming session 2026-05-18 (cbeaulieu-gt + Claude)
 Status: **design approved — input to writing-plans**
+Reviewed: project-reviewer 2026-05-18 — APPROVE_WITH_CHANGES, findings addressed in plan revisions
 
 ---
 
@@ -248,7 +264,7 @@ No catalog rebuild required for entries that don't author groups. Entries adopti
 1. **Matcher** honors `keyword_groups` per § 5 deterministically. Order-independent across catalog loads (verified by a replay test).
 2. **Catalog builder** picks up `keyword_groups:` from skill sidecars and agent frontmatter. Missing field → empty tuple, no error.
 3. **Validator** emits the errors/warnings in § 6. Build fails on errors; warnings appear in `catalog-generation.log`.
-4. **Regression locked**: replaying the 9,936 `matcher_decision` records from `~/.claude/state/dispatch-log.jsonl` against a no-groups catalog produces identical decisions to v0.4.2.
+4. **Regression locked via mathematical equivalence** (deliberate punt; project-reviewer C5): since no current production catalog entry declares `keyword_groups`, the scoring formula reduces to the v0.4.2 formula for every existing record. The full existing test suite passing in Task 9 step 9.1 — combined with the new "no groups = unchanged behavior" unit test in Task 3 — is the substantive regression lock; no separate replay-against-`~/.claude/state/dispatch-log.jsonl` task is required. A full live-log replay can be added later if/when production catalogs begin authoring `keyword_groups` and behavior drift becomes a real risk.
 5. **Forward test**: a regression fixture with the 5 sample prompts in § 7.1 plus 3–5 short verb-noun prompts that would resolve correctly with the doc-writer group from § 7.1. (These prompts are synthetic — the real logs do not contain them — and are kept under `src/claude_wayfinder/fixtures/and_groups/` for replay.)
 6. **`docs/design/trigger-schema.md`** updated with §§ 2.x (schema reference for `keyword_groups`), § 4.x (matching rule), § 6.x (validation rule), § 9.x (authoring example).
 7. **`matcher_decision.output.rationale`** lists groups that fired (e.g. `"matched group [verbs+nouns] on doc-writer; singleton docs suppressed"`).
