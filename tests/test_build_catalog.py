@@ -2858,6 +2858,265 @@ def test_disabled_skill_applicable_skills_ref_falls_back_to_external_log(
 
 
 # ---------------------------------------------------------------------------
+# Issue #132 — stale disabled-override: bare vs explicit-flag consistency
+# ---------------------------------------------------------------------------
+
+
+def _make_minimal_claude_home(root: Path) -> dict:
+    """Create a minimal claude-home fixture for issue-132 regression tests.
+
+    Builds the directory tree:
+    ```
+    <root>/
+      skills/my-skill/SKILL.md
+      agents/router.md
+      plugins/installed_plugins.json      (no plugins)
+      triggers/commit-commands/clean_gone.yml  (stale disabled override)
+      triggers/builtin/                   (empty — no builtin sidecars)
+      state/                              (output dir)
+    ```
+
+    Args:
+        root: Temporary directory root.
+
+    Returns:
+        A dict with keys ``skills_dir``, ``agents_dir``, ``plugins_dir``,
+        ``triggers_dir``, ``builtin_dir``, ``state_dir`` pointing to the
+        corresponding sub-paths.
+    """
+    skills_dir = root / "skills"
+    agents_dir = root / "agents"
+    plugins_dir = root / "plugins"
+    triggers_dir = root / "triggers"
+    builtin_dir = triggers_dir / "builtin"
+    state_dir = root / "state"
+
+    # Owned skill (dormant — no triggers.yml, so no routing surface needed).
+    skill_dir = skills_dir / "my-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: my-skill\ndescription: Test skill.\n---\n",
+        encoding="utf-8",
+    )
+
+    # Owned agent with routable: false (suppresses the router-agent warning
+    # so stderr is clean and we can assert on the override warning alone).
+    agents_dir.mkdir()
+    (agents_dir / "router.md").write_text(
+        "---\nname: router\ndescription: Router.\nroutable: false\n---\n",
+        encoding="utf-8",
+    )
+
+    # Plugin manifest with no plugins installed.
+    plugins_dir.mkdir()
+    (plugins_dir / "installed_plugins.json").write_text(
+        '{"version": 2, "plugins": {}}',
+        encoding="utf-8",
+    )
+
+    # Stale disabled override: targets commit-commands:clean_gone which
+    # does NOT exist in the plugin-discovery index (exact file from issue #132).
+    override_dir = triggers_dir / "commit-commands"
+    override_dir.mkdir(parents=True)
+    (override_dir / "clean_gone.yml").write_text(
+        'disabled: true\nreason: "permanently broken — see issue #132"\n',
+        encoding="utf-8",
+    )
+
+    builtin_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir()
+
+    return {
+        "skills_dir": skills_dir,
+        "agents_dir": agents_dir,
+        "plugins_dir": plugins_dir,
+        "triggers_dir": triggers_dir,
+        "builtin_dir": builtin_dir,
+        "state_dir": state_dir,
+    }
+
+
+def test_stale_disabled_override_bare_invocation_exits_zero(
+    tmp_path: Path,
+) -> None:
+    """Bare-defaults invocation exits 0 when a stale disabled-override is present.
+
+    Regression test for issue #132: ``catalog build`` (no explicit flags)
+    must exit 0 and write a catalog even when a ``disabled: true`` override
+    file targets a plugin skill that is not in the discovery index.
+
+    The stale override must be warned in the log (warn-and-skip), not treated
+    as a fatal error.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    dirs = _make_minimal_claude_home(tmp_path)
+
+    # "Bare-defaults" style: all paths are the canonical CLAUDE_HOME defaults.
+    out = dirs["state_dir"] / "dispatch-catalog.json"
+    log = dirs["state_dir"] / "catalog-generation.log"
+
+    rc = build(
+        skills_dir=dirs["skills_dir"],
+        agents_dir=dirs["agents_dir"],
+        plugin_overrides_dir=dirs["triggers_dir"],
+        plugins_dir=dirs["plugins_dir"],
+        builtin_agents_dir=dirs["builtin_dir"],
+        corpus_path=None,
+        out_path=out,
+        log_path=log,
+        now="2026-05-18T00:00:00Z",
+    )
+
+    assert rc == 0, (
+        f"bare-defaults invocation must exit 0 on stale disabled-override; "
+        f"got {rc}"
+    )
+    assert out.exists(), (
+        "catalog must be written even when a stale disabled-override is present"
+    )
+    log_text = log.read_text(encoding="utf-8")
+    assert "disable override targets nonexistent entry" in log_text, (
+        f"expected stale-override warning in log; log:\n{log_text}"
+    )
+
+
+def test_stale_disabled_override_explicit_flags_exits_zero(
+    tmp_path: Path,
+) -> None:
+    """Explicit-flag invocation exits 0 when a stale disabled-override is present.
+
+    Regression test for issue #132 (paired with the bare-invocation test):
+    ``catalog build`` with all 5 dir flags explicit must also exit 0 and
+    write a catalog, with the same stale-override warning in the log.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    dirs = _make_minimal_claude_home(tmp_path)
+
+    # "Explicit-flag" style: different --out and --log paths (as in issue #132
+    # repro where the explicit call used ~/.claude/.tmp/ paths).
+    out = tmp_path / "explicit-out" / "dispatch-catalog.json"
+    out.parent.mkdir()
+    log = tmp_path / "explicit-out" / "catalog-generation.log"
+
+    rc = build(
+        skills_dir=dirs["skills_dir"],
+        agents_dir=dirs["agents_dir"],
+        plugin_overrides_dir=dirs["triggers_dir"],
+        plugins_dir=dirs["plugins_dir"],
+        builtin_agents_dir=dirs["builtin_dir"],
+        corpus_path=None,
+        out_path=out,
+        log_path=log,
+        now="2026-05-18T00:00:00Z",
+    )
+
+    assert rc == 0, (
+        f"explicit-flag invocation must exit 0 on stale disabled-override; "
+        f"got {rc}"
+    )
+    assert out.exists(), (
+        "catalog must be written even when a stale disabled-override is present"
+    )
+    log_text = log.read_text(encoding="utf-8")
+    assert "disable override targets nonexistent entry" in log_text, (
+        f"expected stale-override warning in log; log:\n{log_text}"
+    )
+
+
+def test_stale_disabled_override_both_invocations_consistent(
+    tmp_path: Path,
+) -> None:
+    """Bare and explicit-flag invocations produce the same exit code and warning.
+
+    Regression test for issue #132: the stale-override tombstone (disabled:
+    true targeting a nonexistent plugin entry) must produce:
+
+    * The **same exit code** (0) regardless of whether dir paths came from
+      defaults or were explicitly supplied.
+    * The **same warning text** in the catalog log (warn-and-skip, not fatal).
+    * A **complete catalog** written to disk in both cases.
+
+    This is the definitive consistency check: if either invocation exits
+    non-zero or fails to write a catalog, the regression is present.
+    """
+    import json
+
+    from claude_wayfinder.build_catalog import build
+
+    dirs = _make_minimal_claude_home(tmp_path)
+
+    # Bare-defaults invocation: writes to state/ (canonical default path).
+    out_bare = dirs["state_dir"] / "dispatch-catalog.json"
+    log_bare = dirs["state_dir"] / "catalog-generation.log"
+    rc_bare = build(
+        skills_dir=dirs["skills_dir"],
+        agents_dir=dirs["agents_dir"],
+        plugin_overrides_dir=dirs["triggers_dir"],
+        plugins_dir=dirs["plugins_dir"],
+        builtin_agents_dir=dirs["builtin_dir"],
+        corpus_path=None,
+        out_path=out_bare,
+        log_path=log_bare,
+        now="2026-05-18T00:00:00Z",
+    )
+
+    # Explicit-flag invocation: writes to a different output path (simulating
+    # the user's --out ~/.claude/.tmp/out.json pattern from the issue repro).
+    out_explicit = tmp_path / "tmp-out" / "dispatch-catalog.json"
+    out_explicit.parent.mkdir()
+    log_explicit = tmp_path / "tmp-out" / "catalog-generation.log"
+    rc_explicit = build(
+        skills_dir=dirs["skills_dir"],
+        agents_dir=dirs["agents_dir"],
+        plugin_overrides_dir=dirs["triggers_dir"],
+        plugins_dir=dirs["plugins_dir"],
+        builtin_agents_dir=dirs["builtin_dir"],
+        corpus_path=None,
+        out_path=out_explicit,
+        log_path=log_explicit,
+        now="2026-05-18T00:00:00Z",
+    )
+
+    # Both must exit 0 (permissive: warn-and-skip, not fail).
+    assert rc_bare == 0, (
+        f"bare-defaults invocation must exit 0; got {rc_bare}"
+    )
+    assert rc_explicit == 0, (
+        f"explicit-flag invocation must exit 0; got {rc_explicit}"
+    )
+    assert rc_bare == rc_explicit, (
+        f"bare ({rc_bare}) and explicit ({rc_explicit}) invocations must "
+        "produce the same exit code"
+    )
+
+    # Both must write a catalog.
+    assert out_bare.exists(), "bare invocation must write catalog"
+    assert out_explicit.exists(), "explicit-flag invocation must write catalog"
+
+    # Both catalogs must have the same entries (same source data).
+    cat_bare = json.loads(out_bare.read_text(encoding="utf-8"))
+    cat_explicit = json.loads(out_explicit.read_text(encoding="utf-8"))
+    assert len(cat_bare["entries"]) == len(cat_explicit["entries"]), (
+        f"entry counts differ: bare={len(cat_bare['entries'])}, "
+        f"explicit={len(cat_explicit['entries'])}"
+    )
+
+    # Both logs must contain the stale-override warning.
+    warn_text = "disable override targets nonexistent entry"
+    log_bare_text = log_bare.read_text(encoding="utf-8")
+    log_explicit_text = log_explicit.read_text(encoding="utf-8")
+    assert warn_text in log_bare_text, (
+        f"bare log missing stale-override warning; log:\n{log_bare_text}"
+    )
+    assert warn_text in log_explicit_text, (
+        f"explicit log missing stale-override warning; "
+        f"log:\n{log_explicit_text}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Issue #505 — Pass 2.6 builtin agent sidecars
 # ---------------------------------------------------------------------------
 
