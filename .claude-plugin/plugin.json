@@ -1,6 +1,6 @@
 {
   "name": "claude-wayfinder",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Helps Claude make deterministic, auditable choices about which agent and skills to use for a given task — replacing prose-scanning agent/skill selection with a typed scoring kernel.",
   "author": {
     "name": "Christopher Beaulieu",

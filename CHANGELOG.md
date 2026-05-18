@@ -6,17 +6,38 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-18
+
+Patch release: one user-visible bug fix (#134) plus regression-test
+coverage and CI hygiene work accumulated against v0.4.1.
+
 ### Fixed
 
-- `catalog build` no longer exits non-zero when a `disabled: true`
-  plugin-override file targets a plugin skill absent from the discovery
-  index (stale tombstone).  Both bare invocation (defaults) and
-  explicit-flag invocation now consistently exit 0 and write a complete
-  catalog; the stale override is warned and skipped in both cases. (#132)
 - `python -m claude_wayfinder dispatch` no longer emits a spurious
   `RuntimeWarning` about `claude_wayfinder.match` import order — the
   dispatch entry point now invokes `match.main()` in-process instead of
-  spawning a `python -m claude_wayfinder.match` subprocess. (#134)
+  spawning a `python -m claude_wayfinder.match` subprocess. The runpy
+  warning fired in the child because `claude_wayfinder/__init__.py`
+  eagerly re-exports from `claude_wayfinder.match`, so the submodule was
+  already in `sys.modules` when `runpy` tried to execute it as
+  `__main__`. (#134, PR #136)
+
+### Added
+
+- Regression test covering the no-router-agent + stale `disabled: true`
+  override warning-paths combo of `catalog build`. The behavior was
+  already correct in v0.4.1 (#124 added the discovery-default flags that
+  fixed the bare-invocation exit-1 path); this PR closes the coverage
+  gap so the warning-paths combo cannot silently regress. (#132, PR #133)
+
+### Maintenance
+
+- `actions/checkout` pinned to v6 across `ci.yml` and `release.yml`.
+  (#118, Renovate)
+- `actions/setup-node` pinned to v6 in `ci.yml`. (#121, Renovate)
+- `Test (Node)` CI job moved from Node 20 to Node 24. (#122, Renovate)
+- `actions/upload-artifact` v4 → v7 and `actions/download-artifact`
+  v4 → v8 in `release.yml`. (#126, Renovate)
 
 ## [0.4.1] — 2026-05-18
 
