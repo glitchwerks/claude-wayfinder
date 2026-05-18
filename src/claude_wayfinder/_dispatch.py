@@ -7,8 +7,8 @@ docs/design/2026-05-14-v0.2-integration-design.md § 2.1:
   demo fixtures with a "no catalog configured" banner.
 - **Real-catalog mode** — ``$DISPATCH_CATALOG_PATH`` is set and resolves to
   a readable, valid JSON catalog.  Passes the context JSON to
-  ``python -m claude_wayfinder.match`` via subprocess and returns the
-  matcher's decision JSON verbatim.
+  ``claude_wayfinder.match.main()`` in-process and returns the matcher's
+  decision JSON verbatim.
 - **Hard-error mode** — ``$DISPATCH_CATALOG_PATH`` is set but the path is
   missing, unreadable, or contains invalid/schema-invalid JSON.  Propagates
   the ``[CATALOG ERROR]`` banner from ``match.py`` and exits non-zero.
@@ -23,9 +23,10 @@ Stale-mtime behavior (design § 2.1 last paragraph):
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -160,6 +161,63 @@ def _validate_catalog_json(catalog_path: Path) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _call_match_in_process(
+    stdin_data: str,
+    catalog_path: Path,
+) -> tuple[str, str, int]:
+    """Call ``claude_wayfinder.match.main()`` in-process with redirected I/O.
+
+    Replaces the former ``subprocess.run([sys.executable, "-m",
+    "claude_wayfinder.match", ...])`` invocation to avoid the
+    ``RuntimeWarning: 'claude_wayfinder.match' found in sys.modules``
+    emitted by ``runpy`` when the module is already imported by the
+    parent process (#134).
+
+    Streams are temporarily swapped for the duration of the call:
+
+    - ``sys.stdin``  → ``io.StringIO(stdin_data)``
+    - ``sys.stdout`` → captured ``io.StringIO`` (returned as first element)
+    - ``sys.stderr`` → captured ``io.StringIO`` (returned as second element)
+
+    ``SystemExit`` is caught so that ``argparse`` or ``sys.exit()`` calls
+    inside ``match.main()`` do not terminate the parent process.
+
+    Args:
+        stdin_data: JSON string with the dispatch context to feed as stdin.
+        catalog_path: Resolved path to the dispatch catalog file; passed
+            to ``match.main()`` via the ``--catalog-path`` argv argument.
+
+    Returns:
+        A 3-tuple ``(stdout_text, stderr_text, exit_code)``.
+    """
+    from claude_wayfinder.match import main as match_main
+
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+    original_stdin = sys.stdin
+    sys.stdin = io.StringIO(stdin_data)
+    try:
+        with (
+            contextlib.redirect_stdout(stdout_buf),
+            contextlib.redirect_stderr(stderr_buf),
+        ):
+            try:
+                rc = match_main(
+                    argv=["--catalog-path", str(catalog_path)]
+                )
+            except SystemExit as exc:
+                if isinstance(exc.code, int):
+                    rc = exc.code
+                elif exc.code is None:
+                    rc = 0
+                else:
+                    rc = 1
+    finally:
+        sys.stdin = original_stdin
+
+    return stdout_buf.getvalue(), stderr_buf.getvalue(), rc or 0
+
+
 def run_dispatch(
     stdin_data: str | None = None,
     out: Any = None,
@@ -169,8 +227,9 @@ def run_dispatch(
     Mode is determined by the presence/absence of ``$DISPATCH_CATALOG_PATH``:
 
     - **Absent** → demo mode: print banner + run bundled demo fixtures.
-    - **Present, valid** → real-catalog mode: pipe *stdin_data* to
-      ``match.py`` via subprocess and return the decision JSON verbatim.
+    - **Present, valid** → real-catalog mode: call
+      ``claude_wayfinder.match.main()`` in-process with redirected streams
+      and return the decision JSON verbatim.
     - **Present, invalid** → hard error: propagate ``[CATALOG ERROR]``
       and return non-zero exit code.
 
@@ -234,25 +293,20 @@ def run_dispatch(
         stdin_data = sys.stdin.read()
 
     # Delegate to match.py — it owns the full validation + scoring pipeline.
-    # Pass --catalog-path explicitly so match.py does not re-read the env var
-    # (harmless but cleaner to be explicit).
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "claude_wayfinder.match",
-            "--catalog-path",
-            str(catalog_path),
-        ],
-        input=stdin_data,
-        capture_output=True,
-        text=True,
+    # Called in-process to avoid a RuntimeWarning from runpy: when the parent
+    # process has already imported claude_wayfinder (which re-exports from
+    # claude_wayfinder.match via __init__.py), spawning
+    # ``python -m claude_wayfinder.match`` causes runpy to find the module
+    # already in sys.modules before executing it as __main__ (#134).
+    match_stdout, match_stderr, rc = _call_match_in_process(
+        stdin_data=stdin_data,
+        catalog_path=catalog_path,
     )
 
     # Propagate stdout (decision JSON) and stderr ([CATALOG ERROR] or logs).
-    if result.stdout:
-        print(result.stdout, end="", file=out)
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
+    if match_stdout:
+        print(match_stdout, end="", file=out)
+    if match_stderr:
+        print(match_stderr, end="", file=sys.stderr)
 
-    return result.returncode
+    return rc
