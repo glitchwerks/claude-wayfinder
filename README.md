@@ -26,7 +26,7 @@ Inside Claude Code, run these two commands:
 
 ```
 /plugin marketplace add glitchwerks/claude-wayfinder
-/plugin install claude-wayfinder@claude-wayfinder
+/plugin install claude-wayfinder@glitchwerks
 ```
 
 ### Troubleshooting
@@ -40,7 +40,7 @@ The plugin uses a venv-based architecture introduced in v0.4 ([#99](https://gith
 Run `/setup-wayfinder` once. The skill will:
 
 1. Discover a Python >= 3.11 on your machine.
-2. Create a venv at `~/.claude/plugins/data/claude-wayfinder-claude-wayfinder/venv/`.
+2. Create a venv at `~/.claude/plugins/data/claude-wayfinder-glitchwerks/venv/`.
 3. Install `claude-wayfinder` from PyPI.
 4. Write a setup-state flag so subsequent sessions know setup is complete.
 

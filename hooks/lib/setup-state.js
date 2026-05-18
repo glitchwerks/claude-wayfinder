@@ -108,7 +108,7 @@ function getPluginDataDir() {
  * @returns {string}
  */
 function _computePluginDataDir() {
-  const pluginId = "claude-wayfinder@claude-wayfinder";
+  const pluginId = "claude-wayfinder@glitchwerks";
   const slug = pluginId.replace(/[^a-zA-Z0-9_-]/g, "-");
   return path.join(os.homedir(), ".claude", "plugins", "data", slug);
 }
