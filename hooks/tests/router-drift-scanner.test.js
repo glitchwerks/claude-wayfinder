@@ -272,6 +272,57 @@ test("detectAdvisoryOverride: non-advisory dispatch is ignored", () => {
   assert.equal(result.length, 0);
 });
 
+// ---------------------------------------------------------------------------
+// detectAdvisoryOverride — skill-interposed cases (issue #144)
+// ---------------------------------------------------------------------------
+
+test("detectAdvisoryOverride: advisory → skill_call → agent_call (different agent) emits one drift event", () => {
+  // The canonical advisory sequence: dispatch → skill → agent_call
+  // The old single-event lookahead missed this because events[i+1] was skill_call, not agent_call.
+  const { detectAdvisoryOverride } = loadLib();
+  const events = [
+    { kind: "dispatch", decision: "advisory", agent: "writer" },
+    { kind: "skill_call", skill: "dispatch" },
+    { kind: "agent_call", subagent_type: "fixer" },
+  ];
+  const result = detectAdvisoryOverride(events);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].type, "advisory_override");
+  assert.equal(result[0].recommended_agent, "writer");
+  assert.equal(result[0].actual_agent, "fixer");
+});
+
+test("detectAdvisoryOverride: advisory → skill_call → dispatch (different decision) produces no drift event (advisory abandoned)", () => {
+  // A new dispatch event means the advisory case was abandoned — don't attribute
+  // the subsequent agent_call (if any) to the original advisory.
+  const { detectAdvisoryOverride } = loadLib();
+  const events = [
+    { kind: "dispatch", decision: "advisory", agent: "writer" },
+    { kind: "skill_call", skill: "dispatch" },
+    { kind: "dispatch", decision: "delegate", agent: "fixer" },
+    { kind: "agent_call", subagent_type: "fixer" },
+  ];
+  const result = detectAdvisoryOverride(events);
+  assert.equal(result.length, 0);
+});
+
+test("detectAdvisoryOverride: advisory → skill_call → skill_call → agent_call emits one drift event (multiple skills do not block)", () => {
+  // Multiple interposed skill_calls should all be skipped — only the first
+  // agent_call (or dispatch) terminates the inner scan.
+  const { detectAdvisoryOverride } = loadLib();
+  const events = [
+    { kind: "dispatch", decision: "advisory", agent: "writer" },
+    { kind: "skill_call", skill: "dispatch" },
+    { kind: "skill_call", skill: "python" },
+    { kind: "agent_call", subagent_type: "fixer" },
+  ];
+  const result = detectAdvisoryOverride(events);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].type, "advisory_override");
+  assert.equal(result[0].recommended_agent, "writer");
+  assert.equal(result[0].actual_agent, "fixer");
+});
+
 test("detectAdvisoryOverride: multiple advisory overrides in one session", () => {
   const { detectAdvisoryOverride } = loadLib();
   const events = [
