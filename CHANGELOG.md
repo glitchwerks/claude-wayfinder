@@ -6,6 +6,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-18
+
+Patch release: three bug fixes against v0.4.0, all caught during downstream
+integration in `glitchwerks/claude-configs`.
+
 ### Fixed
 
 - `catalog build` now defaults `--plugin-overrides-dir`, `--plugins-dir`, and
@@ -13,6 +18,23 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `${CLAUDE_HOME}/triggers/builtin` respectively.  Previously these were
   unset, silently disabling Pass 2.5 / Pass 2.6 / trigger-override resolution
   when the plugin-shipped refresh hook ran with no extra args. (#124)
+- `skills/setup-wayfinder/SKILL.md` Step 1 now uses the correct plugin slug
+  `claude-wayfinder-glitchwerks` (derived from plugin ID
+  `claude-wayfinder@glitchwerks`, where `glitchwerks` is the marketplace name).
+  Previously hardcoded `claude-wayfinder-claude-wayfinder`, which on a fresh
+  install created an orphan venv at the wrong path; hooks then failed to find
+  the setup-state flag and re-prompted for setup. (#123)
+- Step 1 also now validates the basename of `$CLAUDE_PLUGIN_DATA` against the
+  expected slug before honoring it, falling back to the computed path on
+  mismatch. The harness exports `$CLAUDE_PLUGIN_DATA` per the active plugin
+  surface, so cross-plugin leakage (e.g. from `codex-openai-codex`) previously
+  could silently install the venv into a different plugin's data dir. (#123)
+- Removed remaining `claude-wayfinder@claude-wayfinder` / `…-claude-wayfinder`
+  slug references from `hooks/lib/setup-state.js`, the matching node test,
+  `tests/integration/setup_pipeline.py`, `README.md`, and `docs/integration.md`
+  for consistency with the corrected canonical slug. Latent only — at runtime
+  the harness env var always wins — but the docs and the fallback constant
+  now agree with reality. (#128)
 
 ## [0.4.0] — 2026-05-18
 
