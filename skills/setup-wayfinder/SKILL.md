@@ -21,16 +21,29 @@ The behavior described below is mirrored by `tests/integration/setup_pipeline.py
 
 The plugin data directory path is deterministic per Anthropic's plugin docs:
 
-- If `$CLAUDE_PLUGIN_DATA` is set in the environment, use it verbatim (test seam).
-- Otherwise, compute `~/.claude/plugins/data/{slug}/` where `{slug}` is `claude-wayfinder@claude-wayfinder` with every non-`[a-zA-Z0-9_-]` character replaced by `-`. For our plugin, the slug is `claude-wayfinder-claude-wayfinder`.
+- If `$CLAUDE_PLUGIN_DATA` is set in the environment, **validate its basename matches the expected slug** before honoring it — see the bash recipe below. The env var is the test seam, but the harness sets it to whichever plugin invoked the current surface, so another plugin's data dir can leak in.
+- Otherwise, compute `~/.claude/plugins/data/{slug}/` where `{slug}` is `claude-wayfinder@glitchwerks` with every non-`[a-zA-Z0-9_-]` character replaced by `-`. For our plugin (`claude-wayfinder` distributed from the `glitchwerks` marketplace), the slug is `claude-wayfinder-glitchwerks`.
 
 Use the Bash tool:
 
 ```bash
-PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/claude-wayfinder-claude-wayfinder}"
+EXPECTED_SLUG="claude-wayfinder-glitchwerks"
+if [ -n "$CLAUDE_PLUGIN_DATA" ]; then
+  ACTUAL_SLUG=$(basename "$CLAUDE_PLUGIN_DATA")
+  if [ "$ACTUAL_SLUG" != "$EXPECTED_SLUG" ]; then
+    echo "Warning: \$CLAUDE_PLUGIN_DATA points at '$ACTUAL_SLUG', expected '$EXPECTED_SLUG'. Falling back to computed path." >&2
+    PLUGIN_DATA="$HOME/.claude/plugins/data/$EXPECTED_SLUG"
+  else
+    PLUGIN_DATA="$CLAUDE_PLUGIN_DATA"
+  fi
+else
+  PLUGIN_DATA="$HOME/.claude/plugins/data/$EXPECTED_SLUG"
+fi
 mkdir -p "$PLUGIN_DATA"
 echo "$PLUGIN_DATA"
 ```
+
+The test seam is preserved: tests that want to override the path can still set `$CLAUDE_PLUGIN_DATA` to a directory whose basename matches `claude-wayfinder-glitchwerks` (e.g., a tmpdir created as `…/claude-wayfinder-glitchwerks/`). Cross-plugin leaks no longer cause silent misinstall into another plugin's data dir.
 
 ## Step 2: Discover Python ≥3.11
 
