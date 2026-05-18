@@ -20,11 +20,12 @@
 
 | Path | What changes |
 | --- | --- |
-| `src/claude_wayfinder/match.py` | Add `Slot`, `KeywordGroup` dataclasses; `_GROUP_MULTIPLIER` constant; `keyword_groups` field on `Triggers`; extend `_parse_triggers`; extend `score()` |
-| `src/claude_wayfinder/build_catalog.py` | Add `_validate_keyword_groups`; add `"keyword_groups"` to `TRIGGER_FIELDS`; wire into `validate_entry` |
-| `src/claude_wayfinder/_dispatch.py` | Update rationale composition to list groups that fired |
-| `tests/test_match.py` | Update test helpers (`_make_agent`, `_make_skill`) to accept `keyword_groups` kwarg |
-| `tests/test_build_catalog.py` | Add `_validate_keyword_groups` tests (one test class) |
+| `src/claude_wayfinder/match.py` | Add `Slot`, `KeywordGroup` dataclasses; `_GROUP_MULTIPLIER` constant; `keyword_groups` field on `Triggers`; extend `_parse_triggers`; extend `score()`; extend `_rationale_for()` |
+| `src/claude_wayfinder/__init__.py` | Re-export `Slot` and `KeywordGroup` (matching the existing `Keyword`/`Triggers` public-API pattern) |
+| `src/claude_wayfinder/build_catalog.py` | Add `_validate_keyword_groups` and cross-group overlap warning; wire into `validate_entry` and `_sort_entry_lists` via PARALLEL paths (NOT via `TRIGGER_FIELDS`) |
+| `src/claude_wayfinder/_dispatch.py` | Add `dispatch(catalog_path, context)` in-process wrapper for tests |
+| `tests/test_match.py` | (No changes required — direct `Triggers(...)` constructions all use kwargs; new field has default empty tuple) |
+| `tests/test_build_catalog.py` | Add `TestValidateKeywordGroups` class |
 | `docs/design/trigger-schema.md` | Add §§ for `keyword_groups` schema, matching rule, validation rule, example |
 
 ### Files to create
@@ -219,7 +220,56 @@ class KeywordGroup:
     weight: float
 ```
 
-- [ ] **Step 1.5: Run test to verify it passes**
+- [ ] **Step 1.5: Re-export `Slot` and `KeywordGroup` from the package**
+
+`Keyword` and `Triggers` are public exports in `src/claude_wayfinder/__init__.py`. Matching that pattern, add `Slot` and `KeywordGroup` so they're importable as `from claude_wayfinder import Slot, KeywordGroup` (consistent with the existing `from claude_wayfinder import Keyword, Triggers` shape).
+
+In `src/claude_wayfinder/__init__.py`:
+
+1. Add `Slot` and `KeywordGroup` to the import block:
+
+```python
+from claude_wayfinder.match import (
+    VALID_DECISIONS,
+    CatalogEntry,
+    Features,
+    Keyword,
+    KeywordGroup,   # NEW
+    ScoredEntry,
+    Slot,           # NEW
+    Triggers,
+    build_features,
+    decide,
+    load_catalog,
+    score,
+)
+```
+
+2. Add to `__all__`:
+
+```python
+__all__ = [
+    ...,
+    # Dataclasses
+    "CatalogEntry",
+    "Features",
+    "Keyword",
+    "KeywordGroup",   # NEW
+    "ScoredEntry",
+    "Slot",           # NEW
+    "Triggers",
+]
+```
+
+Verify with the public-API test:
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/test_public_api.py -v
+```
+
+Expected: existing tests still pass (the test parameterization only checks the v0.1 names, but importability via `__all__` is verified). Optionally add a new parametrize entry for `"Slot"` and `"KeywordGroup"` to lock the new exports under the same gate.
+
+- [ ] **Step 1.6: Run test to verify it passes**
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/test_match_keyword_groups.py::TestKeywordGroupTypes -v
@@ -227,15 +277,15 @@ class KeywordGroup:
 
 Expected: 4 passed.
 
-- [ ] **Step 1.6: Run full match-module tests to verify no regression**
+- [ ] **Step 1.7: Run full match-module tests to verify no regression**
 
 ```bash
-.venv/Scripts/python.exe -m pytest tests/test_match.py -v
+.venv/Scripts/python.exe -m pytest tests/test_match.py tests/test_public_api.py -v
 ```
 
-Expected: all existing tests pass (no regression — we added types only).
+Expected: all existing tests pass (no regression — we added types and re-exported them).
 
-- [ ] **Step 1.7: Commit**
+- [ ] **Step 1.8: Commit**
 
 ```bash
 git -C I:/other/claude-wayfinder/.worktrees/and-groups-impl add src/claude_wayfinder/match.py tests/test_match_keyword_groups.py
