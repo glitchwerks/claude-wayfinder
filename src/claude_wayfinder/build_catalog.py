@@ -277,6 +277,74 @@ def discover_plugin_overrides(
     return results
 
 
+def discover_plugin_agent_overrides(
+    triggers_root: Path,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """Walk the plugin-agent-override tree and return sidecar entries.
+
+    Scans ``<triggers_root>/<plugin>/agents/<name>.yml`` for all ``.yml``
+    files exactly three levels deep (one deeper than skill overrides).
+    Each file is parsed and returned as a tuple
+    ``("agent", "<plugin>:<name>", parsed_dict)``.  The plugin-namespaced
+    name matches the loader's convention, e.g.
+    ``superpowers:doc-writer``.
+
+    The reserved sub-directory ``builtin/`` is **skipped** entirely,
+    including any ``builtin/agents/`` subtree.  Builtin sidecars are
+    processed exclusively by Pass 2.6 via ``discover_builtin_agents``
+    and must not be treated as plugin-agent-override entries.
+
+    Unlike ``discover_plugin_overrides``, which can append new entries
+    when no matching dormant entry exists, this walker is used for
+    strict Mode 2a (match-required) semantics: the application loop
+    must emit a warning and drop any sidecar that does not match a
+    dormant ``source="plugin"`` agent entry.
+
+    Files that fail to parse are silently skipped (callers will see
+    them missing from the returned list and log them accordingly).
+
+    Args:
+        triggers_root: Root directory of the plugin override tree
+            (typically ``~/.claude/triggers/``).
+
+    Returns:
+        A list of ``("agent", name, sidecar_dict)`` tuples, one per
+        valid ``.yml`` file found.  Empty list when the directory is
+        absent or contains no valid ``agents/`` subdirectories.
+    """
+    if not triggers_root.is_dir():
+        return []
+    results: list[tuple[str, str, dict[str, Any]]] = []
+    for plugin_dir in sorted(triggers_root.iterdir()):
+        if not plugin_dir.is_dir():
+            continue
+        # Reserved sub-directory: handled by Pass 2.6, not Pass 3b.
+        # Skip the entire subtree, including any agents/ inside builtin/.
+        if plugin_dir.name == _BUILTIN_AGENTS_SUBDIR:
+            continue
+        agents_subdir = plugin_dir / "agents"
+        if not agents_subdir.is_dir():
+            continue
+        for agent_file in sorted(agents_subdir.glob("*.yml")):
+            try:
+                text = agent_file.read_text(encoding="utf-8").strip()
+                if not text:
+                    continue
+                parsed = yaml.safe_load(text)
+            except yaml.YAMLError as exc:
+                _logger.warning(
+                    "YAML parse error in %s: %s", agent_file, exc
+                )
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            plugin_name = plugin_dir.name
+            agent_name = agent_file.stem
+            entry_name = f"{plugin_name}:{agent_name}"
+            results.append(("agent", entry_name, parsed))
+    return results
+
+
 def _clamp_weight(w: float) -> float:
     """Return the allowed weight value nearest to ``w``.
 
@@ -1834,6 +1902,111 @@ def build(
                     entries[by_name_reg[ov_name]] = result
             else:
                 entries.append(result)
+
+    # --- Pass 3b: plugin-agent sidecar overrides ---
+    # Walk <plugin_overrides_dir>/<plugin>/agents/*.yml for user-authored
+    # sidecars that activate dormant plugin-discovered agents.  Strict
+    # Mode 2a: a sidecar must match an existing source="plugin" agent
+    # entry.  Unmatched sidecars (ghost sidecars) emit a warning and are
+    # dropped — unlike skill overrides, which can append new entries.
+    # This asymmetry is intentional: ghost agent entries cause hard
+    # Agent({subagent_type: <ghost>}) failures the router cannot recover
+    # from, whereas ghost skill entries degrade gracefully (score 0.0).
+    if plugin_overrides_dir is not None:
+        for _kind, ag_entry_name, ag_sidecar in discover_plugin_agent_overrides(
+            plugin_overrides_dir
+        ):
+            n_discovered += 1
+            # Agent sidecars (spec §4) do NOT carry 'kind' — the kind is
+            # structural: the file is in agents/ so it is always kind="agent".
+            # Validate directly as an agent rather than routing through
+            # _process_plugin_override (which defaults to kind="skill" when
+            # 'kind' is absent and supports tombstones which agents do not).
+            if ag_sidecar.get("disabled") is True:
+                all_issues.append(
+                    ValidationIssue(
+                        "warning",
+                        ag_entry_name,
+                        f"agent override sidecar '{ag_entry_name}' uses disabled"
+                        " tombstone form — tombstones are not supported for"
+                        " agent sidecars; sidecar dropped",
+                    )
+                )
+                n_excluded += 1
+                continue
+
+            # Strip sidecar-specific keys before passing to validate_entry.
+            effective_ag: dict[str, Any] = {
+                k: v
+                for k, v in ag_sidecar.items()
+                if k not in ("kind", "disabled", "reason")
+            }
+            effective_ag.setdefault("name", ag_entry_name)
+            ag_vr = validate_entry(
+                effective_ag, kind="agent", source_stem=ag_entry_name
+            )
+            all_issues.extend(ag_vr.issues)
+            if ag_vr.entry is None:
+                n_excluded += 1
+                continue
+            ag_result: dict[str, Any] = ag_vr.entry
+            ag_result["source"] = "plugin-override"
+
+            # Strict Mode 2a: match against dormant source="plugin" agents only.
+            # Build a (name, kind) index so that a same-named skill entry does
+            # not accidentally satisfy the agent match.
+            by_name_kind: dict[tuple[str, str], int] = {
+                (e["name"], e["kind"]): i for i, e in enumerate(entries)
+            }
+            match_key = (ag_entry_name, "agent")
+            if match_key in by_name_kind:
+                existing_ag = entries[by_name_kind[match_key]]
+                if existing_ag.get("source") == "owned":
+                    # Owned agents are immutable — reject the sidecar.
+                    all_issues.append(
+                        ValidationIssue(
+                            "warning",
+                            ag_entry_name,
+                            f"agent override sidecar targets owned entry"
+                            f" '{ag_entry_name}' — rejected; owned entry"
+                            " preserved",
+                        )
+                    )
+                else:
+                    # Replace in place (plugin-discovered dormant → override).
+                    # Set routable=True explicitly per spec §7 Q5 (defensive,
+                    # even though is_agent_routable already gates on source).
+                    ag_result["routable"] = True
+                    _logger.info(
+                        "override layers on plugin-discovered agent '%s'",
+                        ag_entry_name,
+                    )
+                    all_issues.append(
+                        ValidationIssue(
+                            "info",
+                            ag_entry_name,
+                            f"override layers on plugin-discovered agent"
+                            f" '{ag_entry_name}'",
+                        )
+                    )
+                    entries[by_name_kind[match_key]] = ag_result
+            else:
+                # Ghost sidecar — no matching dormant plugin agent found.
+                _logger.warning(
+                    "agent override sidecar '%s' has no matching plugin-discovered"
+                    " agent entry — sidecar dropped",
+                    ag_entry_name,
+                )
+                all_issues.append(
+                    ValidationIssue(
+                        "warning",
+                        ag_entry_name,
+                        f"agent override sidecar '{ag_entry_name}' has no"
+                        " matching plugin-discovered agent entry — sidecar"
+                        " dropped",
+                    )
+                )
+                n_excluded += 1
 
     # --- Pass 4: project-local skills and agents ---
     if project_root is not None:
