@@ -254,7 +254,9 @@ The replaced entry inherits `source="plugin-override"`. If no plugin-discovered 
 
 Plugin-discovered agents (`kind="agent"`, `source="plugin"`) are **inert by default**: `is_agent_routable` in `src/claude_wayfinder/match_filters.py` filters them out of the scoring pool at dispatch time. They appear in the catalog but never drive a routing decision.
 
-To opt a plugin agent into routing, create a plugin-override sidecar with `kind: agent` and a non-empty `triggers:` block. The override replaces the dormant plugin entry with `source="plugin-override"`, which `is_agent_routable` treats as routable.
+**Activating a plugin agent via an agent sidecar (Issue #140):** create an agent plugin-override sidecar at `triggers/<plugin>/agents/<name>.yml` with a non-empty `triggers:` block. The catalog builder walks this subdirectory during Pass 3b and replaces the matching dormant plugin entry with `source="plugin-override"` and `routable: true`. The sidecar must match an installed plugin agent — unmatched sidecars (ghost sidecars) emit a warning and are dropped (strict Mode 2a semantics). `is_agent_routable` treats `source="plugin-override"` as routable.
+
+**Legacy path (still supported):** create a flat sidecar at `triggers/<plugin>/<name>.yml` with `kind: agent`. This triggers Pass 3 (skill override path) and appends a new entry when no matching dormant agent exists. The `agents/` subdirectory form (Issue #140) is preferred for agent overrides because it provides structural disambiguation and enforces match-required semantics.
 
 The predicate also unconditionally excludes the router agent itself from the scored pool, regardless of source.
 
@@ -269,6 +271,8 @@ def is_agent_routable(*, name: str, kind: str, source: str) -> bool:
 ```
 
 Plugin **skills** with `source="plugin"` are not filtered by this predicate — they remain in the skill pool, score 0.0 because they are dormant, and can be activated by a plugin-override sidecar.
+
+**Namespace collision:** when a plugin ships both a skill named `foo` and an agent named `foo`, the catalog dedup key is `(kind, name)` — both `(kind="skill", name="p:foo")` and `(kind="agent", name="p:foo")` may coexist. Override sidecars targeting each are independent: `triggers/p/foo.yml` matches the skill entry, `triggers/p/agents/foo.yml` matches the agent entry. This is documented by the Pass 3b test suite (Issue #140, §7 Q3).
 
 ### 2h. Builtin agents and version pinning
 
@@ -487,8 +491,8 @@ All log lines are written to the catalog generation log. Format: `<ISO-8601> <se
 | Severity          | Triggers                                                                                                                                                                                                                                                                                                                                                                                               | Effect on entry                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
 | **fatal**         | YAML parse error; `triggers:` is not a mapping; `keywords` element is not `{term, weight}`; `weight` not a number; `weight` outside `[0.0, 1.0]`; plugin-override sidecar has invalid `kind` value | Entry **excluded** from catalog |
-| **warning**       | `weight` in `[0.0, 1.0]` but not in `{0.25, 0.5, 1.0}` (clamped to nearest); duplicate `term` in `keywords` (deduplicated, last wins); `keywords` term contains whitespace (keyword dropped); `triggers.file_extensions` declared (field dropped — use `path_globs`); `applicable_*` references non-existent name (dropped); entry has triggers but `applicable_*: []`; `SKILL.md` contains trigger keys (ignored); plugin override targets owned entry (rejected); tombstone targets owned entry (rejected); tombstone targets nonexistent entry; plugin manifest malformed/version-unsupported | Entry **kept** (or override rejected), mutation logged |
-| **info**          | Entry has no `triggers:` block (dormant); plugin manifest absent; plugin entry disabled by tombstone override; override layers on plugin-discovered entry; `applicable_skills` contains plugin-namespaced reference (kept as external reference) | Entry kept or removed per tombstone semantics |
+| **warning**       | `weight` in `[0.0, 1.0]` but not in `{0.25, 0.5, 1.0}` (clamped to nearest); duplicate `term` in `keywords` (deduplicated, last wins); `keywords` term contains whitespace (keyword dropped); `triggers.file_extensions` declared (field dropped — use `path_globs`); `applicable_*` references non-existent name (dropped); entry has triggers but `applicable_*: []`; `SKILL.md` contains trigger keys (ignored); plugin override targets owned entry (rejected); tombstone targets owned entry (rejected); tombstone targets nonexistent entry; plugin manifest malformed/version-unsupported; **agent override sidecar has no matching plugin-discovered agent entry** (ghost sidecar — format: `"agent override sidecar '<plugin>:<name>' has no matching plugin-discovered agent entry — sidecar dropped"`); **agent override sidecar targets owned entry** (format: `"agent override sidecar targets owned entry '<name>' — rejected; owned entry preserved"`) | Entry **kept** (or override rejected), mutation logged |
+| **info**          | Entry has no `triggers:` block (dormant); plugin manifest absent; plugin entry disabled by tombstone override; override layers on plugin-discovered entry; override layers on plugin-discovered agent (format: `"override layers on plugin-discovered agent '<name>'"`); `applicable_skills` contains plugin-namespaced reference (kept as external reference) | Entry kept or removed per tombstone semantics |
 | **catalog-level** | >25% of entries excluded fatally; entire catalog empty | `[CATALOG ERROR]` banner at session start |
 
 Ties (equidistant values) resolve to the larger weight.
@@ -765,8 +769,22 @@ triggers:
 
 Plugin agents land dormant and are excluded from the scoring pool. To activate one:
 
+**Preferred (Issue #140 — agent sidecar subdirectory):**
+
+1. Create `triggers/<plugin>/agents/<agent>.yml` with a non-empty `triggers:` block and `applicable_skills:`.
+   The sidecar must target an installed plugin agent — ghost sidecars (no matching dormant entry) are warned and dropped.
+2. The catalog builder (Pass 3b) replaces the dormant plugin entry in place, setting `source="plugin-override"` and `routable: true`.
+   `is_agent_routable` returns `True` for the resulting entry.
+
+The agent sidecar schema (§4 of the spec) does **not** include `kind`, `name`, `description`, or `source` — those are inherited from the matched plugin entry. Include only `triggers:` and `applicable_skills:`.
+
+**Legacy path (still supported):**
+
 1. Create `triggers/<plugin>/<agent>.yml` with `kind: agent` and a non-empty `triggers:` block.
-2. The override replaces the dormant plugin entry; `is_agent_routable` will return `True` for the resulting `source="plugin-override"` entry.
+2. The override is processed by Pass 3 (skill override path); if no matching dormant entry exists, a new entry is appended.
+   `is_agent_routable` will return `True` for the resulting `source="plugin-override"` entry.
+
+Prefer the `agents/` subdirectory form for new overrides — it enforces match-required semantics and provides structural disambiguation from skill overrides.
 
 ### Retiring a broken plugin skill (tombstone)
 

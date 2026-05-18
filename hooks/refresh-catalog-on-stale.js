@@ -198,6 +198,24 @@ function maxSourceMtime(projectRoot) {
   const installedPluginsFile = path.join(claudeHome, "plugins", "installed_plugins.json");
   candidates.push(installedPluginsFile);
 
+  // Plugin-agent sidecar overrides (Issue #140): walk
+  // triggers/<plugin>/agents/*.yml. A new or modified sidecar file here
+  // activates a dormant plugin agent — the catalog must be rebuilt.
+  // The reserved triggers/builtin/ subtree is excluded (those sidecars
+  // are handled by Pass 2.6 and are not plugin-agent overrides).
+  const triggersDir = path.join(claudeHome, "triggers");
+  const normalise = (p) => p.replace(/\\/g, "/");
+  const builtinPrefix = normalise(path.join(claudeHome, "triggers", "builtin")) + "/";
+  candidates.push(
+    ...walkFiles(
+      triggersDir,
+      (p) =>
+        parentName(p) === "agents" &&
+        basename(p).endsWith(".yml") &&
+        !normalise(p).startsWith(builtinPrefix)
+    )
+  );
+
   let maxMs = null;
   let maxFile = null;
 
