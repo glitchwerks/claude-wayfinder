@@ -6,6 +6,102 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-18
+
+Major release: replaces per-hook shell discovery of a Python interpreter with
+a user-initiated `/setup-wayfinder` skill that materializes a venv at
+`${CLAUDE_PLUGIN_DATA}/venv/` and writes a setup-state flag the hooks read.
+Closes the v0.3.x regression chain (#76, #80, #82, #87) by eliminating the
+shell-discovery surface entirely — there is no longer any "which Python does
+the hook find on PATH" question to get wrong.
+
+This is the first PyPI release of `claude-wayfinder`. The setup skill installs
+the package from PyPI on first invocation; subsequent sessions read the
+recorded venv path from the flag without re-resolving the interpreter.
+
+### Added
+
+- **`/setup-wayfinder` skill** (`skills/setup-wayfinder/SKILL.md`) for one-time
+  venv materialization. Discovers Python ≥3.11, wipes-and-recreates the venv at
+  `${CLAUDE_PLUGIN_DATA}/venv/`, installs `claude-wayfinder` from PyPI, runs an
+  import-probe verification, and writes the setup-state flag. Triggers on
+  `/setup-wayfinder` and natural-language phrases like "set up claude-wayfinder",
+  "wayfinder isn't working", "fix wayfinder". PR #107.
+- **`hooks/lib/setup-state.js`** shared helper exposing `readSetupState`,
+  `getCurrentVersion`, `getVenvPython`, with platform-aware path resolution
+  and a `$CLAUDE_PLUGIN_DATA` test seam. 15 unit tests. PR #103.
+- **`tests/integration/setup_pipeline.py`** executable Python mirror of the
+  skill's 8 steps, used by the CI smoke test and exposed for advanced
+  scripting. A drift check (`tests/test_skill_pipeline_sync.py`) enforces
+  that the skill body's step headings stay aligned with the pipeline's
+  function names. PR #107.
+- **Skill smoke test** (`tests/integration/test_setup_skill.py`) running on
+  Ubuntu in CI via the new `skill-smoke-ubuntu` job. Exercises the real
+  `python -m venv` + `pip install` path end-to-end. Directly addresses
+  inquisitor pass-1 charge 11 (no subprocess-stubbing test theater). PR #109.
+- **Release workflow** (`.github/workflows/release.yml`) publishing to PyPI
+  on `v*` tag push via Trusted Publisher OIDC. TestPyPI dry-run job gated on
+  `-rc` / `-alpha` / `-beta` pre-release tags. PR #114, #116.
+- **`CLAUDE_WAYFINDER_PIP_SPEC` env-var test seam** in `pip_install()` for
+  pre-v0.4.0 CI to install from the local checkout. Removed once v0.4.0 ships
+  to PyPI (this release). PR #109.
+
+### Changed
+
+- **`check-catalog-health.js`** now reads the setup-state flag at SessionStart
+  and emits an `additionalContext` banner when the flag is `MISSING`, `STALE`,
+  or `BROKEN`. When the flag is `VALID`, runs a one-per-session
+  `import claude_wayfinder` probe against the recorded venv Python; deletes
+  the flag on probe failure so the next session re-prompts setup. PR #105.
+- **`refresh-catalog-on-stale.js`** now reads the setup-state flag and uses
+  the recorded venv-Python path. Removed ~80 LOC of v0.3.x discovery
+  scaffolding: the `CLAUDE_WAYFINDER_PYTHON` env-var fallback, the bare
+  `python` PATH fallback, and the regex-based command parser used only for
+  test overrides (the `DISPATCH_GENERATOR_CMD` test seam is retained
+  unchanged). PR #105.
+- **README.md and `docs/integration.md`** document the SessionStart banner,
+  the `/setup-wayfinder` flow, plugin-update re-setup behavior, and
+  cross-machine setup expectations. PR #112.
+- **PyPI distribution.** `claude-wayfinder` is now published to PyPI; the
+  v0.4 setup skill installs it from there. No more pre-v0.4.0
+  `pip install -e` workarounds for downstream installers.
+
+### Removed
+
+- **`CLAUDE_WAYFINDER_PYTHON` env-var override** (deprecated in v0.3.4 as a
+  stopgap; superseded by the venv-based architecture). The hook no longer
+  consults this variable.
+- **`parseCmd` regex parser** in `hooks/refresh-catalog-on-stale.js`'s default
+  invocation path. Retained inside the `DISPATCH_GENERATOR_CMD` test-override
+  branch to keep the existing test suite stable.
+- **Bare `python` on PATH fallback** in `refresh-catalog-on-stale.js`. The hook
+  now requires either a `VALID` setup-state flag or a `DISPATCH_GENERATOR_CMD`
+  test override; any other state results in a silent no-op (with the
+  SessionStart banner from `check-catalog-health.js` surfacing the situation
+  to the user).
+
+### Deferred
+
+- **Phase 5: macOS + Windows CI matrix** — accepted as a YAGNI trade-off until
+  external adoption justifies the GitHub Actions runner-minute spend. The
+  plugin's code is platform-agnostic; CI just doesn't validate that. Inquisitor
+  pass-2 charge 18 noted and accepted. PR #110 records the deferral on the
+  plan file with the original task structure preserved as an implementation
+  template for future revival.
+
+### Migration from v0.3.x
+
+After updating the plugin to v0.4.0 (`/plugin update glitchwerks/claude-wayfinder`):
+
+1. SessionStart shows: _⚠ claude-wayfinder venv is for v0.3.6 but plugin is v0.4.0. Run /setup-wayfinder to refresh._
+2. Run `/setup-wayfinder`. The skill discovers Python ≥3.11, creates a venv at
+   `${CLAUDE_PLUGIN_DATA}/venv/`, installs `claude-wayfinder` from PyPI,
+   verifies, and writes the flag.
+3. Open a new session — hooks read the flag and proceed normally.
+
+The `CLAUDE_WAYFINDER_PYTHON` environment variable, if set, is now ignored.
+You can remove it from your shell profile.
+
 ## [0.3.6] — 2026-05-17
 
 Patch release tightening consistency and CI coverage with no code-behavior
