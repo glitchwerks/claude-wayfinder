@@ -13,6 +13,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   index (stale tombstone).  Both bare invocation (defaults) and
   explicit-flag invocation now consistently exit 0 and write a complete
   catalog; the stale override is warned and skipped in both cases. (#132)
+- `python -m claude_wayfinder dispatch` no longer emits a spurious
+  `RuntimeWarning` about `claude_wayfinder.match` import order — the
+  dispatch entry point now invokes `match.main()` in-process instead of
+  spawning a `python -m claude_wayfinder.match` subprocess. (#134)
 
 ## [0.4.1] — 2026-05-18
 
