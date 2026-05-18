@@ -6,6 +6,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `catalog build` now defaults `--plugin-overrides-dir`, `--plugins-dir`, and
+  `--builtin-agents-dir` to `${CLAUDE_HOME}/triggers`, `${CLAUDE_HOME}/plugins`,
+  and `${CLAUDE_HOME}/triggers/builtin` respectively.  Previously these were
+  unset, silently disabling Pass 2.5 / Pass 2.6 / trigger-override resolution
+  when the plugin-shipped refresh hook ran with no extra args. (#124)
+
 ## [0.4.0] — 2026-05-18
 
 Major release: replaces per-hook shell discovery of a Python interpreter with

@@ -379,3 +379,198 @@ class TestCatalogBuildDefaults:
             "argparse still treats the args as required after issue #87 fix.\n"
             f"stderr: {result.stderr}"
         )
+
+
+# ---------------------------------------------------------------------------
+# (d) Default arg resolution for plugin-discovery flags — issue #124
+# ---------------------------------------------------------------------------
+
+
+class TestCatalogBuildPluginDiscoveryDefaults:
+    """``catalog build`` must resolve three plugin-discovery paths from CLAUDE_HOME.
+
+    Mirrors ``TestCatalogBuildDefaults`` (issue #87) but covers the three
+    flags added in issue #124:
+      - ``--plugin-overrides-dir`` → ``${CLAUDE_HOME}/triggers``
+      - ``--plugins-dir``          → ``${CLAUDE_HOME}/plugins``
+      - ``--builtin-agents-dir``   → ``${CLAUDE_HOME}/triggers/builtin``
+
+    All three previously defaulted to ``None``, silently disabling Pass 2.5
+    (plugin discovery), Pass 2.6 (builtin agents), and trigger-override
+    resolution when the hook invoked bare ``catalog build``.
+    """
+
+    def test_plugin_dirs_default_when_claude_home_unset(
+        self, tmp_path: Path
+    ) -> None:
+        """With ``CLAUDE_HOME`` unset, all three plugin paths default under ``~/.claude``.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory used as a fake
+                ``HOME`` so the test is hermetic.
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        fake_home = tmp_path / "fake_home"
+        with patch("claude_wayfinder.build_catalog.Path.home", return_value=fake_home):
+            env_without_claude_home = {
+                k: v for k, v in os.environ.items() if k != "CLAUDE_HOME"
+            }
+            with patch.dict(os.environ, env_without_claude_home, clear=True):
+                defaults = _resolve_catalog_build_defaults(
+                    skills_dir=None,
+                    agents_dir=None,
+                    out=None,
+                    log=None,
+                    plugin_overrides_dir=None,
+                    plugins_dir=None,
+                    builtin_agents_dir=None,
+                )
+
+        expected_base = fake_home / ".claude"
+        assert defaults["plugin_overrides_dir"] == expected_base / "triggers", (
+            f"Expected plugin_overrides_dir={expected_base / 'triggers'}, "
+            f"got {defaults.get('plugin_overrides_dir')}"
+        )
+        assert defaults["plugins_dir"] == expected_base / "plugins", (
+            f"Expected plugins_dir={expected_base / 'plugins'}, "
+            f"got {defaults.get('plugins_dir')}"
+        )
+        assert defaults["builtin_agents_dir"] == (
+            expected_base / "triggers" / "builtin"
+        ), (
+            f"Expected builtin_agents_dir={expected_base / 'triggers' / 'builtin'}, "
+            f"got {defaults.get('builtin_agents_dir')}"
+        )
+
+    def test_plugin_dirs_default_when_claude_home_set(self, tmp_path: Path) -> None:
+        """With ``CLAUDE_HOME`` set, all three plugin paths default under ``$CLAUDE_HOME``.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory used as a fake
+                ``CLAUDE_HOME``.
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        fake_claude_home = tmp_path / "custom_claude"
+        with patch.dict(os.environ, {"CLAUDE_HOME": str(fake_claude_home)}):
+            defaults = _resolve_catalog_build_defaults(
+                skills_dir=None,
+                agents_dir=None,
+                out=None,
+                log=None,
+                plugin_overrides_dir=None,
+                plugins_dir=None,
+                builtin_agents_dir=None,
+            )
+
+        assert defaults["plugin_overrides_dir"] == fake_claude_home / "triggers", (
+            f"Expected plugin_overrides_dir={fake_claude_home / 'triggers'}, "
+            f"got {defaults.get('plugin_overrides_dir')}"
+        )
+        assert defaults["plugins_dir"] == fake_claude_home / "plugins", (
+            f"Expected plugins_dir={fake_claude_home / 'plugins'}, "
+            f"got {defaults.get('plugins_dir')}"
+        )
+        assert defaults["builtin_agents_dir"] == (
+            fake_claude_home / "triggers" / "builtin"
+        ), (
+            f"Expected builtin_agents_dir={fake_claude_home / 'triggers' / 'builtin'}, "
+            f"got {defaults.get('builtin_agents_dir')}"
+        )
+
+    def test_explicit_plugin_overrides_dir_wins_over_default(
+        self, tmp_path: Path
+    ) -> None:
+        """Explicit ``--plugin-overrides-dir`` is preserved; others still default.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory; its
+                ``my_triggers`` subdirectory is used as the explicit value.
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        explicit_overrides = tmp_path / "my_triggers"
+        fake_claude_home = tmp_path / "custom_claude"
+        with patch.dict(os.environ, {"CLAUDE_HOME": str(fake_claude_home)}):
+            defaults = _resolve_catalog_build_defaults(
+                skills_dir=None,
+                agents_dir=None,
+                out=None,
+                log=None,
+                plugin_overrides_dir=explicit_overrides,
+                plugins_dir=None,
+                builtin_agents_dir=None,
+            )
+
+        assert defaults["plugin_overrides_dir"] == explicit_overrides, (
+            "Explicit plugin_overrides_dir must not be overridden. "
+            f"Got {defaults.get('plugin_overrides_dir')}"
+        )
+        # The other two plugin-discovery dirs should still default.
+        assert defaults["plugins_dir"] == fake_claude_home / "plugins"
+        assert defaults["builtin_agents_dir"] == (
+            fake_claude_home / "triggers" / "builtin"
+        )
+
+    def test_explicit_plugins_dir_wins_over_default(self, tmp_path: Path) -> None:
+        """Explicit ``--plugins-dir`` is preserved; others still default.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory; its
+                ``my_plugins`` subdirectory is used as the explicit value.
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        explicit_plugins = tmp_path / "my_plugins"
+        fake_claude_home = tmp_path / "custom_claude"
+        with patch.dict(os.environ, {"CLAUDE_HOME": str(fake_claude_home)}):
+            defaults = _resolve_catalog_build_defaults(
+                skills_dir=None,
+                agents_dir=None,
+                out=None,
+                log=None,
+                plugin_overrides_dir=None,
+                plugins_dir=explicit_plugins,
+                builtin_agents_dir=None,
+            )
+
+        assert defaults["plugins_dir"] == explicit_plugins, (
+            "Explicit plugins_dir must not be overridden. "
+            f"Got {defaults.get('plugins_dir')}"
+        )
+        assert defaults["plugin_overrides_dir"] == fake_claude_home / "triggers"
+        assert defaults["builtin_agents_dir"] == (
+            fake_claude_home / "triggers" / "builtin"
+        )
+
+    def test_explicit_builtin_agents_dir_wins_over_default(
+        self, tmp_path: Path
+    ) -> None:
+        """Explicit ``--builtin-agents-dir`` is preserved; others still default.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory; its
+                ``my_builtin`` subdirectory is used as the explicit value.
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        explicit_builtin = tmp_path / "my_builtin"
+        fake_claude_home = tmp_path / "custom_claude"
+        with patch.dict(os.environ, {"CLAUDE_HOME": str(fake_claude_home)}):
+            defaults = _resolve_catalog_build_defaults(
+                skills_dir=None,
+                agents_dir=None,
+                out=None,
+                log=None,
+                plugin_overrides_dir=None,
+                plugins_dir=None,
+                builtin_agents_dir=explicit_builtin,
+            )
+
+        assert defaults["builtin_agents_dir"] == explicit_builtin, (
+            "Explicit builtin_agents_dir must not be overridden. "
+            f"Got {defaults.get('builtin_agents_dir')}"
+        )
+        assert defaults["plugin_overrides_dir"] == fake_claude_home / "triggers"
+        assert defaults["plugins_dir"] == fake_claude_home / "plugins"

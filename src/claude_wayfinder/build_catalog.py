@@ -1936,8 +1936,11 @@ def _resolve_catalog_build_defaults(
     agents_dir: Path | None,
     out: Path | None,
     log: Path | None,
+    plugin_overrides_dir: Path | None = None,
+    plugins_dir: Path | None = None,
+    builtin_agents_dir: Path | None = None,
 ) -> dict[str, Path]:
-    """Resolve the four catalog-build paths, substituting defaults when None.
+    """Resolve all catalog-build paths, substituting defaults when None.
 
     The default base directory is ``${CLAUDE_HOME}`` when the env var is set,
     otherwise ``Path.home() / ".claude"``.  Individual args that were supplied
@@ -1957,10 +1960,17 @@ def _resolve_catalog_build_defaults(
             (``<base>/state/dispatch-catalog.json``).
         log: Explicit ``--log`` value, or ``None`` to use the default
             (``<base>/state/catalog-generation.log``).
+        plugin_overrides_dir: Explicit ``--plugin-overrides-dir`` value,
+            or ``None`` to use the default (``<base>/triggers``).
+        plugins_dir: Explicit ``--plugins-dir`` value, or ``None`` to
+            use the default (``<base>/plugins``).
+        builtin_agents_dir: Explicit ``--builtin-agents-dir`` value, or
+            ``None`` to use the default (``<base>/triggers/builtin``).
 
     Returns:
-        A dict with keys ``"skills_dir"``, ``"agents_dir"``, ``"out"``, and
-        ``"log"``, each containing a resolved ``Path``.
+        A dict with keys ``"skills_dir"``, ``"agents_dir"``, ``"out"``,
+        ``"log"``, ``"plugin_overrides_dir"``, ``"plugins_dir"``, and
+        ``"builtin_agents_dir"``, each containing a resolved ``Path``.
     """
     import os
 
@@ -1971,10 +1981,31 @@ def _resolve_catalog_build_defaults(
         base = Path.home() / ".claude"
 
     return {
-        "skills_dir": skills_dir if skills_dir is not None else base / "skills",
-        "agents_dir": agents_dir if agents_dir is not None else base / "agents",
-        "out": out if out is not None else base / "state" / "dispatch-catalog.json",
-        "log": log if log is not None else base / "state" / "catalog-generation.log",
+        "skills_dir": (
+            skills_dir if skills_dir is not None else base / "skills"
+        ),
+        "agents_dir": (
+            agents_dir if agents_dir is not None else base / "agents"
+        ),
+        "out": (
+            out if out is not None
+            else base / "state" / "dispatch-catalog.json"
+        ),
+        "log": (
+            log if log is not None
+            else base / "state" / "catalog-generation.log"
+        ),
+        "plugin_overrides_dir": (
+            plugin_overrides_dir if plugin_overrides_dir is not None
+            else base / "triggers"
+        ),
+        "plugins_dir": (
+            plugins_dir if plugins_dir is not None else base / "plugins"
+        ),
+        "builtin_agents_dir": (
+            builtin_agents_dir if builtin_agents_dir is not None
+            else base / "triggers" / "builtin"
+        ),
     }
 
 
@@ -2020,7 +2051,10 @@ def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
         "--plugin-overrides-dir",
         type=Path,
         default=None,
-        help="Directory containing plugin-override trigger .yml files.",
+        help=(
+            "Directory containing plugin-override trigger .yml files.  "
+            "Defaults to ${CLAUDE_HOME}/triggers (or ~/.claude/triggers)."
+        ),
     )
     parser.add_argument(
         "--plugins-dir",
@@ -2028,7 +2062,8 @@ def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Directory containing installed_plugins.json.  Used for "
-            "Pass 2.5 plugin discovery."
+            "Pass 2.5 plugin discovery.  Defaults to "
+            "${CLAUDE_HOME}/plugins (or ~/.claude/plugins)."
         ),
     )
     parser.add_argument(
@@ -2037,7 +2072,9 @@ def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Directory containing builtin-agent sidecar .yml files.  "
-            "Used for Pass 2.6 builtin discovery."
+            "Used for Pass 2.6 builtin discovery.  Defaults to "
+            "${CLAUDE_HOME}/triggers/builtin "
+            "(or ~/.claude/triggers/builtin)."
         ),
     )
     parser.add_argument(
@@ -2081,10 +2118,11 @@ def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
 def run_catalog_build(args: argparse.Namespace) -> int:
     """Execute a catalog build from a pre-parsed argument namespace.
 
-    Resolves the four optional path args (``skills_dir``, ``agents_dir``,
-    ``out``, ``log``) via :func:`_resolve_catalog_build_defaults` when they
-    were not supplied, then resolves the project root (explicit flag or
-    auto-detection) and delegates to :func:`build`.
+    Resolves the seven optional path args (``skills_dir``, ``agents_dir``,
+    ``out``, ``log``, ``plugin_overrides_dir``, ``plugins_dir``,
+    ``builtin_agents_dir``) via :func:`_resolve_catalog_build_defaults`
+    when they were not supplied, then resolves the project root (explicit
+    flag or auto-detection) and delegates to :func:`build`.
 
     Extracted so that both the standalone ``build_catalog`` entry point and
     the ``cli.py`` ``catalog build`` subcommand share identical post-parse
@@ -2092,23 +2130,26 @@ def run_catalog_build(args: argparse.Namespace) -> int:
 
     Args:
         args: A parsed ``argparse.Namespace`` carrying all attributes
-            registered by :func:`add_catalog_build_args`.  The four path
-            attrs (``skills_dir``, ``agents_dir``, ``out``, ``log``) may be
-            ``None`` when not supplied; this function resolves them before
-            delegating to :func:`build`.
+            registered by :func:`add_catalog_build_args`.  All seven path
+            attrs may be ``None`` when not supplied; this function resolves
+            them before delegating to :func:`build`.
 
     Returns:
         Integer exit code: ``0`` on a clean build, ``2`` when the
         catalog is degraded (see :func:`build`).
     """
-    # Resolve the four formerly-required path args from CLAUDE_HOME defaults
-    # when not explicitly provided.  This is the structural fix for issue #87:
-    # defaults live at the CLI, not at the hook.
+    # Resolve all optional path args from CLAUDE_HOME defaults when not
+    # explicitly provided.  This covers the original four (issue #87) and
+    # the three plugin-discovery flags (issue #124) that previously defaulted
+    # to None, silently disabling Pass 2.5 / Pass 2.6 / override resolution.
     resolved = _resolve_catalog_build_defaults(
         skills_dir=args.skills_dir,
         agents_dir=args.agents_dir,
         out=args.out,
         log=args.log,
+        plugin_overrides_dir=args.plugin_overrides_dir,
+        plugins_dir=args.plugins_dir,
+        builtin_agents_dir=args.builtin_agents_dir,
     )
 
     # Resolve project root: explicit flag takes priority; fall back to
@@ -2121,9 +2162,9 @@ def run_catalog_build(args: argparse.Namespace) -> int:
     return build(
         skills_dir=resolved["skills_dir"],
         agents_dir=resolved["agents_dir"],
-        plugin_overrides_dir=args.plugin_overrides_dir,
-        plugins_dir=args.plugins_dir,
-        builtin_agents_dir=args.builtin_agents_dir,
+        plugin_overrides_dir=resolved["plugin_overrides_dir"],
+        plugins_dir=resolved["plugins_dir"],
+        builtin_agents_dir=resolved["builtin_agents_dir"],
         corpus_path=args.corpus,
         out_path=resolved["out"],
         log_path=resolved["log"],
