@@ -1,9 +1,8 @@
 """Tests for .claude-plugin manifest files.
 
-Validates that plugin.json and marketplace.json contain all required
-fields for Claude Code plugin distribution.
-
-Completed by Issue #13 (marketplace.json + all plugin.json fields).
+Validates that plugin.json contains all required fields for Claude Code
+plugin distribution.  marketplace.json was removed in favour of the
+shared glitchwerks/plugins hub marketplace (Issue #147).
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ import pytest
 
 _REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 _PLUGIN_JSON: Path = _REPO_ROOT / ".claude-plugin" / "plugin.json"
-_MARKETPLACE_JSON: Path = _REPO_ROOT / ".claude-plugin" / "marketplace.json"
 
 
 # ---------------------------------------------------------------------------
@@ -40,20 +38,6 @@ def plugin_manifest() -> dict[str, Any]:
         json.JSONDecodeError: If the file is not valid JSON.
     """
     return json.loads(_PLUGIN_JSON.read_text(encoding="utf-8"))
-
-
-@pytest.fixture(scope="module")
-def marketplace_manifest() -> dict[str, Any]:
-    """Load and return the parsed marketplace.json manifest.
-
-    Returns:
-        A dict containing the parsed JSON content of marketplace.json.
-
-    Raises:
-        FileNotFoundError: If .claude-plugin/marketplace.json does not exist.
-        json.JSONDecodeError: If the file is not valid JSON.
-    """
-    return json.loads(_MARKETPLACE_JSON.read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -206,127 +190,6 @@ class TestPluginManifestRequiredFields:
         assert "repository" in plugin_manifest, (
             "plugin.json must contain a 'repository' field."
         )
-
-
-# ---------------------------------------------------------------------------
-# marketplace.json — required fields
-# ---------------------------------------------------------------------------
-
-
-class TestMarketplaceManifest:
-    """Tests for .claude-plugin/marketplace.json.
-
-    marketplace.json ships the marketplace-of-one self-listing for the
-    plugin sideload path:
-
-        /plugin marketplace add glitchwerks/claude-wayfinder
-    """
-
-    def test_marketplace_json_exists(self) -> None:
-        """Verify that .claude-plugin/marketplace.json is present."""
-        assert _MARKETPLACE_JSON.exists(), (
-            f"Expected {_MARKETPLACE_JSON} to exist."
-        )
-
-    def test_marketplace_json_valid_json(self) -> None:
-        """Verify that marketplace.json is valid JSON."""
-        text = _MARKETPLACE_JSON.read_text(encoding="utf-8")
-        manifest = json.loads(text)  # raises on invalid JSON
-        assert isinstance(manifest, dict), (
-            "marketplace.json must be a JSON object."
-        )
-
-    def test_name_field_present(
-        self, marketplace_manifest: dict[str, Any]
-    ) -> None:
-        """Verify that the 'name' field is present in marketplace.json.
-
-        Args:
-            marketplace_manifest: The parsed marketplace.json dict.
-        """
-        assert "name" in marketplace_manifest, (
-            "marketplace.json must contain a 'name' field."
-        )
-
-    def test_owner_field_present(
-        self, marketplace_manifest: dict[str, Any]
-    ) -> None:
-        """Verify that the 'owner' field is present in marketplace.json.
-
-        Args:
-            marketplace_manifest: The parsed marketplace.json dict.
-        """
-        assert "owner" in marketplace_manifest, (
-            "marketplace.json must contain an 'owner' field."
-        )
-
-    def test_plugins_field_present_and_non_empty(
-        self, marketplace_manifest: dict[str, Any]
-    ) -> None:
-        """Verify that 'plugins' is a non-empty list in marketplace.json.
-
-        Args:
-            marketplace_manifest: The parsed marketplace.json dict.
-        """
-        assert "plugins" in marketplace_manifest, (
-            "marketplace.json must contain a 'plugins' field."
-        )
-        plugins = marketplace_manifest["plugins"]
-        assert isinstance(plugins, list) and len(plugins) > 0, (
-            "marketplace.json 'plugins' must be a non-empty list."
-        )
-
-    def test_every_plugin_entry_has_source_field(
-        self, marketplace_manifest: dict[str, Any]
-    ) -> None:
-        """Verify every plugin entry has a 'source' field, not 'path'.
-
-        Per the official schema, each plugins[] entry requires a 'name'
-        and a 'source'. The legacy 'path' field is not recognised by
-        Claude Code and causes 'unsupported source type' errors at
-        install time.
-
-        Args:
-            marketplace_manifest: The parsed marketplace.json dict.
-        """
-        plugins = marketplace_manifest.get("plugins", [])
-        for i, entry in enumerate(plugins):
-            assert "source" in entry, (
-                f"plugins[{i}] (name={entry.get('name', '<unnamed>')!r}) "
-                "is missing the required 'source' field. "
-                "Use 'source' not 'path' — 'path' is not a recognised "
-                "plugin-entry field and will cause install failures."
-            )
-            assert "path" not in entry, (
-                f"plugins[{i}] (name={entry.get('name', '<unnamed>')!r}) "
-                "uses the invalid field 'path'. "
-                "Replace it with 'source'."
-            )
-
-    def test_every_plugin_string_source_starts_with_dot_slash(
-        self, marketplace_manifest: dict[str, Any]
-    ) -> None:
-        """Verify every string 'source' starts with './' for relative paths.
-
-        Per the official docs (Plugin sources → Relative paths), a
-        relative-path source must start with './'. Paths that do not
-        start with './' are rejected by the Claude Code validator.
-
-        Object sources (github, url, git-subdir, npm) are exempt —
-        they carry their own discriminator key.
-
-        Args:
-            marketplace_manifest: The parsed marketplace.json dict.
-        """
-        plugins = marketplace_manifest.get("plugins", [])
-        for i, entry in enumerate(plugins):
-            src = entry.get("source")
-            if isinstance(src, str):
-                assert src.startswith("./"), (
-                    f"plugins[{i}] (name={entry.get('name', '<unnamed>')!r}) "
-                    f"has source={src!r} which does not start with './'. "
-                    "Relative-path sources must start with './'."
-                )
 
 
 # ---------------------------------------------------------------------------
