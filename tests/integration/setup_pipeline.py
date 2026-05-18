@@ -29,7 +29,7 @@ class SetupError(Exception):
 
 
 def compute_plugin_data_dir(
-    plugin_id: str = "claude-wayfinder@claude-wayfinder",
+    plugin_id: str = "claude-wayfinder@glitchwerks",
 ) -> Path:
     """Step 1: Resolve ${CLAUDE_PLUGIN_DATA} deterministically.
 

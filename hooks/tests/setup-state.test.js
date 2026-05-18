@@ -240,7 +240,7 @@ test("_computePluginDataDir computes deterministic path from plugin ID", () => {
       ".claude",
       "plugins",
       "data",
-      "claude-wayfinder-claude-wayfinder"
+      "claude-wayfinder-glitchwerks"
     );
     assert.equal(result, expected);
   } finally {

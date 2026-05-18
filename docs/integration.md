@@ -20,7 +20,7 @@ The plugin materializes its Python venv on demand via the `/setup-wayfinder` ski
 
    > ⚠ claude-wayfinder requires setup. Run /setup-wayfinder to materialize the Python venv.
 
-3. Run `/setup-wayfinder`. The skill discovers Python >= 3.11, creates a venv at `~/.claude/plugins/data/claude-wayfinder-claude-wayfinder/venv/`, installs `claude-wayfinder` from PyPI, verifies the import, and writes a setup-state flag.
+3. Run `/setup-wayfinder`. The skill discovers Python >= 3.11, creates a venv at `~/.claude/plugins/data/claude-wayfinder-glitchwerks/venv/`, installs `claude-wayfinder` from PyPI, verifies the import, and writes a setup-state flag.
 4. Open a new session — hooks read the flag at session start and proceed normally.
 
 ### After a plugin update
