@@ -6,6 +6,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `catalog build` no longer exits non-zero when a `disabled: true`
+  plugin-override file targets a plugin skill absent from the discovery
+  index (stale tombstone).  Both bare invocation (defaults) and
+  explicit-flag invocation now consistently exit 0 and write a complete
+  catalog; the stale override is warned and skipped in both cases. (#132)
+
 ## [0.4.1] — 2026-05-18
 
 Patch release: three bug fixes against v0.4.0, all caught during downstream
