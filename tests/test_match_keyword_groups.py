@@ -281,3 +281,45 @@ class TestScoreWithGroups:
         )
         features = _match_mod.build_features({"task_description": "update the docs"})
         assert _match_mod.score(entry, features) == pytest.approx(0.625, abs=1e-6)
+
+
+class TestDispatchWrapper:
+    """The dispatch() in-process wrapper exposed for tests."""
+
+    def test_dispatch_wrapper_returns_decision_dict(self, tmp_path) -> None:
+        """dispatch(catalog_path=..., context={...}) returns the decision JSON as a dict."""
+        from claude_wayfinder import _dispatch as _disp_mod
+
+        catalog = {
+            "schema_version": 1,
+            "entries": [
+                {
+                    "name": "code-writer",
+                    "kind": "agent",
+                    "description": "Code writer.",
+                    "source": "owned",
+                    "routable": True,
+                    "triggers": {
+                        "command_prefixes": [],
+                        "agent_mentions": ["code-writer"],
+                        "path_globs": [],
+                        "keywords": [{"term": "implement", "weight": 1.0}],
+                        "tool_mentions": [],
+                        "excludes": [],
+                    },
+                    "applicable_skills": [],
+                }
+            ],
+        }
+        import json as _json
+        catalog_path = tmp_path / "catalog.json"
+        catalog_path.write_text(_json.dumps(catalog))
+
+        result = _disp_mod.dispatch(
+            catalog_path=catalog_path,
+            context={"task_description": "implement the new module"},
+        )
+        assert isinstance(result, dict)
+        assert "decision" in result
+        assert "confidence" in result
+        assert "rationale" in result
