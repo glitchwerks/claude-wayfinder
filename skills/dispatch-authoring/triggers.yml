@@ -1,7 +1,8 @@
 triggers:
   command_prefixes:
-    - "/frontmatter"
+    - "/dispatch-authoring"
   keywords:
+    - { term: "dispatch-authoring", weight: 1.0 }
     - { term: "frontmatter", weight: 1.0 }
     - { term: "triggers", weight: 1.0 }
     - { term: "keywords", weight: 0.5 }

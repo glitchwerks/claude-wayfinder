@@ -1,16 +1,18 @@
 ---
-name: frontmatter
+name: dispatch-authoring
 description: >
-  Matcher-aware authoring and troubleshooting knowledge for agent and
-  skill trigger frontmatter. Loaded by any agent (router, code-writer,
-  doc-writer, project-planner, etc.) when the user wants to write,
-  improve, troubleshoot, or understand dispatch frontmatter. Trigger
-  this skill whenever the user types /frontmatter, asks "how do I
+  Matcher-aware authoring and troubleshooting knowledge for the full
+  dispatch authoring surface — trigger frontmatter, applicable_agents,
+  applicable_skills, routable, and description: phrase-matching.
+  Loaded by any agent (router, code-writer, doc-writer,
+  project-planner, etc.) when the user wants to write, improve,
+  troubleshoot, or understand dispatch configuration. Trigger this
+  skill whenever the user types /dispatch-authoring, asks "how do I
   write triggers", "how do I make frontmatter for my agent", "what's
   a good keyword weight", "set up triggers", or says "my agent isn't
   being dispatched", "this skill never matches", "my frontmatter
   isn't working", "dispatch isn't picking up", or similar authoring
-  or troubleshooting requests around dispatch frontmatter. Covers
+  or troubleshooting requests around dispatch configuration. Covers
   the matcher's seven-decision ladder, scoring math, weight ladder
   {0.25, 0.5, 1.0}, fnmatch path-glob footguns, conflict-pair
   detection, and the audit-catalog CLI pointer.
@@ -439,7 +441,7 @@ expected, work through the symptom table below to identify the cause.
 > `python -m claude_wayfinder audit-catalog`. Run it whenever you add or
 > substantially edit a routable agent, before opening a PR that ships new
 > frontmatter, or as a periodic catalog sanity check. See
-> `docs/frontmatter-guide.md` for the rule reference and exit-code
+> `docs/dispatch-authoring-guide.md` for the rule reference and exit-code
 > contract.
 
 The CLI is the authoritative source for catalog-wide problems. It is not a
@@ -456,10 +458,10 @@ the full catalog by hand to detect otherwise.
 - `docs/design/trigger-schema.md` — design rationale for the schema;
   explains why certain field shapes were chosen and what alternatives were
   considered.
-- `docs/frontmatter-guide.md` — extended worked-examples companion to this
-  skill; covers edge cases and advanced calibration patterns not addressed
-  above.
+- `docs/dispatch-authoring-guide.md` — extended worked-examples companion
+  to this skill; covers edge cases and advanced calibration patterns not
+  addressed above.
 - `agent-authoring` skill (in `~/.claude/skills/agent-authoring/`) —
   broader harness authoring discipline covering agent structure, routing
-  configuration, and the full lifecycle of a new agent; this frontmatter
-  skill is its matcher-specific counterpart.
+  configuration, and the full lifecycle of a new agent; this
+  dispatch-authoring skill is its matcher-specific counterpart.
