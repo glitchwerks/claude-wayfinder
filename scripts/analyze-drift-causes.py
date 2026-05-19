@@ -301,7 +301,22 @@ def render_report(
     return "\n".join(lines)
 
 
+def _force_utf8_stdout() -> None:
+    """Reconfigure stdout/stderr to UTF-8 so report markers (✓, ⚠, ≠, ×)
+    render on Windows consoles that default to cp1252. No-op on POSIX or
+    when streams aren't reconfigurable (e.g., piped to a non-TTY).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdout()
     """Entry point for the analyze-drift-causes CLI.
 
     Args:

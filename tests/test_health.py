@@ -20,6 +20,10 @@ from typing import Any
 import pytest
 
 from claude_wayfinder._health import (
+    _BYPASS_CAUSE_MIN_SAMPLE,
+    _UNKNOWN_SHARE_WARN,
+    _UNWANTED_BYPASS_SHARE_MAX,
+    _build_bypass_causes_section,
     check_ci_invariants,
     compute_metrics,
     load_catalog_entries,
@@ -1080,14 +1084,7 @@ def test_load_catalog_entries_returns_empty_when_entries_missing(
 # 19. _build_bypass_causes_section — unit tests (#143)
 # ---------------------------------------------------------------------------
 
-from datetime import datetime, timedelta, timezone
-
-from claude_wayfinder._health import (
-    _BYPASS_CAUSE_MIN_SAMPLE,
-    _UNKNOWN_SHARE_WARN,
-    _UNWANTED_BYPASS_SHARE_MAX,
-    _build_bypass_causes_section,
-)
+from datetime import datetime, timedelta, timezone  # noqa: E402  (section header)
 
 
 def _now_iso(offset_days: int = 0) -> str:

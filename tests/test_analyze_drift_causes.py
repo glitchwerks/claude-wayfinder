@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Load the analyzer module from the script path (since it lives in scripts/
 # and is not a package).
 _SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "analyze-drift-causes.py"
