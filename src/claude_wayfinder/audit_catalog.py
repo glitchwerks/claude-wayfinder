@@ -193,19 +193,122 @@ def _resolve_catalog_path(arg: Path | None) -> Path:
     return Path.home() / ".claude" / "state" / "dispatch-catalog.json"
 
 
+_SEVERITY_FROM_FLAG: dict[str, Severity] = {
+    "blocking": Severity.BLOCKING,
+    "concern": Severity.CONCERN,
+    "nit": Severity.NIT,
+}
+
+
+def _filter_by_severity(
+    findings: list[Finding],
+    threshold: Severity | None,
+) -> list[Finding]:
+    """Return only findings at or above ``threshold`` severity.
+
+    Args:
+        findings: The full finding list to filter.
+        threshold: Minimum severity to retain, or ``None`` to keep all.
+
+    Returns:
+        Filtered list; order preserved.
+    """
+    if threshold is None:
+        return findings
+    return [f for f in findings if f.severity.value >= threshold.value]
+
+
+def _filter_by_target(
+    findings: list[Finding],
+    target: str | None,
+) -> list[Finding]:
+    """Return only findings whose ``entry`` field contains ``target``.
+
+    Args:
+        findings: The full finding list to filter.
+        target: Substring to match against each finding's ``entry``,
+            or ``None`` to keep all.
+
+    Returns:
+        Filtered list; order preserved.
+    """
+    if target is None:
+        return findings
+    return [f for f in findings if target in f.entry]
+
+
+def _exit_code_for(findings: list[Finding]) -> int:
+    """Compute the CLI exit code for a finding set.
+
+    Args:
+        findings: The (already filtered) list of findings to score.
+
+    Returns:
+        0 when no findings; otherwise the maximum ``Severity.value``
+        present (1 = NIT, 2 = CONCERN, 3 = BLOCKING).
+    """
+    if not findings:
+        return 0
+    return max(f.severity.value for f in findings)
+
+
+def _emit_text(findings: list[Finding]) -> None:
+    """Print a grouped human-readable text report to stdout.
+
+    Findings are grouped by severity (BLOCKING first, then CONCERN, NIT)
+    with a header and bullet per group.
+
+    Args:
+        findings: The (already filtered) list of findings to display.
+    """
+    if not findings:
+        print("audit-catalog: no findings.")
+        return
+    for sev in (Severity.BLOCKING, Severity.CONCERN, Severity.NIT):
+        bucket = [f for f in findings if f.severity == sev]
+        if not bucket:
+            continue
+        print(f"\n## {sev.name} ({len(bucket)})\n")
+        for f in bucket:
+            print(f"- [{f.rule}] {f.entry}: {f.message}")
+
+
+def _emit_json(findings: list[Finding]) -> None:
+    """Print findings as a JSON array to stdout.
+
+    Each element is an object with keys ``severity``, ``rule``,
+    ``entry``, and ``message``.
+
+    Args:
+        findings: The (already filtered) list of findings to serialize.
+    """
+    payload = [
+        {
+            "severity": f.severity.name,
+            "rule": f.rule,
+            "entry": f.entry,
+            "message": f.message,
+        }
+        for f in findings
+    ]
+    print(_json.dumps(payload, indent=2))
+
+
 def run_audit_cli(args: argparse.Namespace) -> int:
     """CLI entry point for ``audit-catalog``.
 
-    Loads the catalog, runs all registered rules, and prints findings.
-    Rendering, severity filtering, and exit-code mapping land in later
-    tasks (Tasks 16-17).  For now, one line per finding is emitted and
-    the command exits 0.
+    Loads the catalog, runs all registered rules, applies severity and
+    target filters, renders output (text or JSON), and returns an exit
+    code derived from the highest-severity finding in the filtered set.
+
+    Exit codes: 0 = no findings, 1 = NIT, 2 = CONCERN, 3 = BLOCKING.
 
     Args:
         args: Parsed CLI arguments from :func:`add_audit_catalog_args`.
 
     Returns:
-        Exit code: 0 on success, 1 on catalog load error.
+        Exit code derived from filtered findings (0-3), or 1 on load
+        error.
     """
     catalog_path = _resolve_catalog_path(getattr(args, "catalog", None))
     try:
@@ -216,14 +319,20 @@ def run_audit_cli(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+
     findings = run_audit(entries)
-    # Rendering + severity filter + exit-code mapping land in Tasks 16-17.
-    # For now: print one line per finding and exit 0.
-    for f in findings:
-        print(
-            f"{f.severity.name:<8}  [{f.rule}]  {f.entry}: {f.message}"
-        )
-    return 0
+
+    sev_flag = getattr(args, "severity", None)
+    threshold = _SEVERITY_FROM_FLAG.get(sev_flag) if sev_flag else None
+    findings = _filter_by_severity(findings, threshold)
+    findings = _filter_by_target(findings, getattr(args, "target", None))
+
+    if getattr(args, "json", False):
+        _emit_json(findings)
+    else:
+        _emit_text(findings)
+
+    return _exit_code_for(findings)
 
 
 # ---------------------------------------------------------------------------

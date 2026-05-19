@@ -9,8 +9,10 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -761,3 +763,76 @@ class TestDuplicateTriggerSet:
         a = _entry("a", kind="skill", triggers=t, applicable_skills=("x",))
         b = _entry("b", kind="skill", triggers=t, applicable_skills=("y",))
         assert rule_duplicate_trigger_set([a, b]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 16 — exit-code contract + --severity filter
+# ---------------------------------------------------------------------------
+
+
+class TestExitCodes:
+    """Exit code is the max severity present in the filtered finding set."""
+
+    def test_clean_catalog_exits_zero(self, tmp_path: Path) -> None:
+        """An empty catalog exits with code 0 (no findings)."""
+        cat = {"entries": []}
+        p = tmp_path / "cat.json"
+        p.write_text(json.dumps(cat))
+        cp = _run_cli("audit-catalog", "--catalog", str(p))
+        assert cp.returncode == 0
+
+    def test_blocking_exits_three(self, tmp_path: Path) -> None:
+        """A catalog with a BLOCKING finding exits with code 3."""
+        cat = {
+            "entries": [
+                {
+                    "name": "bad",
+                    "kind": "agent",
+                    "routable": True,
+                    "source": "owned",
+                    "applicable_skills": [],
+                    "triggers": {
+                        "command_prefixes": [],
+                        "agent_mentions": [],
+                        "path_globs": ["**/*.py"],
+                        "keywords": [{"term": "x", "weight": 0.7}],
+                        "tool_mentions": [],
+                        "excludes": [],
+                    },
+                }
+            ]
+        }
+        p = tmp_path / "cat.json"
+        p.write_text(json.dumps(cat))
+        cp = _run_cli("audit-catalog", "--catalog", str(p))
+        assert cp.returncode == 3, cp.stdout + cp.stderr
+
+    def test_severity_filter_changes_exit(self, tmp_path: Path) -> None:
+        """--severity blocking filters out NIT findings, reducing exit code."""
+        cat = {
+            "entries": [
+                {
+                    "name": "s",
+                    "kind": "skill",
+                    "routable": False,
+                    "source": "owned",
+                    "applicable_agents": [],
+                    "triggers": {
+                        "command_prefixes": ["/x"],
+                        "agent_mentions": [],
+                        "path_globs": [],
+                        "keywords": [{"term": "x", "weight": 1.0}],
+                        "tool_mentions": [],
+                        "excludes": [],
+                    },
+                }
+            ]
+        }
+        p = tmp_path / "cat.json"
+        p.write_text(json.dumps(cat))
+        cp = _run_cli("audit-catalog", "--catalog", str(p))
+        assert cp.returncode == 1
+        cp = _run_cli(
+            "audit-catalog", "--catalog", str(p), "--severity", "blocking"
+        )
+        assert cp.returncode == 0
