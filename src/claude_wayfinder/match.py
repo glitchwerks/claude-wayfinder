@@ -83,6 +83,14 @@ _MAX_SKILLS = 3
 # to 0.5 to fix single-keyword skills never attaching.
 _KEYWORD_MULTIPLIER = 0.5
 
+# Per-group score multiplier (spec D4 in
+# docs/superpowers/specs/2026-05-18-and-groups-design.md).
+# Distinct from _KEYWORD_MULTIPLIER (0.5) so a satisfied group can carry
+# more signal than any single keyword: a weight-1.0 group contributes 1.0
+# (solo-decides delegate), while a weight-0.5 group contributes 0.5
+# (attachment-only).
+_GROUP_MULTIPLIER = 1.0
+
 # Catalog error banner prefix (v5 §3.1.6).
 _CATALOG_ERROR_PREFIX = "[CATALOG ERROR]"
 
@@ -107,6 +115,40 @@ class Keyword:
     """
 
     term: str
+    weight: float
+
+
+@dataclass(frozen=True)
+class Slot:
+    """One slot in a keyword_group: a set of alternative terms (OR).
+
+    Attributes:
+        terms: Tuple of lowercase term strings. The slot is "filled"
+            when at least one of these terms is in features.keywords.
+        name: Optional human-readable label (e.g., "verbs", "nouns").
+            Ignored by the matcher; surfaced in debug/rationale output.
+    """
+
+    terms: tuple[str, ...]
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class KeywordGroup:
+    """A conjunctive expression: AND-of-slots, each slot is OR-of-terms.
+
+    Per spec § 3: group = AND-of-slots, slot = OR-of-terms. The group
+    is "satisfied" when EVERY slot is filled. A satisfied group
+    contributes ``_GROUP_MULTIPLIER * weight`` to the score and
+    suppresses singleton contributions for any term named in any of
+    its slots (replacement rule, spec D5).
+
+    Attributes:
+        slots: Tuple of Slots, length >= 2 (enforced at build time).
+        weight: Float in {0.25, 0.5, 1.0} (validator enforces clamp).
+    """
+
+    slots: tuple[Slot, ...]
     weight: float
 
 

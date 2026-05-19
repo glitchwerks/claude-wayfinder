@@ -14,7 +14,9 @@ from claude_wayfinder.match import (
     CatalogEntry,
     Features,
     Keyword,
+    KeywordGroup,
     ScoredEntry,
+    Slot,
     Triggers,
     build_features,
     decide,
@@ -39,8 +41,10 @@ __all__ = [
     # Dataclasses
     "CatalogEntry",
     "Features",
-    "ScoredEntry",
     "Keyword",
+    "KeywordGroup",
+    "ScoredEntry",
+    "Slot",
     "Triggers",
     # Constants
     "VALID_DECISIONS",
