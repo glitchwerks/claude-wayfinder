@@ -4278,7 +4278,7 @@ def test_colocated_sidecar_overrides_inline_triggers_for_owned_agent(
             triggers:
               keywords:
                 - { term: "sidecar", weight: 1.0 }
-            applicable_skills: ["typescript"]
+            applicable_skills: ["*"]
             """
         ),
         encoding="utf-8",
@@ -4311,7 +4311,7 @@ def test_colocated_sidecar_overrides_inline_triggers_for_owned_agent(
     assert "inline" not in kw_terms, (
         "inline triggers must be replaced by sidecar"
     )
-    assert entry.get("applicable_skills") == ["typescript"], (
+    assert entry.get("applicable_skills") == ["*"], (
         f"applicable_skills must come from sidecar; got {entry.get('applicable_skills')!r}"
     )
     # D2: warn when sidecar shadows inline triggers
@@ -4589,7 +4589,7 @@ def test_colocated_sidecar_overrides_inline_triggers_for_project_agent(
             triggers:
               keywords:
                 - { term: "sidecar-proj", weight: 1.0 }
-            applicable_skills: ["python"]
+            applicable_skills: ["*"]
             """
         ),
         encoding="utf-8",
@@ -4619,7 +4619,7 @@ def test_colocated_sidecar_overrides_inline_triggers_for_project_agent(
     kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
     assert "sidecar-proj" in kw_terms, "sidecar triggers must be applied to project entry"
     assert "inline-proj" not in kw_terms, "inline triggers must be replaced"
-    assert entry.get("applicable_skills") == ["python"], (
+    assert entry.get("applicable_skills") == ["*"], (
         f"applicable_skills must come from sidecar; got {entry.get('applicable_skills')!r}"
     )
 
