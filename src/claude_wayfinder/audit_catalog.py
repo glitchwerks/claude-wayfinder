@@ -252,3 +252,24 @@ def rule_weight_not_in_ladder(catalog: list[CatalogEntry]) -> list[Finding]:
                     )
                 )
     return out
+
+
+@register
+def rule_whitespace_in_term(catalog: list[CatalogEntry]) -> list[Finding]:
+    """Flag keyword terms containing any whitespace character."""
+    out: list[Finding] = []
+    for e in catalog:
+        for kw in e.triggers.keywords:
+            if any(c.isspace() for c in kw.term):
+                out.append(
+                    Finding(
+                        severity=Severity.BLOCKING,
+                        rule="whitespace-in-term",
+                        entry=e.name,
+                        message=(
+                            f"keyword term '{kw.term}' contains "
+                            "whitespace; matcher only operates on single tokens"
+                        ),
+                    )
+                )
+    return out

@@ -21,6 +21,7 @@ from claude_wayfinder.audit_catalog import (
     Finding,
     Severity,
     rule_weight_not_in_ladder,
+    rule_whitespace_in_term,
     run_audit,
 )
 from claude_wayfinder.match import CatalogEntry, Keyword, Triggers
@@ -197,3 +198,41 @@ class TestWeightNotInLadder:
         assert findings[0].severity == Severity.BLOCKING
         assert findings[0].entry == "bad"
         assert "0.7" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — rule_whitespace_in_term (BLOCKING)
+# ---------------------------------------------------------------------------
+
+
+class TestWhitespaceInTerm:
+    def test_clean_no_finding(self) -> None:
+        e = _entry(
+            "ok",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("clean-token", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_whitespace_in_term([e]) == []
+
+    def test_whitespace_flagged(self) -> None:
+        e = _entry(
+            "bad",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("two words", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        findings = rule_whitespace_in_term([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.BLOCKING
+        assert "two words" in findings[0].message
