@@ -701,6 +701,55 @@ test("check-agent-dispatch-pairing: taxonomy module-load failure → exits 0, un
   );
 });
 
+test("check-agent-dispatch-pairing: classify() returns malformed shape → exits 0, unenriched event, stderr 'malformed shape'", () => {
+  // Simulate a taxonomy module that loads fine and returns successfully but
+  // omits both `signals` and `cause` keys (malformed shape).
+  const driftPath = tmpDriftPath();
+
+  // Create a temp hooks dir with a malformed-returning bypass-taxonomy module
+  const tmpHooksDir = fs.mkdtempSync(path.join(os.tmpdir(), "malformed-classify-"));
+  const malformedLibDir = path.join(tmpHooksDir, "lib");
+  fs.mkdirSync(malformedLibDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(malformedLibDir, "bypass-taxonomy.js"),
+    'module.exports = { classify: () => ({}), INTERACTIVE_SKILLS: new Set() };\n'
+  );
+  const parseInputSrc = path.join(HOOKS_DIR, "parse-input.js");
+  fs.copyFileSync(parseInputSrc, path.join(tmpHooksDir, "parse-input.js"));
+
+  const hookSrc = fs.readFileSync(HOOK_SCRIPT, "utf8");
+  const tmpHookPath = path.join(tmpHooksDir, "check-agent-dispatch-pairing.js");
+  fs.writeFileSync(tmpHookPath, hookSrc);
+
+  // agentPayload([]) → no history → bypass category
+  const input = JSON.stringify(agentPayload([]));
+  const noSidecarDir = fs.mkdtempSync(path.join(os.tmpdir(), "no-sidecar-"));
+  const noSidecarPath = path.join(noSidecarDir, "nonexistent-sidecar.jsonl");
+  const result = require("node:child_process").spawnSync(
+    process.execPath,
+    [tmpHookPath],
+    {
+      input,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, ROUTER_DRIFT_PATH: driftPath, SKILL_SIDECAR_PATH: noSidecarPath },
+    }
+  );
+  const exitCode = result.status ?? 0;
+  const stderr = result.stderr ?? "";
+
+  assert.equal(exitCode, 0, `Hook must exit 0 even when classify returns malformed shape; stderr: ${stderr}`);
+
+  // Must still write the unenriched event (no bypass_signals, no bypass_cause)
+  const events = readDriftEvents(driftPath);
+  assert.equal(events.length, 1, "Unenriched drift event must still be written when classify returns malformed shape");
+  assert.equal(events[0].bypass_signals, undefined, "bypass_signals must be absent when classify returns malformed shape");
+  assert.equal(events[0].bypass_cause, undefined, "bypass_cause must be absent when classify returns malformed shape");
+
+  // Must warn on stderr with "malformed shape" (distinct from the "classify threw" message)
+  assert.match(stderr, /malformed shape/);
+});
+
 test("check-agent-dispatch-pairing: classify() throw at event time → exits 0, unenriched event, stderr warning", () => {
   // Simulate a taxonomy module that loads fine but throws when classify() is called.
   const driftPath = tmpDriftPath();
