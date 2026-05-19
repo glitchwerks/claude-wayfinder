@@ -836,3 +836,78 @@ class TestExitCodes:
             "audit-catalog", "--catalog", str(p), "--severity", "blocking"
         )
         assert cp.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 17 — --json + --target end-to-end tests
+# ---------------------------------------------------------------------------
+
+
+class TestJsonOutput:
+    """--json emits machine-readable JSON output."""
+
+    def test_json_emits_valid_array(self, tmp_path: Path) -> None:
+        """An empty catalog with --json outputs an empty JSON array."""
+        cat = {"entries": []}
+        p = tmp_path / "cat.json"
+        p.write_text(json.dumps(cat))
+        cp = _run_cli("audit-catalog", "--catalog", str(p), "--json")
+        assert cp.returncode == 0
+        assert json.loads(cp.stdout) == []
+
+
+class TestTargetFilter:
+    """--target restricts findings to named entries."""
+
+    def test_target_restricts_per_entry_findings(
+        self, tmp_path: Path
+    ) -> None:
+        """--target alpha shows only alpha's findings, not beta's."""
+        cat = {
+            "entries": [
+                {
+                    "name": "alpha",
+                    "kind": "agent",
+                    "routable": True,
+                    "source": "owned",
+                    "applicable_skills": [],
+                    "triggers": {
+                        "command_prefixes": [],
+                        "agent_mentions": [],
+                        "path_globs": ["**/*.py"],
+                        "keywords": [{"term": "x", "weight": 0.7}],
+                        "tool_mentions": [],
+                        "excludes": [],
+                    },
+                },
+                {
+                    "name": "beta",
+                    "kind": "agent",
+                    "routable": True,
+                    "source": "owned",
+                    "applicable_skills": [],
+                    "triggers": {
+                        "command_prefixes": [],
+                        "agent_mentions": [],
+                        "path_globs": ["**/*.py"],
+                        "keywords": [{"term": "y", "weight": 0.5}],
+                        "tool_mentions": [],
+                        "excludes": [],
+                    },
+                },
+            ]
+        }
+        p = tmp_path / "cat.json"
+        p.write_text(json.dumps(cat))
+        cp = _run_cli(
+            "audit-catalog",
+            "--catalog",
+            str(p),
+            "--json",
+            "--target",
+            "alpha",
+        )
+        payload = json.loads(cp.stdout)
+        names = {f["entry"] for f in payload}
+        assert "alpha" in names
+        assert "beta" not in names
