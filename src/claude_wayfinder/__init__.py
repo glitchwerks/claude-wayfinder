@@ -20,6 +20,7 @@ from claude_wayfinder.match import (
     Triggers,
     build_features,
     decide,
+    group_satisfied,
     load_catalog,
     score,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "load_catalog",
     "build_features",
     "score",
+    "group_satisfied",
     "decide",
     # Dataclasses
     "CatalogEntry",

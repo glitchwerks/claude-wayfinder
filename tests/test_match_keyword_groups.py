@@ -323,3 +323,68 @@ class TestDispatchWrapper:
         assert "decision" in result
         assert "confidence" in result
         assert "rationale" in result
+
+
+class TestRationaleListsFiredGroups:
+    """matcher_decision.output.rationale surfaces fired groups (AC #7)."""
+
+    def test_rationale_includes_fired_group_when_satisfied(
+        self, tmp_path
+    ) -> None:
+        """A satisfied group appears in the decision rationale string."""
+        from claude_wayfinder import _dispatch as _disp_mod
+
+        catalog = {
+            "schema_version": 1,
+            "entries": [
+                {
+                    "name": "doc-writer",
+                    "kind": "agent",
+                    "description": "Doc writer.",
+                    "source": "owned",
+                    "routable": True,
+                    "triggers": {
+                        "command_prefixes": [],
+                        "agent_mentions": [],
+                        "path_globs": [],
+                        "keywords": [],
+                        "tool_mentions": [],
+                        "excludes": [],
+                        "keyword_groups": [
+                            {
+                                "slots": [
+                                    {
+                                        "name": "verbs",
+                                        "terms": ["update", "edit"],
+                                    },
+                                    {
+                                        "name": "nouns",
+                                        "terms": ["docs", "readme"],
+                                    },
+                                ],
+                                "weight": 1.0,
+                            }
+                        ],
+                    },
+                    "applicable_skills": [],
+                }
+            ],
+        }
+        import json
+
+        catalog_path = tmp_path / "catalog.json"
+        catalog_path.write_text(json.dumps(catalog))
+
+        result = _disp_mod.dispatch(
+            catalog_path=catalog_path,
+            # file_paths provides a second feature dimension so feature_count
+            # reaches 2 and avoids the needs_more_detail short-circuit.
+            context={
+                "task_description": "update the docs",
+                "file_paths": ["README.md"],
+            },
+        )
+        # The decision's rationale should mention the group having fired.
+        assert "group" in result["rationale"].lower()
+        # Slot names (when present) appear joined by '+' — e.g. "verbs+nouns".
+        assert "verbs+nouns" in result["rationale"]

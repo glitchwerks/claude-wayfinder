@@ -679,6 +679,25 @@ def _matched_glob_count(entry: CatalogEntry, features: Features) -> int:
     return count
 
 
+def group_satisfied(group: KeywordGroup, features: Features) -> bool:
+    """Return True iff every slot has at least one term in features.keywords.
+
+    Public helper shared by ``score()`` and rationale composition so
+    both use the identical predicate with no duplication.
+
+    Args:
+        group: The ``KeywordGroup`` to evaluate.
+        features: Current feature set.
+
+    Returns:
+        ``True`` when all slots are satisfied, ``False`` otherwise.
+    """
+    return all(
+        any(term in features.keywords for term in slot.terms)
+        for slot in group.slots
+    )
+
+
 def score(entry: CatalogEntry, features: Features) -> float:
     """Compute the match score for one catalog entry against features.
 
@@ -738,10 +757,7 @@ def score(entry: CatalogEntry, features: Features) -> float:
     # group's slots (replacement rule, spec D5).
     suppressed: set[str] = set()
     for group in t.keyword_groups:
-        if all(
-            any(term in features.keywords for term in slot.terms)
-            for slot in group.slots
-        ):
+        if group_satisfied(group, features):
             s += _GROUP_MULTIPLIER * group.weight
             for slot in group.slots:
                 suppressed.update(slot.terms)
@@ -964,6 +980,16 @@ def decide(
 def _rationale_for(se: ScoredEntry, features: Features) -> str:
     """Build a short human-readable rationale string.
 
+    Format: ``matched <seg1>; <seg2>; ....``
+
+    Segments (each only emitted when non-empty):
+    - ``keywords: term1, term2``    — matched singleton keywords
+    - ``globs: pat1, pat2``         — matched path globs
+    - ``tools: tool1, tool2``       — matched tool mentions
+    - ``groups: [name1+name2, ...]``— fired keyword groups (slot names
+      joined by ``+``; falls back to ``group_<index>`` when a slot is
+      unnamed)
+
     Args:
         se: The winning scored entry.
         features: Extracted feature set.
@@ -989,6 +1015,21 @@ def _rationale_for(se: ScoredEntry, features: Features) -> str:
             features.tool_mentions & se.entry.triggers.tool_mentions
         )
         parts.append(f"tools: {', '.join(matched_tools[:2])}")
+
+    # Fired keyword groups segment (AC #7).
+    # Label each satisfied group by its slot names joined with '+', or
+    # by zero-based index when any slot is unnamed.
+    fired_group_labels: list[str] = []
+    for idx, grp in enumerate(se.entry.triggers.keyword_groups):
+        if group_satisfied(grp, features):
+            if all(slot.name for slot in grp.slots):
+                label = "+".join(slot.name for slot in grp.slots)  # type: ignore[arg-type]
+            else:
+                label = f"group_{idx}"
+            fired_group_labels.append(label)
+    if fired_group_labels:
+        parts.append(f"groups: [{', '.join(fired_group_labels)}]")
+
     if not parts:
         return f"matched '{se.entry.name}' with score {se.score:.2f}."
     return f"matched {'; '.join(parts)}."
