@@ -442,6 +442,279 @@ def _validate_keywords(
     return [seen[t] for t in order], issues
 
 
+def _validate_keyword_groups(
+    name: str,
+    raw: Any,
+) -> tuple[list[dict[str, Any]], list[ValidationIssue]]:
+    """Validate triggers.keyword_groups; return (sanitized, issues).
+
+    Spec § 6 validator rules:
+        - slots: must be a list of length 2..8 (fatal outside)
+        - slots length 4..8: warning ("real prompts rarely contain N roles")
+        - each slot: 'terms' list with >= 1 string (1 term: warning)
+        - intra-group term overlap: fatal
+        - weight: must be in ALLOWED_WEIGHTS (fatal otherwise)
+        - slot.name with whitespace: warning
+
+    Sanitized output is the canonical dict form:
+        [{'slots': [{'name': str|None, 'terms': [...]}], 'weight': float}, ...]
+
+    Args:
+        name: Entry name, used as ``entry_name`` in any issues.
+        raw: The raw value of the ``keyword_groups`` key from frontmatter.
+
+    Returns:
+        A 2-tuple of ``(sanitized_groups, issues)``. Groups that fail a
+        fatal check are dropped from ``sanitized_groups`` individually;
+        only an un-parseable top-level list causes an empty return.
+    """
+    issues: list[ValidationIssue] = []
+
+    if raw is None:
+        return [], issues  # field is optional
+
+    if not isinstance(raw, list):
+        issues.append(
+            ValidationIssue(
+                "fatal",
+                name,
+                "'triggers.keyword_groups' must be a list — field dropped",
+            )
+        )
+        return [], issues
+
+    sanitized: list[dict[str, Any]] = []
+
+    for g_idx, raw_group in enumerate(raw):
+        if not isinstance(raw_group, dict):
+            issues.append(
+                ValidationIssue(
+                    "fatal",
+                    name,
+                    f"keyword_groups[{g_idx}] is not a mapping — group dropped",
+                )
+            )
+            continue
+
+        raw_slots = raw_group.get("slots")
+        if not isinstance(raw_slots, list):
+            issues.append(
+                ValidationIssue(
+                    "fatal",
+                    name,
+                    f"keyword_groups[{g_idx}].slots must be a list — group dropped",
+                )
+            )
+            continue
+        if len(raw_slots) < 2:
+            issues.append(
+                ValidationIssue(
+                    "fatal",
+                    name,
+                    f"keyword_groups[{g_idx}] needs >= 2 slots; use 'keywords:' "
+                    "for single-term triggers — group dropped",
+                )
+            )
+            continue
+        if len(raw_slots) > 8:
+            issues.append(
+                ValidationIssue(
+                    "fatal",
+                    name,
+                    f"keyword_groups[{g_idx}] has {len(raw_slots)} slots; "
+                    "max is 8 — group dropped",
+                )
+            )
+            continue
+        if len(raw_slots) >= 4:
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    name,
+                    f"keyword_groups[{g_idx}] has {len(raw_slots)} slots — "
+                    "real prompts rarely contain that many distinct role tokens; "
+                    "verify against real user phrasing",
+                )
+            )
+
+        # Validate each slot.
+        slot_results: list[dict[str, Any]] = []
+        slot_fatal = False
+        all_terms_per_slot: list[set[str]] = []
+
+        for s_idx, raw_slot in enumerate(raw_slots):
+            slot_name: str | None = None
+            if isinstance(raw_slot, list):
+                raw_terms: list[Any] = raw_slot
+            elif isinstance(raw_slot, dict):
+                raw_terms = raw_slot.get("terms")  # type: ignore[assignment]
+                name_val = raw_slot.get("name")
+                if isinstance(name_val, str):
+                    slot_name = name_val
+                    if any(c.isspace() for c in name_val) or not name_val.replace(
+                        "_", ""
+                    ).isalnum():
+                        issues.append(
+                            ValidationIssue(
+                                "warning",
+                                name,
+                                f"keyword_groups[{g_idx}].slots[{s_idx}].name "
+                                f"'{name_val}' should be a short identifier "
+                                "(alphanumeric + underscore)",
+                            )
+                        )
+            else:
+                issues.append(
+                    ValidationIssue(
+                        "fatal",
+                        name,
+                        f"keyword_groups[{g_idx}].slots[{s_idx}] is neither a "
+                        "list nor a mapping — group dropped",
+                    )
+                )
+                slot_fatal = True
+                break
+
+            if not isinstance(raw_terms, list) or not raw_terms:
+                issues.append(
+                    ValidationIssue(
+                        "fatal",
+                        name,
+                        f"keyword_groups[{g_idx}].slots[{s_idx}].terms must "
+                        "be a non-empty list — group dropped",
+                    )
+                )
+                slot_fatal = True
+                break
+
+            terms: list[str] = []
+            for t in raw_terms:
+                if not isinstance(t, str) or not t:
+                    issues.append(
+                        ValidationIssue(
+                            "fatal",
+                            name,
+                            f"keyword_groups[{g_idx}].slots[{s_idx}].terms "
+                            "contains a non-string or empty entry — group dropped",
+                        )
+                    )
+                    slot_fatal = True
+                    break
+                terms.append(t.lower())
+            if slot_fatal:
+                break
+
+            if len(terms) == 1:
+                issues.append(
+                    ValidationIssue(
+                        "warning",
+                        name,
+                        f"keyword_groups[{g_idx}].slots[{s_idx}] is a "
+                        f"single-term slot ('{terms[0]}') — consider merging into "
+                        "an adjacent slot or using 'keywords:' if the term is "
+                        "a standalone signal",
+                    )
+                )
+
+            slot_results.append({"name": slot_name, "terms": terms})
+            all_terms_per_slot.append(set(terms))
+
+        if slot_fatal:
+            continue
+
+        # Intra-group term overlap check.
+        seen_terms: dict[str, int] = {}
+        overlap_fatal = False
+        for s_idx, term_set in enumerate(all_terms_per_slot):
+            for term in term_set:
+                if term in seen_terms:
+                    issues.append(
+                        ValidationIssue(
+                            "fatal",
+                            name,
+                            f"keyword_groups[{g_idx}]: term '{term}' appears "
+                            f"in slots[{seen_terms[term]}] AND slots[{s_idx}] — a "
+                            "term cannot fill two roles in one expression; "
+                            "group dropped",
+                        )
+                    )
+                    overlap_fatal = True
+                    break
+                seen_terms[term] = s_idx
+            if overlap_fatal:
+                break
+        if overlap_fatal:
+            continue
+
+        # Weight validation — clamp + warn (consistent with _validate_keywords).
+        # Per project-reviewer concern C3: keep behavior symmetric with the
+        # singleton-keyword validator. Out-of-range weights are still fatal;
+        # in-range-but-non-canonical weights are clamped with a warning.
+        raw_weight = raw_group.get("weight")
+        if isinstance(raw_weight, bool) or not isinstance(
+            raw_weight, (int, float)
+        ):
+            issues.append(
+                ValidationIssue(
+                    "fatal",
+                    name,
+                    f"keyword_groups[{g_idx}].weight must be numeric — "
+                    "group dropped",
+                )
+            )
+            continue
+        weight_f = float(raw_weight)
+        if weight_f < 0.0 or weight_f > 1.0:
+            issues.append(
+                ValidationIssue(
+                    "fatal",
+                    name,
+                    f"keyword_groups[{g_idx}].weight {weight_f} outside "
+                    "[0.0, 1.0] — group dropped",
+                )
+            )
+            continue
+        if weight_f not in ALLOWED_WEIGHTS:
+            clamped = _clamp_weight(weight_f)
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    name,
+                    f"keyword_groups[{g_idx}].weight {weight_f} not in "
+                    f"{{0.25, 0.5, 1.0}} — clamped to {clamped}",
+                )
+            )
+            weight_f = clamped
+
+        sanitized.append({"slots": slot_results, "weight": weight_f})
+
+    # Cross-group term overlap check (project-reviewer concern C2).
+    # Spec D5 replacement rule: any singleton whose term appears in ANY
+    # satisfied group is suppressed. If two groups on the same entry share
+    # a term and only one fires, the singleton is still suppressed — which
+    # may surprise authors. Warn (not error) so authors verify intent.
+    term_to_groups: dict[str, list[int]] = {}
+    for g_idx, group in enumerate(sanitized):
+        for slot in group["slots"]:
+            for term in slot["terms"]:
+                term_to_groups.setdefault(term, []).append(g_idx)
+    for term, group_indices in term_to_groups.items():
+        unique_groups = sorted(set(group_indices))
+        if len(unique_groups) >= 2:
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    name,
+                    f"term '{term}' appears in multiple keyword_groups "
+                    f"({unique_groups}) — if only one group fires, the "
+                    f"singleton for '{term}' is still suppressed (D5 "
+                    "replacement rule). Verify this is intended.",
+                )
+            )
+
+    return sanitized, issues
+
+
 def validate_entry(
     fm: dict[str, Any],
     *,
@@ -542,6 +815,13 @@ def validate_entry(
                 return ValidationResult(entry=None, issues=issues)
             sanitized_triggers[field] = list(raw)
 
+    # --- Validate keyword_groups (parallel path — NOT in TRIGGER_FIELDS) ---
+    raw_groups = triggers_raw.get("keyword_groups")
+    sanitized_groups, group_issues = _validate_keyword_groups(name, raw_groups)
+    issues.extend(group_issues)
+    if sanitized_groups:
+        sanitized_triggers["keyword_groups"] = sanitized_groups
+
     # --- Validate inverse field (applicable_agents / applicable_skills) ---
     inverse_field = "applicable_agents" if kind == "skill" else "applicable_skills"
     inverse = fm.get(inverse_field, [])
@@ -628,6 +908,18 @@ def _sort_entry_lists(entry: dict[str, Any]) -> dict[str, Any]:
             triggers[field] = sorted(raw_list, key=lambda k: k["term"])
         else:
             triggers[field] = sorted(raw_list)
+
+    # Sort keyword_groups deterministically by (slots_len, weight).
+    # Author-order is already stable but explicit sort makes output
+    # byte-identical across re-runs even if catalog input ordering varies.
+    # Handled as a parallel path — NOT via TRIGGER_FIELDS — because groups
+    # are dicts, which are not orderable via sorted() directly (Step 6.4).
+    groups = triggers.get("keyword_groups")
+    if groups:
+        triggers["keyword_groups"] = sorted(
+            groups,
+            key=lambda g: (len(g.get("slots", [])), g.get("weight", 0.0)),
+        )
 
     inverse_field = "applicable_agents" if entry["kind"] == "skill" else "applicable_skills"
     out: dict[str, Any] = {

@@ -83,6 +83,14 @@ _MAX_SKILLS = 3
 # to 0.5 to fix single-keyword skills never attaching.
 _KEYWORD_MULTIPLIER = 0.5
 
+# Per-group score multiplier (spec D4 in
+# docs/superpowers/specs/2026-05-18-and-groups-design.md).
+# Distinct from _KEYWORD_MULTIPLIER (0.5) so a satisfied group can carry
+# more signal than any single keyword: a weight-1.0 group contributes 1.0
+# (solo-decides delegate), while a weight-0.5 group contributes 0.5
+# (attachment-only).
+_GROUP_MULTIPLIER = 1.0
+
 # Catalog error banner prefix (v5 §3.1.6).
 _CATALOG_ERROR_PREFIX = "[CATALOG ERROR]"
 
@@ -111,6 +119,40 @@ class Keyword:
 
 
 @dataclass(frozen=True)
+class Slot:
+    """One slot in a keyword_group: a set of alternative terms (OR).
+
+    Attributes:
+        terms: Tuple of lowercase term strings. The slot is "filled"
+            when at least one of these terms is in features.keywords.
+        name: Optional human-readable label (e.g., "verbs", "nouns").
+            Ignored by the matcher; surfaced in debug/rationale output.
+    """
+
+    terms: tuple[str, ...]
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class KeywordGroup:
+    """A conjunctive expression: AND-of-slots, each slot is OR-of-terms.
+
+    Per spec § 3: group = AND-of-slots, slot = OR-of-terms. The group
+    is "satisfied" when EVERY slot is filled. A satisfied group
+    contributes ``_GROUP_MULTIPLIER * weight`` to the score and
+    suppresses singleton contributions for any term named in any of
+    its slots (replacement rule, spec D5).
+
+    Attributes:
+        slots: Tuple of Slots, length >= 2 (enforced at build time).
+        weight: Float in {0.25, 0.5, 1.0} (validator enforces clamp).
+    """
+
+    slots: tuple[Slot, ...]
+    weight: float
+
+
+@dataclass(frozen=True)
 class Triggers:
     """Parsed trigger block for one catalog entry.
 
@@ -119,6 +161,10 @@ class Triggers:
         agent_mentions: Agent names whose explicit mention scores 1.0.
         path_globs: fnmatch-style globs matched against file paths.
         keywords: Weighted keyword terms matched against extracted tokens.
+        keyword_groups: Conjunctive AND-group triggers. Each group is
+            satisfied when every slot has >=1 term in
+            features.keywords. See spec
+            docs/superpowers/specs/2026-05-18-and-groups-design.md.
         tool_mentions: Tool names matched against features.tool_mentions.
         excludes: Terms that hard-zero the entry's score when present.
     """
@@ -129,6 +175,7 @@ class Triggers:
     keywords: tuple[Keyword, ...]
     tool_mentions: frozenset[str]
     excludes: frozenset[str]
+    keyword_groups: tuple[KeywordGroup, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -385,6 +432,79 @@ def _write_log_entry(
         print(f"[match.py] log write failed: {err}", file=sys.stderr)
 
 
+def _parse_slot(raw: Any) -> Slot | None:
+    """Parse one slot from a raw catalog value.
+
+    Accepts two forms (matcher is lenient; builder normalizes to dict):
+
+    - Bare list of strings: ``['a', 'b']``
+    - Dict with terms (+ optional name):
+      ``{'terms': ['a', 'b'], 'name': 'verbs'}``
+
+    Returns ``None`` for malformed input (group containing this slot
+    will be silently dropped — fatal validation lives in
+    build_catalog.py).
+
+    Args:
+        raw: Unvalidated catalog value for a single slot entry.
+
+    Returns:
+        A ``Slot`` instance, or ``None`` if the input is malformed.
+    """
+    if isinstance(raw, list):
+        terms = tuple(
+            str(t).lower() for t in raw if isinstance(t, str)
+        )
+        if not terms:
+            return None
+        return Slot(terms=terms, name=None)
+    if isinstance(raw, dict):
+        raw_terms = raw.get("terms")
+        if not isinstance(raw_terms, list):
+            return None
+        terms = tuple(
+            str(t).lower() for t in raw_terms if isinstance(t, str)
+        )
+        if not terms:
+            return None
+        name_val = raw.get("name")
+        name = str(name_val) if isinstance(name_val, str) else None
+        return Slot(terms=terms, name=name)
+    return None
+
+
+def _parse_keyword_group(raw: Any) -> KeywordGroup | None:
+    """Parse one keyword_group from a raw catalog value.
+
+    Returns ``None`` when the group is malformed; build_catalog.py is
+    responsible for emitting fatal/warning issues at catalog build
+    time.  The matcher silently drops malformed entries so a corrupted
+    catalog degrades gracefully rather than crashing at dispatch time.
+
+    Args:
+        raw: Unvalidated catalog value for a single keyword_group.
+
+    Returns:
+        A ``KeywordGroup`` instance, or ``None`` if the input is
+        malformed.
+    """
+    if not isinstance(raw, dict):
+        return None
+    raw_slots = raw.get("slots")
+    if not isinstance(raw_slots, list) or len(raw_slots) < 2:
+        return None
+    slots: list[Slot] = []
+    for raw_slot in raw_slots:
+        slot = _parse_slot(raw_slot)
+        if slot is None:
+            return None
+        slots.append(slot)
+    weight = raw.get("weight")
+    if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+        return None
+    return KeywordGroup(slots=tuple(slots), weight=float(weight))
+
+
 def _parse_triggers(raw: dict[str, Any]) -> Triggers:
     """Parse the raw ``triggers`` dict from a catalog entry.
 
@@ -401,8 +521,17 @@ def _parse_triggers(raw: dict[str, Any]) -> Triggers:
     for kw in raw.get("keywords", []):
         if isinstance(kw, dict) and "term" in kw and "weight" in kw:
             keywords.append(
-                Keyword(term=str(kw["term"]).lower(), weight=float(kw["weight"]))
+                Keyword(
+                    term=str(kw["term"]).lower(),
+                    weight=float(kw["weight"]),
+                )
             )
+
+    keyword_groups: list[KeywordGroup] = []
+    for raw_group in raw.get("keyword_groups", []):
+        group = _parse_keyword_group(raw_group)
+        if group is not None:
+            keyword_groups.append(group)
 
     return Triggers(
         command_prefixes=frozenset(
@@ -416,7 +545,10 @@ def _parse_triggers(raw: dict[str, Any]) -> Triggers:
         tool_mentions=frozenset(
             str(x).lower() for x in raw.get("tool_mentions", [])
         ),
-        excludes=frozenset(str(x).lower() for x in raw.get("excludes", [])),
+        excludes=frozenset(
+            str(x).lower() for x in raw.get("excludes", [])
+        ),
+        keyword_groups=tuple(keyword_groups),
     )
 
 
@@ -547,24 +679,47 @@ def _matched_glob_count(entry: CatalogEntry, features: Features) -> int:
     return count
 
 
+def group_satisfied(group: KeywordGroup, features: Features) -> bool:
+    """Return True iff every slot has at least one term in features.keywords.
+
+    Public helper shared by ``score()`` and rationale composition so
+    both use the identical predicate with no duplication.
+
+    Args:
+        group: The ``KeywordGroup`` to evaluate.
+        features: Current feature set.
+
+    Returns:
+        ``True`` when all slots are satisfied, ``False`` otherwise.
+    """
+    return all(
+        any(term in features.keywords for term in slot.terms)
+        for slot in group.slots
+    )
+
+
 def score(entry: CatalogEntry, features: Features) -> float:
     """Compute the match score for one catalog entry against features.
 
-    Implements the scoring formula from v5 §3.1.2 exactly::
+    Implements the scoring formula from spec §5
+    (docs/superpowers/specs/2026-05-18-and-groups-design.md)::
 
         if command_prefix matches → return 1.0
         if agent_mention matches → return 1.0
         if any exclude term in features.keywords → return 0.0
-        s = 0
-        s += 0.4 * matched_glob_count(entry, features)
-        s += sum(0.5 * k.weight for matching keywords)
+        s  = 0
+        s += 0.4 * matched_glob_count
         s += 0.5 * count of matching tool_mentions
+        # Group evaluation (collect suppressed terms):
+        suppressed = set()
+        for group in keyword_groups:
+            if all slots filled:
+                s += _GROUP_MULTIPLIER * group.weight
+                suppressed |= union of slot.terms
+        # Singletons (skip suppressed terms):
+        s += sum(_KEYWORD_MULTIPLIER * k.weight
+                 for k in keywords if k.term matched AND k.term not in suppressed)
         return min(s, 1.0)
-
-    Note: ``file_extensions`` is removed from the schema.
-    The original v5 formula included ``0.4 * file_extensions``; this
-    implementation omits it and uses path_globs exclusively, consistent
-    with docs/design/trigger-schema.md §4.
 
     Args:
         entry: One catalog entry to score.
@@ -590,15 +745,29 @@ def score(entry: CatalogEntry, features: Features) -> float:
     s = 0.0
     # Path glob contributions: 0.4 per matched glob (each counted once).
     s += 0.4 * _matched_glob_count(entry, features)
-    # Keyword contributions: _KEYWORD_MULTIPLIER * weight per matched term.
-    s += sum(
-        _KEYWORD_MULTIPLIER * k.weight
-        for k in t.keywords
-        if k.term in features.keywords
-    )
     # Tool mention contributions: 0.5 per matched tool.
     s += 0.5 * len(
         [t_name for t_name in t.tool_mentions if t_name in features.tool_mentions]
+    )
+
+    # Keyword group evaluation (spec §5).
+    # A group is satisfied when every slot has at least one term in
+    # features.keywords. Satisfied groups contribute _GROUP_MULTIPLIER *
+    # weight and suppress singletons for terms named in any of the
+    # group's slots (replacement rule, spec D5).
+    suppressed: set[str] = set()
+    for group in t.keyword_groups:
+        if group_satisfied(group, features):
+            s += _GROUP_MULTIPLIER * group.weight
+            for slot in group.slots:
+                suppressed.update(slot.terms)
+
+    # Keyword contributions: _KEYWORD_MULTIPLIER * weight per matched
+    # term, EXCEPT terms covered by a satisfied group (suppressed).
+    s += sum(
+        _KEYWORD_MULTIPLIER * k.weight
+        for k in t.keywords
+        if k.term in features.keywords and k.term not in suppressed
     )
     return min(s, 1.0)
 
@@ -811,6 +980,16 @@ def decide(
 def _rationale_for(se: ScoredEntry, features: Features) -> str:
     """Build a short human-readable rationale string.
 
+    Format: ``matched <seg1>; <seg2>; ....``
+
+    Segments (each only emitted when non-empty):
+    - ``keywords: term1, term2``    — matched singleton keywords
+    - ``globs: pat1, pat2``         — matched path globs
+    - ``tools: tool1, tool2``       — matched tool mentions
+    - ``groups: [name1+name2, ...]``— fired keyword groups (slot names
+      joined by ``+``; falls back to ``group_<index>`` when a slot is
+      unnamed)
+
     Args:
         se: The winning scored entry.
         features: Extracted feature set.
@@ -836,6 +1015,21 @@ def _rationale_for(se: ScoredEntry, features: Features) -> str:
             features.tool_mentions & se.entry.triggers.tool_mentions
         )
         parts.append(f"tools: {', '.join(matched_tools[:2])}")
+
+    # Fired keyword groups segment (AC #7).
+    # Label each satisfied group by its slot names joined with '+', or
+    # by zero-based index when any slot is unnamed.
+    fired_group_labels: list[str] = []
+    for idx, grp in enumerate(se.entry.triggers.keyword_groups):
+        if group_satisfied(grp, features):
+            if all(slot.name for slot in grp.slots):
+                label = "+".join(slot.name for slot in grp.slots)  # type: ignore[arg-type]
+            else:
+                label = f"group_{idx}"
+            fired_group_labels.append(label)
+    if fired_group_labels:
+        parts.append(f"groups: [{', '.join(fired_group_labels)}]")
+
     if not parts:
         return f"matched '{se.entry.name}' with score {se.score:.2f}."
     return f"matched {'; '.join(parts)}."

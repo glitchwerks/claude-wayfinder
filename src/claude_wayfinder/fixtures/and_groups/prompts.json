@@ -1,0 +1,42 @@
+[
+  {
+    "prompt": "update the docs",
+    "context_extra": {"file_paths": ["docs/README.md"]},
+    "expected_decision": "delegate",
+    "expected_agent": "doc-writer",
+    "expected_confidence": 1.0,
+    "rationale": "spec § 7.1 row 1: verb+noun group fires; keyword+glob+group → confidence 1.0"
+  },
+  {
+    "prompt": "edit the readme",
+    "context_extra": {"file_paths": ["docs/guide.md"]},
+    "expected_decision": "delegate",
+    "expected_agent": "doc-writer",
+    "expected_confidence": 1.0,
+    "rationale": "spec § 7.1 row 2: verb+noun group fires; keyword+group → confidence 1.0"
+  },
+  {
+    "prompt": "the docs are great",
+    "context_extra": {"file_paths": ["docs/README.md"]},
+    "expected_decision": "delegate",
+    "expected_agent": "doc-writer",
+    "expected_confidence": 0.9,
+    "rationale": "spec § 7.1 row 3: no verb in slot 1, group does NOT fire; keyword+glob only → confidence 0.9 (below 1.0 vs rows 1-2)"
+  },
+  {
+    "prompt": "implement a new feature in auth.py",
+    "context_extra": {"file_paths": ["src/auth.py"]},
+    "expected_decision": "delegate",
+    "expected_agent": "code-writer",
+    "expected_confidence": 1.0,
+    "rationale": "Code-writer keywords + .py glob; group does not fire on doc-writer (no noun)"
+  },
+  {
+    "prompt": "modify the spec document",
+    "context_extra": {"file_paths": ["docs/spec.md"]},
+    "expected_decision": "delegate",
+    "expected_agent": "doc-writer",
+    "expected_confidence": 1.0,
+    "rationale": "Verb 'modify' (slot 1) + 'spec' (slot 2) → group fires; keyword+group → confidence 1.0"
+  }
+]
