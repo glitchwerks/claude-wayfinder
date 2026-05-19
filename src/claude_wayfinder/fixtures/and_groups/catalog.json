@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "catalog_hash": "and_groups_fixture_v1",
+  "entries": [
+    {
+      "name": "code-writer",
+      "kind": "agent",
+      "description": "Code writer fixture.",
+      "source": "owned",
+      "routable": true,
+      "triggers": {
+        "command_prefixes": [],
+        "agent_mentions": ["code-writer"],
+        "path_globs": ["**/*.py", "*.py"],
+        "keywords": [
+          {"term": "implement", "weight": 1.0},
+          {"term": "write", "weight": 1.0},
+          {"term": "update", "weight": 0.5},
+          {"term": "edit", "weight": 0.5}
+        ],
+        "tool_mentions": [],
+        "excludes": [],
+        "keyword_groups": []
+      },
+      "applicable_skills": []
+    },
+    {
+      "name": "doc-writer",
+      "kind": "agent",
+      "description": "Doc writer fixture.",
+      "source": "owned",
+      "routable": true,
+      "triggers": {
+        "command_prefixes": [],
+        "agent_mentions": ["doc-writer"],
+        "path_globs": ["docs/**/*.md", "**/README.md"],
+        "keywords": [
+          {"term": "docs", "weight": 1.0},
+          {"term": "readme", "weight": 1.0},
+          {"term": "spec", "weight": 1.0},
+          {"term": "update", "weight": 0.25},
+          {"term": "edit", "weight": 0.25}
+        ],
+        "tool_mentions": [],
+        "excludes": [],
+        "keyword_groups": [
+          {
+            "slots": [
+              {"name": "verbs", "terms": ["update", "edit", "modify", "change"]},
+              {"name": "nouns", "terms": ["docs", "readme", "spec"]}
+            ],
+            "weight": 1.0
+          }
+        ]
+      },
+      "applicable_skills": []
+    }
+  ]
+}
