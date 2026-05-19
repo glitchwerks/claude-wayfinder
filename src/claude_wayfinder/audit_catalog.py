@@ -554,3 +554,137 @@ def rule_conflict_pairs(catalog: list[CatalogEntry]) -> list[Finding]:
                 )
             )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: excludes overlap own keywords (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+@register
+def rule_excludes_overlap_own_keywords(
+    catalog: list[CatalogEntry],
+) -> list[Finding]:
+    """Flag entries whose excludes set overlaps their own keyword terms."""
+    out: list[Finding] = []
+    for e in catalog:
+        own_terms = {kw.term.lower() for kw in e.triggers.keywords}
+        ex = {x.lower() for x in e.triggers.excludes}
+        overlap = own_terms & ex
+        if overlap:
+            out.append(
+                Finding(
+                    severity=Severity.CONCERN,
+                    rule="excludes-overlap-own-keywords",
+                    entry=e.name,
+                    message=(
+                        f"excludes overlap own keywords {sorted(overlap)}"
+                        " — entry self-zeros when those terms appear"
+                    ),
+                )
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: source-routable mismatch (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+@register
+def rule_source_routable_mismatch(
+    catalog: list[CatalogEntry],
+) -> list[Finding]:
+    """Flag plugin-sourced agents marked routable=True."""
+    out: list[Finding] = []
+    for e in catalog:
+        if e.kind == "agent" and e.source == "plugin" and e.routable:
+            out.append(
+                Finding(
+                    severity=Severity.CONCERN,
+                    rule="source-routable-mismatch",
+                    entry=e.name,
+                    message=(
+                        "plugin-sourced agent marked routable=true; "
+                        "plugin agents are advisory by default"
+                    ),
+                )
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: empty applicable_agents (NIT)
+# ---------------------------------------------------------------------------
+
+
+@register
+def rule_empty_applicable_agents(
+    catalog: list[CatalogEntry],
+) -> list[Finding]:
+    """Flag skills with empty applicable_agents."""
+    out: list[Finding] = []
+    for e in catalog:
+        if e.kind == "skill" and e.applicable_agents == tuple():
+            out.append(
+                Finding(
+                    severity=Severity.NIT,
+                    rule="empty-applicable-agents",
+                    entry=e.name,
+                    message=(
+                        "skill has empty applicable_agents — set "
+                        '["*"] for any-agent or list specific agents'
+                    ),
+                )
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: duplicate trigger set (NIT)
+# ---------------------------------------------------------------------------
+
+
+def _trigger_fingerprint(t) -> tuple:
+    """Compute a hashable fingerprint of a Triggers object."""
+    return (
+        frozenset(t.command_prefixes),
+        frozenset(t.agent_mentions),
+        tuple(sorted(t.path_globs)),
+        tuple(sorted((kw.term, kw.weight) for kw in t.keywords)),
+        frozenset(t.tool_mentions),
+        frozenset(t.excludes),
+    )
+
+
+@register
+def rule_duplicate_trigger_set(
+    catalog: list[CatalogEntry],
+) -> list[Finding]:
+    """Flag agent groups with identical trigger sets but different skills."""
+    out: list[Finding] = []
+    by_fp: dict[tuple, list[CatalogEntry]] = {}
+    for e in catalog:
+        if e.kind != "agent":
+            continue
+        by_fp.setdefault(_trigger_fingerprint(e.triggers), []).append(e)
+    for fp, group in by_fp.items():
+        if len(group) < 2:
+            continue
+        # Only flag if any pair has different applicable_skills.
+        skill_sets = {tuple(sorted(e.applicable_skills)) for e in group}
+        if len(skill_sets) > 1:
+            names = sorted(e.name for e in group)
+            out.append(
+                Finding(
+                    severity=Severity.NIT,
+                    rule="duplicate-trigger-set",
+                    entry=", ".join(names),
+                    message=(
+                        f"agents {names} share identical trigger sets "
+                        "but differ in applicable_skills — likely a "
+                        "copy-paste"
+                    ),
+                )
+            )
+    return out

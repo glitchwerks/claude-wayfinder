@@ -22,8 +22,12 @@ from claude_wayfinder.audit_catalog import (
     Severity,
     rule_conflict_pairs,
     rule_duplicate_keyword_terms,
+    rule_duplicate_trigger_set,
+    rule_empty_applicable_agents,
+    rule_excludes_overlap_own_keywords,
     rule_one_dimensional_triggers,
     rule_path_glob_footgun,
+    rule_source_routable_mismatch,
     rule_tool_name_case_error,
     rule_unreachable_routable,
     rule_weight_not_in_ladder,
@@ -581,3 +585,179 @@ class TestConflictPairs:
         a = self._e("a", ["one", "two", "three"], routable=False)
         b = self._e("b", ["one", "two", "three"])
         assert rule_conflict_pairs([a, b]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 15 — rule_excludes_overlap_own_keywords (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestExcludesOverlapOwnKeywords:
+    def test_no_excludes_clean(self) -> None:
+        # Empty excludes — nothing to overlap.
+        e = _entry(
+            "ok",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("python", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_excludes_overlap_own_keywords([e]) == []
+
+    def test_disjoint_excludes_clean(self) -> None:
+        # Excludes present but disjoint from own keywords — the common
+        # legitimate case (excludes are meant to dampen other agents'
+        # matches, not self-zero).
+        e = _entry(
+            "ok",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("python", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset({"javascript"}),
+            ),
+        )
+        assert rule_excludes_overlap_own_keywords([e]) == []
+
+    def test_self_zero_overlap_flagged(self) -> None:
+        e = _entry(
+            "selfzero",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("python", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset({"python"}),
+            ),
+        )
+        findings = rule_excludes_overlap_own_keywords([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert "python" in findings[0].message
+
+    def test_case_insensitive_overlap_flagged(self) -> None:
+        # The matcher lowercases both sides — "Python" in keywords with
+        # "python" in excludes still self-zeros.
+        e = _entry(
+            "case",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("Python", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset({"python"}),
+            ),
+        )
+        assert len(rule_excludes_overlap_own_keywords([e])) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 15 — rule_source_routable_mismatch (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestSourceRoutableMismatch:
+    def test_owned_routable_ok(self) -> None:
+        e = _entry("ok", source="owned", routable=True)
+        assert rule_source_routable_mismatch([e]) == []
+
+    def test_plugin_routable_flagged(self) -> None:
+        e = _entry("bad", source="plugin", routable=True)
+        findings = rule_source_routable_mismatch([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert findings[0].entry == "bad"
+
+
+# ---------------------------------------------------------------------------
+# Task 15 — rule_empty_applicable_agents (NIT)
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyApplicableAgents:
+    def test_skill_with_agents_ok(self) -> None:
+        e = _entry(
+            "ok",
+            kind="skill",
+            routable=False,
+            applicable_agents=("*",),
+        )
+        assert rule_empty_applicable_agents([e]) == []
+
+    def test_skill_empty_agents_flagged(self) -> None:
+        e = _entry(
+            "bare",
+            kind="skill",
+            routable=False,
+            applicable_agents=tuple(),
+        )
+        findings = rule_empty_applicable_agents([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.NIT
+        assert findings[0].entry == "bare"
+
+
+# ---------------------------------------------------------------------------
+# Task 15 — rule_duplicate_trigger_set (NIT)
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateTriggerSet:
+    def _shared_triggers(self) -> Triggers:
+        return Triggers(
+            command_prefixes=frozenset(),
+            agent_mentions=frozenset(),
+            path_globs=("**/*.py",),
+            keywords=(Keyword("python", 1.0),),
+            tool_mentions=frozenset(),
+            excludes=frozenset(),
+        )
+
+    def test_single_entry_no_finding(self) -> None:
+        e = _entry("solo", triggers=self._shared_triggers())
+        assert rule_duplicate_trigger_set([e]) == []
+
+    def test_identical_triggers_identical_skills_no_finding(self) -> None:
+        # Same triggers AND same applicable_skills — not a copy-paste
+        # smell, just two pointers at the same dispatch shape.
+        t = self._shared_triggers()
+        a = _entry("a", triggers=t, applicable_skills=("python",))
+        b = _entry("b", triggers=t, applicable_skills=("python",))
+        # Rule fires only when applicable_skills DIFFER (per Task 15 impl).
+        assert rule_duplicate_trigger_set([a, b]) == []
+
+    def test_identical_triggers_different_skills_flagged(self) -> None:
+        t = self._shared_triggers()
+        a = _entry("a", triggers=t, applicable_skills=("python",))
+        b = _entry(
+            "b", triggers=t, applicable_skills=("python", "testing"),
+        )
+        findings = rule_duplicate_trigger_set([a, b])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.NIT
+        assert "a" in findings[0].entry and "b" in findings[0].entry
+
+    def test_both_empty_skills_no_finding(self) -> None:
+        # Edge case: two agents with identical triggers and BOTH have
+        # empty applicable_skills. The rule fires on *differing* skill
+        # sets; empty == empty does not differ.
+        t = self._shared_triggers()
+        a = _entry("a", triggers=t, applicable_skills=())
+        b = _entry("b", triggers=t, applicable_skills=())
+        assert rule_duplicate_trigger_set([a, b]) == []
+
+    def test_skills_only_skill_kind_not_flagged(self) -> None:
+        # The rule scopes to kind == "agent". Skills with duplicate
+        # triggers aren't a copy-paste smell in the same way.
+        t = self._shared_triggers()
+        a = _entry("a", kind="skill", triggers=t, applicable_skills=("x",))
+        b = _entry("b", kind="skill", triggers=t, applicable_skills=("y",))
+        assert rule_duplicate_trigger_set([a, b]) == []
