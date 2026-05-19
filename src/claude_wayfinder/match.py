@@ -682,21 +682,25 @@ def _matched_glob_count(entry: CatalogEntry, features: Features) -> int:
 def score(entry: CatalogEntry, features: Features) -> float:
     """Compute the match score for one catalog entry against features.
 
-    Implements the scoring formula from v5 §3.1.2 exactly::
+    Implements the scoring formula from spec §5
+    (docs/superpowers/specs/2026-05-18-and-groups-design.md)::
 
         if command_prefix matches → return 1.0
         if agent_mention matches → return 1.0
         if any exclude term in features.keywords → return 0.0
-        s = 0
-        s += 0.4 * matched_glob_count(entry, features)
-        s += sum(0.5 * k.weight for matching keywords)
+        s  = 0
+        s += 0.4 * matched_glob_count
         s += 0.5 * count of matching tool_mentions
+        # Group evaluation (collect suppressed terms):
+        suppressed = set()
+        for group in keyword_groups:
+            if all slots filled:
+                s += _GROUP_MULTIPLIER * group.weight
+                suppressed |= union of slot.terms
+        # Singletons (skip suppressed terms):
+        s += sum(_KEYWORD_MULTIPLIER * k.weight
+                 for k in keywords if k.term matched AND k.term not in suppressed)
         return min(s, 1.0)
-
-    Note: ``file_extensions`` is removed from the schema.
-    The original v5 formula included ``0.4 * file_extensions``; this
-    implementation omits it and uses path_globs exclusively, consistent
-    with docs/design/trigger-schema.md §4.
 
     Args:
         entry: One catalog entry to score.
@@ -722,15 +726,32 @@ def score(entry: CatalogEntry, features: Features) -> float:
     s = 0.0
     # Path glob contributions: 0.4 per matched glob (each counted once).
     s += 0.4 * _matched_glob_count(entry, features)
-    # Keyword contributions: _KEYWORD_MULTIPLIER * weight per matched term.
-    s += sum(
-        _KEYWORD_MULTIPLIER * k.weight
-        for k in t.keywords
-        if k.term in features.keywords
-    )
     # Tool mention contributions: 0.5 per matched tool.
     s += 0.5 * len(
         [t_name for t_name in t.tool_mentions if t_name in features.tool_mentions]
+    )
+
+    # Keyword group evaluation (spec §5).
+    # A group is satisfied when every slot has at least one term in
+    # features.keywords. Satisfied groups contribute _GROUP_MULTIPLIER *
+    # weight and suppress singletons for terms named in any of the
+    # group's slots (replacement rule, spec D5).
+    suppressed: set[str] = set()
+    for group in t.keyword_groups:
+        if all(
+            any(term in features.keywords for term in slot.terms)
+            for slot in group.slots
+        ):
+            s += _GROUP_MULTIPLIER * group.weight
+            for slot in group.slots:
+                suppressed.update(slot.terms)
+
+    # Keyword contributions: _KEYWORD_MULTIPLIER * weight per matched
+    # term, EXCEPT terms covered by a satisfied group (suppressed).
+    s += sum(
+        _KEYWORD_MULTIPLIER * k.weight
+        for k in t.keywords
+        if k.term in features.keywords and k.term not in suppressed
     )
     return min(s, 1.0)
 

@@ -6,6 +6,8 @@ Tracking: glitchwerks/claude-wayfinder#135
 
 from __future__ import annotations
 
+import pytest
+
 from claude_wayfinder import match as _match_mod
 
 
@@ -100,3 +102,182 @@ class TestTriggersParsing:
         triggers = _match_mod._parse_triggers(raw)
         assert triggers.keyword_groups[0].slots[0].terms == ("update",)
         assert triggers.keyword_groups[0].slots[1].terms == ("docs",)
+
+
+class TestScoreWithGroups:
+    """Scoring with keyword_groups — spec § 7 worked examples."""
+
+    def _doc_writer_entry(self) -> "_match_mod.CatalogEntry":
+        """Doc-writer entry mirroring production singletons + new group."""
+        return _match_mod.CatalogEntry(
+            name="doc-writer",
+            kind="agent",
+            triggers=_match_mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=(),
+                keywords=(
+                    _match_mod.Keyword("docs", 1.0),
+                    _match_mod.Keyword("readme", 1.0),
+                    _match_mod.Keyword("spec", 1.0),
+                    _match_mod.Keyword("update", 0.25),
+                    _match_mod.Keyword("edit", 0.25),
+                ),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                keyword_groups=(
+                    _match_mod.KeywordGroup(
+                        slots=(
+                            _match_mod.Slot(terms=("update", "edit", "modify", "change")),
+                            _match_mod.Slot(terms=("docs", "readme", "spec")),
+                        ),
+                        weight=1.0,
+                    ),
+                ),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+
+    def test_group_fires_and_suppresses_singletons(self) -> None:
+        """Spec § 7.1 row 1: 'update the docs' → doc-writer 1.00.
+
+        Group fires (update + docs both present), contributing
+        _GROUP_MULTIPLIER * 1.0 = 1.0. Singletons 'update@0.25' and
+        'docs@1.0' are suppressed by replacement rule (spec D5).
+        Final score: 1.0 (no singleton residue).
+        """
+        entry = self._doc_writer_entry()
+        features = _match_mod.build_features({"task_description": "update the docs"})
+        assert _match_mod.score(entry, features) == pytest.approx(1.0, abs=1e-6)
+
+    def test_group_does_not_fire_singletons_count_normally(self) -> None:
+        """Spec § 7.1 row 3: 'the docs are great' → doc-writer 0.50.
+
+        No verb in slot 1 ('the', 'docs', 'are', 'great' has none of
+        {update, edit, modify, change}). Group does NOT fire; no
+        suppression. Singleton 'docs@1.0' contributes 0.5.
+        """
+        entry = self._doc_writer_entry()
+        features = _match_mod.build_features({"task_description": "the docs are great"})
+        assert _match_mod.score(entry, features) == pytest.approx(0.5, abs=1e-6)
+
+    def test_group_unfired_partial_singletons_still_contribute(self) -> None:
+        """A prompt that hits only the verb slot, not the noun slot.
+
+        'update the source code' contains 'update' but no doc-noun.
+        Group does NOT fire. Singleton 'update@0.25' contributes
+        0.5 * 0.25 = 0.125.
+        """
+        entry = self._doc_writer_entry()
+        features = _match_mod.build_features({"task_description": "update the source code"})
+        assert _match_mod.score(entry, features) == pytest.approx(0.125, abs=1e-6)
+
+    def test_multiple_satisfied_groups_sum(self) -> None:
+        """Spec § 7.3: two satisfied groups on one entry sum independently.
+
+        Skill with two groups; prompt satisfies both.
+        Group 1 weight 1.0 → 1.0; group 2 weight 0.5 → 0.5;
+        sum = 1.5; min(1.5, 1.0) = 1.0.
+        """
+        entry = _match_mod.CatalogEntry(
+            name="gh-pr-review-address",
+            kind="skill",
+            triggers=_match_mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=(),
+                keywords=(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                keyword_groups=(
+                    _match_mod.KeywordGroup(
+                        slots=(
+                            _match_mod.Slot(terms=("address", "fix", "handle")),
+                            _match_mod.Slot(terms=("review", "comments", "feedback")),
+                        ),
+                        weight=1.0,
+                    ),
+                    _match_mod.KeywordGroup(
+                        slots=(
+                            _match_mod.Slot(terms=("anything",)),
+                            _match_mod.Slot(terms=("blocking", "merge")),
+                        ),
+                        weight=0.5,
+                    ),
+                ),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = _match_mod.build_features(
+            {"task_description": "address my review comments anything blocking merge"}
+        )
+        assert _match_mod.score(entry, features) == pytest.approx(1.0, abs=1e-6)
+
+    def test_one_of_two_groups_satisfied(self) -> None:
+        """Same entry as above, prompt satisfies only group 1.
+
+        Score = _GROUP_MULTIPLIER * 1.0 (group 1) = 1.0; second group's
+        verb slot is unsatisfied so it contributes 0. No singletons.
+        """
+        entry = _match_mod.CatalogEntry(
+            name="gh-pr-review-address",
+            kind="skill",
+            triggers=_match_mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=(),
+                keywords=(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                keyword_groups=(
+                    _match_mod.KeywordGroup(
+                        slots=(
+                            _match_mod.Slot(terms=("address", "fix", "handle")),
+                            _match_mod.Slot(terms=("review", "comments", "feedback")),
+                        ),
+                        weight=1.0,
+                    ),
+                    _match_mod.KeywordGroup(
+                        slots=(
+                            _match_mod.Slot(terms=("anything",)),
+                            _match_mod.Slot(terms=("blocking", "merge")),
+                        ),
+                        weight=0.5,
+                    ),
+                ),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = _match_mod.build_features({"task_description": "address my review comments"})
+        assert _match_mod.score(entry, features) == pytest.approx(1.0, abs=1e-6)
+
+    def test_no_groups_means_unchanged_behavior(self) -> None:
+        """Entry with no keyword_groups scores identically to v0.4.2.
+
+        Regression-locks: doc-writer without groups, same singletons as
+        production, scoring 'update the docs' = 0.5*0.25 (update@0.25) +
+        0.5*1.0 (docs@1.0) = 0.625.
+        """
+        entry = _match_mod.CatalogEntry(
+            name="doc-writer",
+            kind="agent",
+            triggers=_match_mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=(),
+                keywords=(
+                    _match_mod.Keyword("docs", 1.0),
+                    _match_mod.Keyword("update", 0.25),
+                ),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                keyword_groups=(),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = _match_mod.build_features({"task_description": "update the docs"})
+        assert _match_mod.score(entry, features) == pytest.approx(0.625, abs=1e-6)
