@@ -9,11 +9,12 @@ inquisitor_pass_2: 2026-05-19 (2 BLOCKING / 5 CONCERN / 2 NIT — addressed in v
 inquisitor_pass_3: 2026-05-19 (1 BLOCKING / 3 CONCERN / 1 NIT — addressed in v2-draft4, this revision; pattern converged)
 status: draft
 followups_filed:
-  # Issue numbers populated before the implementing PR opens. Until then, TBD.
-  # See AC #9 for the merge gate.
-  F-1: TBD
-  F-2: TBD
-  F-3: TBD
+  # See AC #9 for the merge gate. All three filed 2026-05-19, milestone
+  # "Telemetry v2 baseline review" (#7) for F-1/F-2; F-3 milestone-less
+  # (due date 2026-08-19, different cadence from the 2026-06-02 review).
+  F-1: 159
+  F-2: 160
+  F-3: 161
 touches:
   - hooks/check-agent-dispatch-pairing.js
   - hooks/lib/bypass-taxonomy.js
@@ -506,12 +507,14 @@ CI: existing Node + Python test jobs pick this up automatically.
    AC reviewer can verify by reading the spec; addresses pass-2 CONCERN on
    F-1/F-2/F-3 traceability). Each issue gets label `telemetry-v2-followup`
    and milestone `Telemetry v2 baseline review` (created at the same time):
-   - F-1: "Telemetry v2 — 2-week post-ship baseline review meeting"
-     — assignee: @cbeaulieu-gt, due 2026-06-02.
-   - F-2: "Telemetry v2 — recalibrate `_UNWANTED_BYPASS_SHARE_MAX` and
-     `_UNKNOWN_SHARE_WARN` from baseline data" — blocks on F-1, due 2026-06-02.
-   - F-3: "Telemetry v2 — first quarterly INTERACTIVE_SKILLS audit"
-     — assignee: @cbeaulieu-gt, due 2026-08-19.
+   - **F-1** (filed as #159): "Telemetry v2 — 2-week post-ship baseline
+     review meeting" — assignee @cbeaulieu-gt, milestone #7, due 2026-06-02.
+   - **F-2** (filed as #160): "Telemetry v2 — recalibrate
+     `_UNWANTED_BYPASS_SHARE_MAX` and `_UNKNOWN_SHARE_WARN`" — blocks on
+     #159, milestone #7, due 2026-06-02.
+   - **F-3** (filed as #161): "Telemetry v2 — first quarterly
+     INTERACTIVE_SKILLS audit" — assignee @cbeaulieu-gt, due 2026-08-19
+     (separate cadence; no milestone).
 
    **Merge gate**: this spec's frontmatter gains `followups_filed:` listing
    the three issue numbers. The implementing PR's description must reference
@@ -523,15 +526,16 @@ CI: existing Node + Python test jobs pick this up automatically.
     - No `agents/general-purpose.md` edits are required.
     - No cross-event joining is attempted.
 
-## Follow-ups (filed before merge — see AC #9)
+## Follow-ups (filed; see AC #9)
 
-| ID  | Title                                                                          | Due        |
-| --- | ------------------------------------------------------------------------------ | ---------- |
-| F-1 | Threshold review for `_UNWANTED_BYPASS_SHARE_MAX` after 2-week baseline        | 2026-06-02 |
-| F-2 | Decision: should `unknown`-share threshold tighten alongside F-1?              | 2026-06-02 |
-| F-3 | Quarterly audit of `INTERACTIVE_SKILLS` set for completeness                   | 2026-08-19 |
+| ID  | Issue | Title                                                                                | Due        |
+| --- | ----- | ------------------------------------------------------------------------------------ | ---------- |
+| F-1 | #159  | 2-week post-ship baseline review meeting                                             | 2026-06-02 |
+| F-2 | #160  | Recalibrate `_UNWANTED_BYPASS_SHARE_MAX` and `_UNKNOWN_SHARE_WARN` (blocks on #159)  | 2026-06-02 |
+| F-3 | #161  | First quarterly INTERACTIVE_SKILLS audit                                             | 2026-08-19 |
 
-F-1 and F-2 share a deadline because they're the same review meeting.
+F-1 and F-2 share milestone #7 ("Telemetry v2 baseline review"). F-3 is on
+a separate cadence.
 
 ## Out of scope
 
