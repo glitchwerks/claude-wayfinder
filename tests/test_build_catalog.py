@@ -3828,3 +3828,141 @@ class TestIssue10BuildCatalogPathDefaults:
             f"Catalog was not written to the --out path {out}; "
             f"may have fallen back to ~/.claude/state/dispatch-catalog.json"
         )
+
+
+class TestValidateKeywordGroups:
+    """Validator rules for keyword_groups (spec § 6)."""
+
+    def _validate(self, raw_groups, name="doc-writer"):
+        """Run only the group validator over a minimal fm dict.
+
+        Returns (sanitized_groups, issues) by calling validate_entry
+        with a frontmatter containing only the group config and
+        inspecting the result.
+        """
+        from claude_wayfinder import build_catalog as bc
+
+        fm = {
+            "name": name,
+            "description": "Doc writer.",
+            "triggers": {"keyword_groups": raw_groups},
+        }
+        result = bc.validate_entry(fm, kind="agent", source_stem=name)
+        sanitized = (
+            result.entry["triggers"].get("keyword_groups", [])
+            if result.entry
+            else []
+        )
+        return sanitized, result.issues
+
+    def test_minimal_valid_group_passes(self):
+        groups = [
+            {
+                "slots": [
+                    {"name": "verbs", "terms": ["update", "edit"]},
+                    {"name": "nouns", "terms": ["docs", "readme"]},
+                ],
+                "weight": 1.0,
+            }
+        ]
+        sanitized, issues = self._validate(groups)
+        fatals = [i for i in issues if i.severity == "fatal"]
+        assert not fatals, [i.message for i in fatals]
+        assert len(sanitized) == 1
+
+    def test_group_with_fewer_than_2_slots_is_fatal(self):
+        groups = [{"slots": [["docs"]], "weight": 1.0}]
+        _, issues = self._validate(groups)
+        fatals = [i.message for i in issues if i.severity == "fatal"]
+        assert any("2 slots" in m or ">= 2" in m or "at least 2" in m for m in fatals)
+
+    def test_group_with_more_than_8_slots_is_fatal(self):
+        slots = [[f"v{i}"] for i in range(9)]
+        groups = [{"slots": slots, "weight": 1.0}]
+        _, issues = self._validate(groups)
+        fatals = [i.message for i in issues if i.severity == "fatal"]
+        assert any("8" in m for m in fatals)
+
+    def test_group_with_4_or_more_slots_warns(self):
+        slots = [["a"], ["b"], ["c"], ["d"]]
+        groups = [{"slots": slots, "weight": 1.0}]
+        _, issues = self._validate(groups)
+        warns = [i.message for i in issues if i.severity == "warning"]
+        # The exact phrasing may vary; check for slot-count signal.
+        assert any("4 slots" in m or "many slots" in m or "rarely" in m for m in warns)
+
+    def test_slot_with_zero_terms_is_fatal(self):
+        groups = [{"slots": [{"terms": []}, ["docs"]], "weight": 1.0}]
+        _, issues = self._validate(groups)
+        fatals = [i.message for i in issues if i.severity == "fatal"]
+        assert any("terms" in m for m in fatals)
+
+    def test_slot_with_one_term_warns(self):
+        groups = [{"slots": [["github"], ["issue", "pr"]], "weight": 1.0}]
+        sanitized, issues = self._validate(groups)
+        warns = [i.message for i in issues if i.severity == "warning"]
+        assert any("single-term" in m.lower() or "1 term" in m.lower() for m in warns)
+        # The group is still emitted — single-term slot is allowed.
+        assert len(sanitized) == 1
+
+    def test_intra_group_term_overlap_is_fatal(self):
+        groups = [
+            {
+                "slots": [["update", "fix"], ["fix", "repair"]],
+                "weight": 1.0,
+            }
+        ]
+        _, issues = self._validate(groups)
+        fatals = [i.message for i in issues if i.severity == "fatal"]
+        assert any("'fix'" in m or '"fix"' in m for m in fatals)
+
+    def test_weight_in_range_but_non_canonical_clamps_with_warning(self):
+        """C3: out-of-canon weights clamp+warn (consistent with _validate_keywords)."""
+        groups = [{"slots": [["a"], ["b"]], "weight": 0.7}]
+        sanitized, issues = self._validate(groups)
+        warns = [i.message for i in issues if i.severity == "warning"]
+        assert any("clamped" in m for m in warns)
+        # Group still emitted with clamped weight.
+        assert len(sanitized) == 1
+        assert sanitized[0]["weight"] in (0.5, 1.0)  # _clamp_weight rounds to nearest
+
+    def test_weight_outside_0_1_range_is_fatal(self):
+        """Weights outside [0.0, 1.0] are fatal (matches _validate_keywords)."""
+        groups = [{"slots": [["a"], ["b"]], "weight": 1.5}]
+        _, issues = self._validate(groups)
+        fatals = [i.message for i in issues if i.severity == "fatal"]
+        assert any("outside" in m.lower() or "0.0" in m for m in fatals)
+
+    def test_cross_group_term_overlap_warns(self):
+        """C2: term in 2+ groups on same entry warns (D5 suppression surprise)."""
+        groups = [
+            {"slots": [["update", "edit"], ["docs"]], "weight": 1.0},
+            {"slots": [["update", "modify"], ["readme"]], "weight": 1.0},
+        ]
+        sanitized, issues = self._validate(groups)
+        warns = [i.message for i in issues if i.severity == "warning"]
+        assert any("'update'" in m and "multiple" in m for m in warns)
+        # Both groups still emitted — overlap is a warning, not a fatal.
+        assert len(sanitized) == 2
+
+    def test_terms_are_lowercased(self):
+        groups = [
+            {"slots": [["UPDATE", "Edit"], ["DOCS"]], "weight": 1.0}
+        ]
+        sanitized, _ = self._validate(groups)
+        slot1_terms = sanitized[0]["slots"][0]["terms"]
+        assert all(t == t.lower() for t in slot1_terms)
+
+    def test_slot_name_with_whitespace_warns(self):
+        groups = [
+            {
+                "slots": [
+                    {"name": "verb words", "terms": ["update"]},
+                    {"name": "nouns", "terms": ["docs"]},
+                ],
+                "weight": 1.0,
+            }
+        ]
+        _, issues = self._validate(groups)
+        warns = [i.message for i in issues if i.severity == "warning"]
+        assert any("name" in m and ("whitespace" in m or "identifier" in m) for m in warns)
