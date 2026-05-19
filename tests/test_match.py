@@ -2451,3 +2451,26 @@ class TestIssue10FailLoudCatalogPath:
         assert out["decision"] in _VALID_DECISIONS, (
             f"Expected a valid decision; got: {out['decision']!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 5.5 — load_catalog on empty entries list
+# ---------------------------------------------------------------------------
+
+
+class TestLoadCatalogEmptyEntries:
+    """load_catalog accepts an empty entries list (was: raised ValueError).
+
+    Empty catalogs are a valid degraded state (e.g. fresh checkout, or the
+    #506 all-entries-dropped path). Callers like audit-catalog need to
+    operate on them without a load-time crash.
+    """
+
+    def test_empty_entries_returns_empty_tuple(self, tmp_path) -> None:
+        """load_catalog on {"entries": []} returns an empty list."""
+        from claude_wayfinder.match import load_catalog
+
+        p = tmp_path / "cat.json"
+        p.write_text(json.dumps({"entries": []}))
+        result = load_catalog(p)
+        assert tuple(result) == tuple()
