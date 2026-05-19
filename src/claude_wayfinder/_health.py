@@ -39,6 +39,22 @@ _BYPASS_RATE_MAX = 0.10  # ≤ 10 % → healthy
 _ADVISORY_OVERRIDE_RATE_MAX = 0.30  # ≤ 30 % → healthy
 # catalog_availability: any catalog_degraded_session event = immediate action
 
+# Bypass-cause taxonomy thresholds (v2-draft4 spec, both bootstrap;
+# recalibrated at F-2 review, issue #160).
+_UNWANTED_BYPASS_SHARE_MAX = 0.50  # bootstrap; tighten after baseline
+_UNKNOWN_SHARE_WARN = 0.10  # bootstrap; tighten or extend enum at F-2
+_BYPASS_CAUSE_MIN_SAMPLE = 100  # low-N guard: section renders N/A below this
+
+# Cause → disposition mapping (mirrors scripts/analyze-drift-causes.py)
+_BYPASS_CAUSE_DISPOSITION: dict[str, str] = {
+    "skill_mediated_interactive": "expected",
+    "skill_mediated_other": "review",
+    "router_direct_after_consumed_dispatch": "unwanted",
+    "router_direct_no_dispatch": "unwanted",
+    "stale_dispatch": "review",
+    "unknown": "review",
+}
+
 MetricClass = Literal["ci_invariant", "runtime_telemetry", "informational"]
 
 
@@ -966,11 +982,131 @@ def most_recent_harness_version(dispatch_log: list[dict[str, Any]]) -> str | Non
     return None
 
 
+def _build_bypass_causes_section(
+    drift_events: list[dict[str, Any]],
+) -> list[str]:
+    """Build the 'Bypass causes (7-day window)' markdown section.
+
+    Reads enriched drift events (with bypass_signals + bypass_cause
+    fields), counts by cause within a 7-day window, and returns
+    markdown lines. When the enriched-event count is below
+    _BYPASS_CAUSE_MIN_SAMPLE, returns a low-N notice instead of
+    distribution + thresholds.
+
+    Args:
+        drift_events: Pre-loaded drift events. Mix of pre- and
+            post-enrichment is fine; pre-enrichment events are skipped
+            from cause counts but reported as a baseline.
+
+    Returns:
+        List of markdown lines (no trailing newline per line).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=7)
+
+    def _in_window(ev: dict[str, Any]) -> bool:
+        ts = ev.get("ts")
+        if not isinstance(ts, str):
+            return False
+        try:
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return t >= since
+
+    drift_in_window = [
+        e
+        for e in drift_events
+        if e.get("type") == "router_drift" and _in_window(e)
+    ]
+    enriched = [
+        e for e in drift_in_window if isinstance(e.get("bypass_cause"), str)
+    ]
+    pre_enrichment = len(drift_in_window) - len(enriched)
+
+    lines: list[str] = []
+    lines.append(
+        f"## Bypass causes (7-day window, {len(enriched)} enriched events)"
+    )
+    lines.append("")
+
+    if len(enriched) < _BYPASS_CAUSE_MIN_SAMPLE:
+        lines.append(
+            f"N/A — insufficient post-enrichment data (have {len(enriched)},"
+            f" need {_BYPASS_CAUSE_MIN_SAMPLE}). Pre-enrichment baseline:"
+            f" {pre_enrichment} events."
+        )
+        lines.append("")
+        return lines
+
+    # Count by cause
+    counts: dict[str, int] = {}
+    for e in enriched:
+        cause = e.get("bypass_cause", "unknown")
+        if not isinstance(cause, str):
+            cause = "unknown"
+        counts[cause] = counts.get(cause, 0) + 1
+
+    total = sum(counts.values())
+    lines.append(
+        "| Cause                                   |  Count |  Share"
+        " | Disposition |"
+    )
+    lines.append(
+        "| --------------------------------------- | -----: | -----:"
+        " | ----------- |"
+    )
+    for cause, cnt in sorted(counts.items(), key=lambda kv: -kv[1]):
+        share = cnt / total
+        disp = _BYPASS_CAUSE_DISPOSITION.get(cause, "review")
+        lines.append(
+            f"| {cause:<39} | {cnt:>6} | {share * 100:>5.1f}%"
+            f" | {disp:<11} |"
+        )
+    lines.append("")
+
+    # Threshold evaluation
+    unwanted = sum(
+        c
+        for cause, c in counts.items()
+        if _BYPASS_CAUSE_DISPOSITION.get(cause) == "unwanted"
+    )
+    unwanted_share = unwanted / total
+    unknown_share = counts.get("unknown", 0) / total
+
+    unwanted_status = (
+        "PASS" if unwanted_share <= _UNWANTED_BYPASS_SHARE_MAX else "WARN"
+    )
+    unknown_status = (
+        "PASS" if unknown_share <= _UNKNOWN_SHARE_WARN else "WARN"
+    )
+
+    lines.append(
+        f"{unwanted_status} — unwanted-bypass share"
+        f" {unwanted_share * 100:.1f}%"
+        f" (threshold: ≤{_UNWANTED_BYPASS_SHARE_MAX * 100:.0f}% bootstrap)"
+    )
+    lines.append(
+        f"{unknown_status} — unknown share {unknown_share * 100:.1f}%"
+        f" (threshold: ≤{_UNKNOWN_SHARE_WARN * 100:.0f}% bootstrap)"
+    )
+    if pre_enrichment > 0:
+        lines.append(
+            f"Pre-enrichment baseline (not counted): {pre_enrichment} events"
+        )
+    lines.append("")
+
+    return lines
+
+
 def format_report_output(
     invariants: dict[str, MetricResult],
     runtime_metrics: dict[str, MetricResult],
     dispatch_log: list[dict[str, Any]] | None = None,
     catalog_entries: list[dict[str, Any]] | None = None,
+    drift_events: list[dict[str, Any]] | None = None,
 ) -> str:
     """Format a full markdown health report covering both metric classes.
 
@@ -980,9 +1116,13 @@ def format_report_output(
         dispatch_log:     Raw dispatch log events (used to surface
             harness_version in the report header).  Defaults to None
             (omits version line).
-        catalog_entries:  Pre-loaded catalog entry list for Notable Findings
-            computation.  When ``None``, entries are loaded from the live
-            (or ``DISPATCH_CATALOG_PATH``-overridden) catalog file.
+        catalog_entries:  Pre-loaded catalog entry list for Notable
+            Findings computation.  When ``None``, entries are loaded
+            from the live (or ``DISPATCH_CATALOG_PATH``-overridden)
+            catalog file.
+        drift_events:     Pre-loaded drift events for the bypass-causes
+            section.  When ``None``, the section is omitted entirely
+            (opt-in; callers that don't pass this arg see no change).
 
     Returns:
         Markdown-formatted string.
@@ -1063,6 +1203,10 @@ def format_report_output(
     else:
         lines.append("> All runtime telemetry metrics are within healthy ranges.")
         lines.append("")
+
+    # --- Section 2b: Bypass causes (v2 telemetry enrichment) ---
+    if drift_events is not None:
+        lines.extend(_build_bypass_causes_section(drift_events))
 
     # --- Section 3: Informational ---
     if info_metrics:
@@ -1267,6 +1411,7 @@ def main(argv: list[str] | None = None) -> int:
             runtime_metrics,
             dispatch_log=dispatch_log,
             catalog_entries=catalog_entries,
+            drift_events=drift_log,
         )
         print(output, end="")
         return 0

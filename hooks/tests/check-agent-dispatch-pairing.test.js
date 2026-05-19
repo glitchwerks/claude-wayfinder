@@ -611,3 +611,191 @@ test("check-agent-dispatch-pairing: fresh dispatch after consumed prior dispatch
   const events = readDriftEvents(driftPath);
   assert.equal(events.length, 0, "Fresh dispatch before current Agent → router_mediated, no event");
 });
+
+// ── bypass-taxonomy enrichment ────────────────────────────────────────────────
+
+test("check-agent-dispatch-pairing: bypass event is enriched with bypass_signals and bypass_cause", () => {
+  // A plain bypass (no history) should produce an event with bypass_signals
+  // and bypass_cause fields added by the taxonomy module.
+  const driftPath = tmpDriftPath();
+  const result = runHook(agentPayload([]), { ROUTER_DRIFT_PATH: driftPath });
+  assert.equal(result.exitCode, 0, `stderr: ${result.stderr}`);
+  const events = readDriftEvents(driftPath);
+  assert.equal(events.length, 1, "One bypass event expected");
+  const ev = events[0];
+  assert.equal(ev.category, "bypass");
+  // Enrichment fields must be present
+  assert.ok(
+    ev.bypass_signals !== undefined,
+    `bypass_signals must be present on enriched event; got: ${JSON.stringify(ev)}`
+  );
+  assert.ok(
+    ev.bypass_cause !== undefined,
+    `bypass_cause must be present on enriched event; got: ${JSON.stringify(ev)}`
+  );
+  assert.equal(
+    typeof ev.bypass_cause,
+    "string",
+    "bypass_cause must be a string"
+  );
+  // For no-history bypass, cause should be router_direct_no_dispatch
+  assert.equal(
+    ev.bypass_cause,
+    "router_direct_no_dispatch",
+    "Empty history bypass → router_direct_no_dispatch"
+  );
+});
+
+test("check-agent-dispatch-pairing: taxonomy module-load failure → exits 0, unenriched event written, stderr warning", () => {
+  // Simulate a broken taxonomy module by pointing NODE_PATH so that require(./lib/bypass-taxonomy)
+  // resolves to a module that throws at load time. We do this by setting a custom env
+  // variable that the hook checks: instead, we inject a broken module via a temp directory.
+  const driftPath = tmpDriftPath();
+  const os = require("node:os");
+
+  // Create a broken bypass-taxonomy.js that throws at require time
+  const tmpHooksDir = fs.mkdtempSync(path.join(os.tmpdir(), "broken-taxonomy-"));
+  const brokenLibDir = path.join(tmpHooksDir, "lib");
+  fs.mkdirSync(brokenLibDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(brokenLibDir, "bypass-taxonomy.js"),
+    'throw new Error("simulated module-load failure");\n'
+  );
+  // Also copy parse-input.js so the hook can load (it's required unconditionally)
+  const parseInputSrc = path.join(HOOKS_DIR, "parse-input.js");
+  fs.copyFileSync(parseInputSrc, path.join(tmpHooksDir, "parse-input.js"));
+
+  // Copy the hook itself to tmpHooksDir so ./lib/bypass-taxonomy resolves there
+  const hookSrc = fs.readFileSync(HOOK_SCRIPT, "utf8");
+  const tmpHookPath = path.join(tmpHooksDir, "check-agent-dispatch-pairing.js");
+  fs.writeFileSync(tmpHookPath, hookSrc);
+
+  const input = JSON.stringify(agentPayload([]));
+  const noSidecarDir = fs.mkdtempSync(path.join(os.tmpdir(), "no-sidecar-"));
+  const noSidecarPath = path.join(noSidecarDir, "nonexistent-sidecar.jsonl");
+  const result = require("node:child_process").spawnSync(
+    process.execPath,
+    [tmpHookPath],
+    {
+      input,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, ROUTER_DRIFT_PATH: driftPath, SKILL_SIDECAR_PATH: noSidecarPath },
+    }
+  );
+  const exitCode = result.status ?? 0;
+  const stderr = result.stderr ?? "";
+
+  // Hook must still exit 0
+  assert.equal(exitCode, 0, `Hook must exit 0 even when taxonomy module fails to load; stderr: ${stderr}`);
+
+  // Must still write the unenriched event
+  const events = readDriftEvents(driftPath);
+  assert.equal(events.length, 1, "Unenriched drift event must still be written");
+  assert.equal(events[0].category, "bypass", "category must still be present");
+
+  // Must warn on stderr
+  assert.ok(
+    stderr.includes("bypass-taxonomy"),
+    `Expected bypass-taxonomy warning in stderr; got: ${stderr}`
+  );
+});
+
+test("check-agent-dispatch-pairing: classify() returns malformed shape → exits 0, unenriched event, stderr 'malformed shape'", () => {
+  // Simulate a taxonomy module that loads fine and returns successfully but
+  // omits both `signals` and `cause` keys (malformed shape).
+  const driftPath = tmpDriftPath();
+
+  // Create a temp hooks dir with a malformed-returning bypass-taxonomy module
+  const tmpHooksDir = fs.mkdtempSync(path.join(os.tmpdir(), "malformed-classify-"));
+  const malformedLibDir = path.join(tmpHooksDir, "lib");
+  fs.mkdirSync(malformedLibDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(malformedLibDir, "bypass-taxonomy.js"),
+    'module.exports = { classify: () => ({}), INTERACTIVE_SKILLS: new Set() };\n'
+  );
+  const parseInputSrc = path.join(HOOKS_DIR, "parse-input.js");
+  fs.copyFileSync(parseInputSrc, path.join(tmpHooksDir, "parse-input.js"));
+
+  const hookSrc = fs.readFileSync(HOOK_SCRIPT, "utf8");
+  const tmpHookPath = path.join(tmpHooksDir, "check-agent-dispatch-pairing.js");
+  fs.writeFileSync(tmpHookPath, hookSrc);
+
+  // agentPayload([]) → no history → bypass category
+  const input = JSON.stringify(agentPayload([]));
+  const noSidecarDir = fs.mkdtempSync(path.join(os.tmpdir(), "no-sidecar-"));
+  const noSidecarPath = path.join(noSidecarDir, "nonexistent-sidecar.jsonl");
+  const result = require("node:child_process").spawnSync(
+    process.execPath,
+    [tmpHookPath],
+    {
+      input,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, ROUTER_DRIFT_PATH: driftPath, SKILL_SIDECAR_PATH: noSidecarPath },
+    }
+  );
+  const exitCode = result.status ?? 0;
+  const stderr = result.stderr ?? "";
+
+  assert.equal(exitCode, 0, `Hook must exit 0 even when classify returns malformed shape; stderr: ${stderr}`);
+
+  // Must still write the unenriched event (no bypass_signals, no bypass_cause)
+  const events = readDriftEvents(driftPath);
+  assert.equal(events.length, 1, "Unenriched drift event must still be written when classify returns malformed shape");
+  assert.equal(events[0].bypass_signals, undefined, "bypass_signals must be absent when classify returns malformed shape");
+  assert.equal(events[0].bypass_cause, undefined, "bypass_cause must be absent when classify returns malformed shape");
+
+  // Must warn on stderr with "malformed shape" (distinct from the "classify threw" message)
+  assert.match(stderr, /malformed shape/);
+});
+
+test("check-agent-dispatch-pairing: classify() throw at event time → exits 0, unenriched event, stderr warning", () => {
+  // Simulate a taxonomy module that loads fine but throws when classify() is called.
+  const driftPath = tmpDriftPath();
+  const os = require("node:os");
+
+  // Create a module that exports a throwing classify function
+  const tmpHooksDir = fs.mkdtempSync(path.join(os.tmpdir(), "throwing-classify-"));
+  const throwingLibDir = path.join(tmpHooksDir, "lib");
+  fs.mkdirSync(throwingLibDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(throwingLibDir, "bypass-taxonomy.js"),
+    'module.exports = { classify: () => { throw new Error("simulated classify failure"); } };\n'
+  );
+  const parseInputSrc = path.join(HOOKS_DIR, "parse-input.js");
+  fs.copyFileSync(parseInputSrc, path.join(tmpHooksDir, "parse-input.js"));
+
+  const hookSrc = fs.readFileSync(HOOK_SCRIPT, "utf8");
+  const tmpHookPath = path.join(tmpHooksDir, "check-agent-dispatch-pairing.js");
+  fs.writeFileSync(tmpHookPath, hookSrc);
+
+  const input = JSON.stringify(agentPayload([]));
+  const noSidecarDir = fs.mkdtempSync(path.join(os.tmpdir(), "no-sidecar-"));
+  const noSidecarPath = path.join(noSidecarDir, "nonexistent-sidecar.jsonl");
+  const result = require("node:child_process").spawnSync(
+    process.execPath,
+    [tmpHookPath],
+    {
+      input,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, ROUTER_DRIFT_PATH: driftPath, SKILL_SIDECAR_PATH: noSidecarPath },
+    }
+  );
+  const exitCode = result.status ?? 0;
+  const stderr = result.stderr ?? "";
+
+  assert.equal(exitCode, 0, `Hook must exit 0 even when classify() throws; stderr: ${stderr}`);
+
+  // Must still write the unenriched event
+  const events = readDriftEvents(driftPath);
+  assert.equal(events.length, 1, "Unenriched drift event must still be written when classify throws");
+  assert.equal(events[0].category, "bypass");
+
+  // Must warn on stderr
+  assert.ok(
+    stderr.includes("bypass-taxonomy"),
+    `Expected bypass-taxonomy warning in stderr; got: ${stderr}`
+  );
+});

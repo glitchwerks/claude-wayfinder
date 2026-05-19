@@ -20,6 +20,10 @@ from typing import Any
 import pytest
 
 from claude_wayfinder._health import (
+    _BYPASS_CAUSE_MIN_SAMPLE,
+    _UNKNOWN_SHARE_WARN,
+    _UNWANTED_BYPASS_SHARE_MAX,
+    _build_bypass_causes_section,
     check_ci_invariants,
     compute_metrics,
     load_catalog_entries,
@@ -1074,6 +1078,124 @@ def test_load_catalog_entries_returns_empty_when_entries_missing(
     result = load_catalog_entries()
 
     assert result == [], f"Expected empty list when 'entries' key is missing, got: {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# 19. _build_bypass_causes_section — unit tests (#143)
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone  # noqa: E402  (section header)
+
+
+def _now_iso(offset_days: int = 0) -> str:
+    """Return an ISO-format UTC timestamp offset by the given number of days.
+
+    Args:
+        offset_days: How many days in the past to offset from now.
+
+    Returns:
+        ISO 8601 UTC datetime string.
+    """
+    return (datetime.now(timezone.utc) - timedelta(days=offset_days)).isoformat()
+
+
+def _enriched(cause: str, days_ago: int = 1) -> dict:
+    """Build a minimal post-enrichment router_drift event dict.
+
+    Args:
+        cause: The bypass_cause string to embed.
+        days_ago: Age of the event in days (default 1 = yesterday, in window).
+
+    Returns:
+        Dict shaped like a post-enrichment drift event.
+    """
+    return {
+        "type": "router_drift",
+        "ts": _now_iso(days_ago),
+        "category": "bypass" if cause.startswith("router_direct") else (
+            "skill_mediated" if cause.startswith("skill_mediated") else cause
+        ),
+        "bypass_cause": cause,
+        "bypass_signals": {"subagent_type": "x"},
+    }
+
+
+def test_bypass_causes_section_low_n_renders_na() -> None:
+    """Section returns N/A notice when enriched event count is below the minimum sample."""
+    events = [_enriched("router_direct_no_dispatch") for _ in range(5)]
+    out = "\n".join(_build_bypass_causes_section(events))
+    assert "N/A — insufficient post-enrichment data" in out
+    assert "have 5, need" in out
+
+
+def test_bypass_causes_section_high_n_renders_table_and_thresholds() -> None:
+    """Section renders the cause table and threshold lines when N >= min sample.
+
+    80 skill_mediated_interactive (expected) + 40 router_direct_no_dispatch
+    (unwanted) = 120 total.  Unwanted share = 33.3% <= 50% bootstrap → PASS.
+    """
+    events = [_enriched("skill_mediated_interactive") for _ in range(80)]
+    events.extend(_enriched("router_direct_no_dispatch") for _ in range(40))
+    out = "\n".join(_build_bypass_causes_section(events))
+    assert "## Bypass causes (7-day window, 120 enriched events)" in out
+    assert "skill_mediated_interactive" in out
+    assert "router_direct_no_dispatch" in out
+    assert "expected" in out
+    assert "unwanted" in out
+    # 40/120 = 33.3% unwanted, ≤ 50% bootstrap → PASS
+    assert "PASS — unwanted-bypass share 33.3%" in out
+
+
+def test_bypass_causes_section_warns_when_over_threshold() -> None:
+    """Section emits WARN when unwanted-bypass share exceeds the bootstrap threshold.
+
+    70/120 = 58.3% unwanted, > 50% → WARN.
+    """
+    events = [_enriched("skill_mediated_interactive") for _ in range(50)]
+    events.extend(_enriched("router_direct_no_dispatch") for _ in range(70))
+    out = "\n".join(_build_bypass_causes_section(events))
+    assert "WARN — unwanted-bypass share 58.3%" in out
+
+
+def test_bypass_causes_section_unknown_share_threshold() -> None:
+    """Section emits WARN when unknown-cause share exceeds the warn threshold.
+
+    85 skill_mediated_interactive + 15 unknown = 100 total.
+    Unknown share = 15.0% > 10% → WARN.
+    """
+    events = [_enriched("skill_mediated_interactive") for _ in range(85)]
+    events.extend(_enriched("unknown") for _ in range(15))
+    out = "\n".join(_build_bypass_causes_section(events))
+    assert "WARN — unknown share 15.0%" in out
+
+
+def test_bypass_causes_section_pre_enrichment_baseline_reported() -> None:
+    """Pre-enrichment events (no bypass_cause field) are reported as a baseline count."""
+    enriched = [_enriched("skill_mediated_interactive") for _ in range(100)]
+    pre = [
+        {"type": "router_drift", "ts": _now_iso(2), "category": "bypass"}
+        for _ in range(15)
+    ]
+    out = "\n".join(_build_bypass_causes_section(enriched + pre))
+    assert "Pre-enrichment baseline (not counted): 15 events" in out
+
+
+def test_bypass_causes_section_excludes_out_of_window_events() -> None:
+    """Events older than 7 days are excluded from the cause counts and header total."""
+    in_window = [_enriched("skill_mediated_interactive", days_ago=1) for _ in range(100)]
+    out_of_window = [
+        _enriched("router_direct_no_dispatch", days_ago=30) for _ in range(50)
+    ]
+    out = "\n".join(_build_bypass_causes_section(in_window + out_of_window))
+    assert "## Bypass causes (7-day window, 100 enriched events)" in out
+    assert "router_direct_no_dispatch" not in out
+
+
+def test_bypass_causes_constants_match_spec() -> None:
+    """Bypass-cause taxonomy constants match the v2 spec bootstrap values."""
+    assert _UNWANTED_BYPASS_SHARE_MAX == 0.50
+    assert _UNKNOWN_SHARE_WARN == 0.10
+    assert _BYPASS_CAUSE_MIN_SAMPLE == 100
 
 
 def test_load_catalog_entries_returns_empty_when_entries_not_list(
