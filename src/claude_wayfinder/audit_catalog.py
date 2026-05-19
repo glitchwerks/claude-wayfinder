@@ -434,3 +434,30 @@ def rule_one_dimensional_triggers(
                 )
             )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: unreachable routable (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+@register
+def rule_unreachable_routable(catalog: list[CatalogEntry]) -> list[Finding]:
+    """Flag routable agents with zero positive trigger dimensions."""
+    out: list[Finding] = []
+    for e in catalog:
+        if e.kind != "agent" or not e.routable:
+            continue
+        if _trigger_dimensions(e.triggers) == 0:
+            out.append(
+                Finding(
+                    severity=Severity.CONCERN,
+                    rule="unreachable-routable",
+                    entry=e.name,
+                    message=(
+                        "routable agent has no positive triggers; "
+                        "matcher will never produce delegate for it"
+                    ),
+                )
+            )
+    return out

@@ -24,6 +24,7 @@ from claude_wayfinder.audit_catalog import (
     rule_one_dimensional_triggers,
     rule_path_glob_footgun,
     rule_tool_name_case_error,
+    rule_unreachable_routable,
     rule_weight_not_in_ladder,
     rule_whitespace_in_term,
     run_audit,
@@ -446,3 +447,60 @@ class TestOneDimensionalTriggers:
             ),
         )
         assert rule_one_dimensional_triggers([e]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 13 — rule_unreachable_routable (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestUnreachableRoutable:
+    def test_empty_routable_flagged(self) -> None:
+        e = _entry(
+            "ghost",
+            kind="agent",
+            routable=True,
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=tuple(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        findings = rule_unreachable_routable([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert findings[0].entry == "ghost"
+
+    def test_one_dim_not_flagged_here(self) -> None:
+        # The 1-dim case is handled by rule_one_dimensional_triggers.
+        e = _entry(
+            "thin",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("x", 0.25),),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_unreachable_routable([e]) == []
+
+    def test_non_routable_skipped(self) -> None:
+        e = _entry(
+            "advisory",
+            kind="agent",
+            routable=False,
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=tuple(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_unreachable_routable([e]) == []
