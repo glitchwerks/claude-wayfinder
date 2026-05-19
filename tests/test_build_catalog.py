@@ -4236,3 +4236,436 @@ def test_plugin_agent_sidecar_owned_agent_is_protected(
     )
     log_text = log_path.read_text(encoding="utf-8")
     assert "warning" in log_text, "owned-entry protection must emit a warning"
+
+
+# ---------------------------------------------------------------------------
+# Issue #148 — Pass 2b/4b: colocated owned/project agent sidecar overrides
+# ---------------------------------------------------------------------------
+
+
+def test_colocated_sidecar_overrides_inline_triggers_for_owned_agent(
+    tmp_path: Path,
+) -> None:
+    """Pass 2b: matched colocated sidecar replaces inline triggers in owned agent.
+
+    An owned agent at ``agents/code-writer.md`` that has inline ``triggers:``
+    frontmatter must have those triggers replaced when a colocated sidecar
+    ``agents/code-writer.triggers.yml`` is present.  The resulting catalog
+    entry must carry the sidecar triggers and applicable_skills.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "code-writer.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: code-writer
+            description: Writes code.
+            triggers:
+              keywords:
+                - { term: "inline", weight: 1.0 }
+            applicable_skills: ["python"]
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "code-writer.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "sidecar", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "code-writer"),
+        None,
+    )
+    assert entry is not None, "code-writer must be present in catalog"
+    assert entry["source"] == "owned", (
+        f"source must remain 'owned', got {entry['source']!r}"
+    )
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "sidecar" in kw_terms, (
+        f"sidecar keyword must replace inline triggers; got {kw_terms}"
+    )
+    assert "inline" not in kw_terms, (
+        "inline triggers must be replaced by sidecar"
+    )
+    assert entry.get("applicable_skills") == ["*"], (
+        f"applicable_skills must come from sidecar; got {entry.get('applicable_skills')!r}"
+    )
+    # D2: warn when sidecar shadows inline triggers
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "warning" in log_text, (
+        "shadowing inline triggers with sidecar must emit a warning"
+    )
+    assert "code-writer" in log_text, (
+        "warning must identify the affected agent"
+    )
+
+
+def test_colocated_sidecar_no_warning_when_no_inline_triggers_for_owned(
+    tmp_path: Path,
+) -> None:
+    """Pass 2b: sidecar on agent with no inline triggers applies cleanly.
+
+    When the owned agent has no inline ``triggers:`` block, the colocated
+    sidecar must apply silently — no warning emitted for D2.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "doc-writer.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: doc-writer
+            description: Documents things.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "doc-writer.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "document", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "doc-writer"),
+        None,
+    )
+    assert entry is not None, "doc-writer must be in catalog"
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "document" in kw_terms, "sidecar triggers must be applied"
+    # No shadowing warning when no inline triggers.
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "shadow" not in log_text, (
+        "no shadowing warning when agent had no inline triggers"
+    )
+
+
+def test_colocated_sidecar_orphan_emits_warning_no_entry_for_owned(
+    tmp_path: Path,
+) -> None:
+    """Pass 2b: orphan sidecar (no matching .md) emits warning and is dropped.
+
+    A colocated sidecar ``agents/ghost.triggers.yml`` with no corresponding
+    ``agents/ghost.md`` must not produce a catalog entry, and must emit a
+    warning identifying the orphan.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    # Orphan sidecar — no ghost.md exists.
+    (agents / "ghost.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "ghost", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    names = [e["name"] for e in catalog["entries"]]
+    assert "ghost" not in names, (
+        "orphan sidecar must not produce a catalog entry"
+    )
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "warning" in log_text, "orphan sidecar must emit a warning"
+    assert "ghost" in log_text, "warning must identify the orphan sidecar stem"
+
+
+def test_colocated_sidecar_invalid_yaml_warn_skip_owned(
+    tmp_path: Path,
+) -> None:
+    """Pass 2b: sidecar with invalid YAML emits warning and is skipped.
+
+    The agent entry must be preserved with its inline triggers (or empty
+    triggers if none).  The build must not crash.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "code-writer.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: code-writer
+            description: Writes code.
+            triggers:
+              keywords:
+                - { term: "inline-preserved", weight: 1.0 }
+            applicable_skills: ["python"]
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "code-writer.triggers.yml").write_text(
+        "triggers:\n  keywords:\n    - { term: [unclosed\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "code-writer"),
+        None,
+    )
+    assert entry is not None, "agent entry must be preserved when sidecar has invalid YAML"
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "inline-preserved" in kw_terms, (
+        "inline triggers must survive invalid sidecar"
+    )
+    log_text = log_path.read_text(encoding="utf-8")
+    # The sidecar YAML parse failure must produce a warning that identifies
+    # the sidecar by name (not just any pre-existing warning like unknown refs).
+    assert "code-writer.triggers.yml" in log_text or "code-writer" in log_text.lower(), (
+        "invalid sidecar YAML must emit a warning identifying the sidecar"
+    )
+    # Confirm it was a YAML-parse warning by checking for 'YAML' or 'parse'.
+    lower_log = log_text.lower()
+    assert "yaml" in lower_log or "parse" in lower_log, (
+        "invalid sidecar YAML warning must mention YAML or parse error"
+    )
+
+
+def test_colocated_sidecar_does_not_register_as_agent_entry(
+    tmp_path: Path,
+) -> None:
+    """Q3: *.triggers.yml must not be picked up by the *.md agent glob.
+
+    Placing both ``agents/my-agent.md`` and ``agents/my-agent.triggers.yml``
+    in the same directory must result in exactly one catalog entry named
+    ``my-agent`` — the ``.triggers.yml`` file must not be processed as an
+    agent definition.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "my-agent.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: my-agent
+            description: My agent.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "my-agent.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "my", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    my_agent_entries = [e for e in catalog["entries"] if "my-agent" in e["name"]]
+    assert len(my_agent_entries) == 1, (
+        f"exactly one entry expected for my-agent; got {my_agent_entries}"
+    )
+    assert my_agent_entries[0]["kind"] == "agent"
+
+
+def test_colocated_sidecar_overrides_inline_triggers_for_project_agent(
+    tmp_path: Path,
+) -> None:
+    """Pass 4b: matched colocated sidecar overrides triggers for project agent.
+
+    A project-local agent at ``<repo>/.claude/agents/linter.md`` with inline
+    triggers must have those triggers replaced by a colocated
+    ``<repo>/.claude/agents/linter.triggers.yml`` sidecar.  Source must
+    remain ``"project"``.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    repo = tmp_path / "repo"
+    proj_agents = repo / ".claude" / "agents"
+    proj_agents.mkdir(parents=True)
+    (proj_agents / "linter.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: linter
+            description: Runs linters.
+            triggers:
+              keywords:
+                - { term: "inline-proj", weight: 1.0 }
+            applicable_skills: []
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (proj_agents / "linter.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "sidecar-proj", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=tmp_path / "no-agents",
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        project_root=repo,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "linter"),
+        None,
+    )
+    assert entry is not None, "linter must be in catalog"
+    assert entry["source"] == "project", (
+        f"source must remain 'project', got {entry['source']!r}"
+    )
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "sidecar-proj" in kw_terms, "sidecar triggers must be applied to project entry"
+    assert "inline-proj" not in kw_terms, "inline triggers must be replaced"
+    assert entry.get("applicable_skills") == ["*"], (
+        f"applicable_skills must come from sidecar; got {entry.get('applicable_skills')!r}"
+    )
+
+
+def test_colocated_sidecar_orphan_dropped_for_project_agent(
+    tmp_path: Path,
+) -> None:
+    """Pass 4b: orphan sidecar in project agents dir emits warning and is dropped.
+
+    A project-local sidecar with no matching ``.md`` counterpart must not
+    create a new entry.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    repo = tmp_path / "repo"
+    proj_agents = repo / ".claude" / "agents"
+    proj_agents.mkdir(parents=True)
+    # Orphan sidecar — no ghost.md in project.
+    (proj_agents / "ghost-proj.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "proj-ghost", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=tmp_path / "no-agents",
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        project_root=repo,
+        now="2026-05-18T00:00:00Z",
+    )
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    names = [e["name"] for e in catalog["entries"]]
+    assert "ghost-proj" not in names, (
+        "orphan project sidecar must not produce a catalog entry"
+    )
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "warning" in log_text, "orphan project sidecar must emit a warning"
+    assert "ghost-proj" in log_text, "warning must identify the orphan stem"

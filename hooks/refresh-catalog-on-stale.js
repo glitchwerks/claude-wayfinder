@@ -175,6 +175,10 @@ function maxSourceMtime(projectRoot) {
   const candidates = [
     ...walkFiles(skillsDir, (p) => basename(p) === "SKILL.md"),
     ...walkFiles(agentsDir, (p) => basename(p).endsWith(".md")),
+    // Issue #148: colocated owned-agent sidecars (<name>.triggers.yml next to
+    // <name>.md).  A new or modified sidecar in the agents directory must
+    // trigger a catalog rebuild just like editing the agent .md itself.
+    ...walkFiles(agentsDir, (p) => basename(p).endsWith(".triggers.yml")),
   ];
 
   // Add project-local source files when a project root is detected.
@@ -183,7 +187,9 @@ function maxSourceMtime(projectRoot) {
     const projAgentsDir = path.join(projectRoot, ".claude", "agents");
     candidates.push(
       ...walkFiles(projSkillsDir, (p) => basename(p) === "SKILL.md"),
-      ...walkFiles(projAgentsDir, (p) => basename(p).endsWith(".md"))
+      ...walkFiles(projAgentsDir, (p) => basename(p).endsWith(".md")),
+      // Issue #148: colocated project-agent sidecars.
+      ...walkFiles(projAgentsDir, (p) => basename(p).endsWith(".triggers.yml"))
     );
   }
 

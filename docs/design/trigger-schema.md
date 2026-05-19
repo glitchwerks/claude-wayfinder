@@ -106,7 +106,9 @@ A tombstone targeting an entry that does not exist (e.g. the plugin was uninstal
 
 ### 2c. Agent files
 
-Agents retain **inline frontmatter** as the trigger source:
+Agents support two equivalent trigger sources. Inline frontmatter is the original form; the **colocated sidecar** (Issue #148) is the recommended path for new authoring because it separates dispatch configuration from agent prose.
+
+#### Inline frontmatter (supported indefinitely)
 
 ```yaml
 ---
@@ -120,7 +122,60 @@ applicable_skills: ["python", "github-actions"]
 ---
 ```
 
-A future version may add agent sidecar support; currently only skills use sidecar files.
+#### Colocated sidecar (recommended for new authoring — Issue #148)
+
+Place a `<name>.triggers.yml` file next to the agent `<name>.md` in the same directory:
+
+```
+~/.claude/agents/
+  linter-agent.md              ← agent identity and prose
+  linter-agent.triggers.yml    ← dispatch configuration (new, recommended)
+
+<repo>/.claude/agents/
+  linter-agent.md
+  linter-agent.triggers.yml
+```
+
+The sidecar carries only the dispatch fields (`triggers:` and `applicable_skills:`); the agent identity (`name`, `description`, prose body) lives in the `.md` file and is not affected. The stem of the sidecar filename must match the stem of the `.md` file exactly — `linter-agent.triggers.yml` pairs with `linter-agent.md`.
+
+```yaml
+# agents/linter-agent.triggers.yml
+#
+# Dispatch configuration for linter-agent.
+# Overrides any triggers: block in linter-agent.md (D2).
+
+triggers:
+  keywords:
+    - { term: "lint",   weight: 1.0 }
+    - { term: "format", weight: 0.5 }
+applicable_skills: ["python", "github-actions"]
+# NOTE: ["*"] grants any applicable skill; [] means no skills (almost always wrong).
+```
+
+**Fields NOT in the sidecar:**
+
+| Field       | Source          |
+| ----------- | --------------- |
+| `name`      | Taken from the `.md` frontmatter; the sidecar's stem must match it. |
+| `description` | Inherited from the `.md` frontmatter; cannot be overridden by a sidecar. |
+| `kind`      | Always `"agent"` for agent sidecars; not a sidecar field. |
+| `source`    | Remains `"owned"` or `"project"` per the agent's origin; the sidecar is a delivery mechanism, not an authorship claim. |
+
+**Precedence and warnings:**
+
+- When both a sidecar and inline `triggers:` are present the sidecar wins. The catalog builder emits a `warning`-level log entry identifying the agent:
+  ```
+  warning  <name>  colocated agent sidecar '<name>.triggers.yml' shadows inline triggers in '<name>.md' — sidecar takes precedence
+  ```
+- Inline `triggers:` in agent frontmatter continues to be supported indefinitely. The sidecar is preferred for new authoring but there is no deprecation timeline for inline.
+- A sidecar with no matching `.md` file (orphan) is dropped with a warning:
+  ```
+  warning  <name>  colocated agent sidecar '<name>.triggers.yml' has no matching agent .md file — sidecar dropped
+  ```
+- A sidecar with malformed YAML is skipped with a warning; the agent's inline triggers (or empty triggers if none) are preserved:
+  ```
+  warning  <name>  YAML parse error in colocated agent sidecar '<name>.triggers.yml': <detail>
+  ```
 
 ### 2c-a. `routable` field (agents only)
 

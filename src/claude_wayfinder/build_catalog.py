@@ -345,6 +345,190 @@ def discover_plugin_agent_overrides(
     return results
 
 
+def discover_colocated_agent_sidecars(
+    agents_dir: Path,
+    issues_sink: list[ValidationIssue] | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Walk an agents directory for colocated ``*.triggers.yml`` sidecars.
+
+    Scans ``agents_dir/*.triggers.yml`` (non-recursive, matching the
+    ``agents_dir/*.md`` agent discovery pattern) and returns one tuple per
+    valid sidecar file.  These sidecars carry dispatch metadata —
+    ``triggers:`` and optionally ``applicable_skills:`` — for an agent
+    ``.md`` file with the same stem.
+
+    This function only parses the YAML; matching against discovered agent
+    entries and applying the sidecar data happens in the caller (Pass 2b
+    for owned agents, Pass 4b for project-local agents).
+
+    Files that fail to parse as valid YAML emit a ``_logger.warning``, add
+    a ``warning`` :class:`ValidationIssue` to *issues_sink* when supplied,
+    and are dropped from the result.  Files that parse to something other
+    than a dict are silently skipped (same shape as
+    :func:`discover_plugin_agent_overrides`).  Missing or non-directory
+    paths return an empty list.
+
+    Args:
+        agents_dir: Directory to scan.  Non-recursively globbed for
+            ``*.triggers.yml`` files.  Silently ignored if absent or
+            not a directory.
+        issues_sink: Optional accumulator for :class:`ValidationIssue`
+            records.  YAML parse failures append a ``warning`` entry here
+            so callers can surface them in the build log.  Pass ``None``
+            to suppress issue accumulation (useful for unit-testing the
+            walker in isolation).
+
+    Returns:
+        A list of ``(stem, sidecar_dict)`` tuples — one per successfully
+        parsed ``.triggers.yml`` file.  ``stem`` is the bare filename
+        without the ``.triggers.yml`` suffix (e.g. ``"code-writer"`` for
+        ``code-writer.triggers.yml``).  Empty list when the directory
+        is absent or contains no ``.triggers.yml`` files.
+    """
+    if not agents_dir.is_dir():
+        return []
+    results: list[tuple[str, dict[str, Any]]] = []
+    for sidecar_file in sorted(agents_dir.glob("*.triggers.yml")):
+        # Stem for ``code-writer.triggers.yml`` is ``code-writer``.
+        # Path.stem strips only the last suffix, so we strip manually.
+        raw_stem = sidecar_file.name
+        stem = raw_stem[: raw_stem.index(".triggers.yml")]
+        try:
+            text = sidecar_file.read_text(encoding="utf-8").strip()
+            if not text:
+                continue
+            parsed = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            _logger.warning(
+                "YAML parse error in colocated agent sidecar '%s': %s",
+                sidecar_file,
+                exc,
+            )
+            if issues_sink is not None:
+                issues_sink.append(
+                    ValidationIssue(
+                        "warning",
+                        stem,
+                        f"YAML parse error in colocated agent sidecar"
+                        f" '{sidecar_file.name}': {exc}",
+                    )
+                )
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        results.append((stem, parsed))
+    return results
+
+
+def _apply_colocated_sidecars(
+    agents_dir: Path,
+    entries: list[dict[str, Any]],
+    source_tag: str,
+    all_issues: list[ValidationIssue],
+) -> None:
+    """Apply colocated ``*.triggers.yml`` sidecars to already-assembled entries.
+
+    Mutates *entries* in place.  This is the shared implementation for
+    Pass 2b (owned agents, ``source_tag="owned"``) and Pass 4b (project
+    agents, ``source_tag="project"``).
+
+    For each sidecar found in *agents_dir*:
+
+    - **Matched** — a sibling ``.md`` was discovered and produced a catalog
+      entry with ``name == stem`` and ``kind == "agent"`` with the correct
+      ``source``: the entry's ``triggers`` and ``applicable_skills`` are
+      replaced with the sidecar's values.  When the existing entry already
+      carries non-empty inline triggers a ``_logger.warning`` is emitted
+      (D2 — sidecar shadows inline triggers).
+    - **Orphan** — no matching entry found: emit ``_logger.warning`` and
+      drop the sidecar (D3 — no new entry is created).
+
+    Sidecar files that fail YAML parsing are already dropped by
+    :func:`discover_colocated_agent_sidecars` before this function is
+    called.
+
+    Args:
+        agents_dir: Directory containing ``.triggers.yml`` sidecars.
+        entries: The in-progress entries list to mutate.
+        source_tag: ``"owned"`` or ``"project"`` — used to filter the
+            lookup index so a same-named entry with a different source
+            (e.g. from a plugin or builtin) is not accidentally matched.
+        all_issues: Accumulator for :class:`ValidationIssue` records.
+            Warnings are appended here as well as being logged via
+            ``_logger``.
+    """
+    sidecars = discover_colocated_agent_sidecars(agents_dir, issues_sink=all_issues)
+    if not sidecars:
+        return
+
+    # Build a (name, kind, source) → index lookup over current entries.
+    # source_tag scoping ensures a same-named plugin entry is not matched.
+    by_name_kind_source: dict[tuple[str, str, str], int] = {
+        (e["name"], e["kind"], e.get("source", "owned")): i
+        for i, e in enumerate(entries)
+    }
+
+    for stem, sidecar in sidecars:
+        match_key = (stem, "agent", source_tag)
+        if match_key not in by_name_kind_source:
+            # Orphan sidecar — no matching agent .md discovered.
+            _logger.warning(
+                "colocated agent sidecar '%s.triggers.yml' in '%s' has no"
+                " matching agent .md file — sidecar dropped",
+                stem,
+                agents_dir,
+            )
+            all_issues.append(
+                ValidationIssue(
+                    "warning",
+                    stem,
+                    f"colocated agent sidecar '{stem}.triggers.yml' has no"
+                    f" matching agent .md file — sidecar dropped",
+                )
+            )
+            continue
+
+        idx = by_name_kind_source[match_key]
+        entry = entries[idx]
+
+        # D2: warn when the entry already has non-empty inline triggers.
+        existing_triggers = entry.get("triggers", {})
+        has_inline_triggers = any(
+            existing_triggers.get(f) for f in TRIGGER_FIELDS
+        )
+        if has_inline_triggers:
+            sidecar_path = agents_dir / f"{stem}.triggers.yml"
+            _logger.warning(
+                "colocated agent sidecar '%s' shadows inline triggers in"
+                " '%s.md' — sidecar takes precedence",
+                sidecar_path,
+                stem,
+            )
+            all_issues.append(
+                ValidationIssue(
+                    "warning",
+                    stem,
+                    f"colocated agent sidecar '{stem}.triggers.yml' shadows"
+                    f" inline triggers in '{stem}.md' — sidecar takes"
+                    " precedence",
+                )
+            )
+
+        # Apply sidecar triggers and applicable_skills to the entry in place.
+        # We write directly to the existing entry dict rather than calling
+        # validate_entry here.  The downstream _resolve_applicable_references
+        # pass (after all passes complete) validates trigger field shapes and
+        # resolves applicable_skills references — the same pipeline that
+        # handles inline-frontmatter triggers.  This mirrors how Pass 3b wires
+        # plugin-agent sidecars: sidecar data is written onto the entry, and
+        # full validation happens downstream (spec §5 "Integration with
+        # existing entry validation").
+        if "triggers" in sidecar:
+            entry["triggers"] = sidecar["triggers"]
+        if "applicable_skills" in sidecar:
+            entry["applicable_skills"] = sidecar["applicable_skills"]
+
+
 def _clamp_weight(w: float) -> float:
     """Return the allowed weight value nearest to ``w``.
 
@@ -1746,6 +1930,20 @@ def build(
         else:
             entries.append(result)
 
+    # --- Pass 2b: owned-agent colocated sidecars ---
+    # Walk agents_dir/*.triggers.yml and apply sidecar dispatch metadata to
+    # the owned agent entries assembled in Pass 2.  Matched sidecars override
+    # inline triggers (with a warning when both are present — D2).  Orphan
+    # sidecars (no matching .md) emit a warning and are dropped (D3).
+    # source="owned" is preserved — the sidecar is a delivery mechanism, not
+    # an authorship change (D4).
+    _apply_colocated_sidecars(
+        agents_dir=agents_dir,
+        entries=entries,
+        source_tag="owned",
+        all_issues=all_issues,
+    )
+
     # --- Pass 2.5: plugin-provided skills and agents (dormant) ---
     # Plugin entries land with source="plugin" and zero triggers so they
     # are dormant by default.  This pass runs after the owned-agents pass
@@ -2037,6 +2235,18 @@ def build(
             else:
                 result["source"] = "project"
                 project_entries.append(result)
+
+        # --- Pass 4b: project-agent colocated sidecars ---
+        # Walk proj_agent_dir/*.triggers.yml and apply sidecar dispatch
+        # metadata to project agent entries assembled above.  Runs before
+        # the merge step so orphan detection uses the pre-merge project
+        # entry list (spec §7 Q5).
+        _apply_colocated_sidecars(
+            agents_dir=proj_agent_dir,
+            entries=project_entries,
+            source_tag="project",
+            all_issues=all_issues,
+        )
 
         # Merge: project entries override user-global entries on collision.
         if project_entries:
