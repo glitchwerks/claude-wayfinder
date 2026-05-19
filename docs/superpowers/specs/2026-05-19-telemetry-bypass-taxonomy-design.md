@@ -5,8 +5,15 @@ tracking: glitchwerks/claude-wayfinder#143
 supersedes: glitchwerks/claude-wayfinder#152 (abandoned)
 postmortem: docs/superpowers/postmortems/2026-05-18-telemetry-enrichment-pivot/POSTMORTEM.md
 inquisitor_pass_1: 2026-05-19 (3 BLOCKING / 6 CONCERN / 2 NIT — addressed in v2-draft2)
-inquisitor_pass_2: 2026-05-19 (2 BLOCKING / 5 CONCERN / 2 NIT — addressed in v2-draft3, this revision)
+inquisitor_pass_2: 2026-05-19 (2 BLOCKING / 5 CONCERN / 2 NIT — addressed in v2-draft3)
+inquisitor_pass_3: 2026-05-19 (1 BLOCKING / 3 CONCERN / 1 NIT — addressed in v2-draft4, this revision; pattern converged)
 status: draft
+followups_filed:
+  # Issue numbers populated before the implementing PR opens. Until then, TBD.
+  # See AC #9 for the merge gate.
+  F-1: TBD
+  F-2: TBD
+  F-3: TBD
 touches:
   - hooks/check-agent-dispatch-pairing.js
   - hooks/lib/bypass-taxonomy.js
@@ -190,6 +197,12 @@ the decision tree's `match` branches, (c) add a row to the router-health
 table. **Until the spec is revised, new hook categories fall through to
 `unknown` via the decision tree's `default:` branch**, which the
 `_UNKNOWN_SHARE_WARN` threshold will surface within a 7-day window.
+
+**Honest framing** (pass-3 CONCERN): the "must be revised" sentence above is
+a goodwill clause with no CI enforcement. The threshold-based detection is
+the only real backstop. F-2's scope is widened to include "should we add a
+hook-side test enumerating categories against the spec enum?" as a
+calibration-debt question once we have baseline data.
 
 **Decision tree** — drives off `category` first (the hook fact), then off
 signals. This eliminates the ordering ambiguity of the v2-draft1 tree.
@@ -379,6 +392,11 @@ empirical grounding pre-deployment, and both are recalibrated together at the
 - `_UNWANTED_BYPASS_SHARE_MAX = 0.50` (bootstrap; tighten after baseline).
 - `_UNKNOWN_SHARE_WARN = 0.10` (bootstrap; the baseline `unknown` rate from
   hook-initiated dispatches alone is unknown until we ship — see § Follow-ups F-2).
+  **Honest framing** (pass-3 CONCERN): 10% × 487 events/week ≈ 49 events/week
+  can flow to `unknown` before this trips. That is deliberately loose so we
+  can observe and learn the right value at the F-2 review. If `unknown` share
+  is in the 1-5% range at F-2, tighten to 2× baseline. If it's >10%, the
+  taxonomy is wrong and the enum gets extended in the same review.
 
 Plus a low-N guard:
 
@@ -444,20 +462,20 @@ Three layers:
    behavioral assertions** (addresses C6, sharpened in pass 2 to avoid
    "checkbox-thrice" degeneration). Each test must assert a different
    observable consequence:
-   - **Synchronous throw**: `classify` throws `new Error('boom')`. Assert
+   - **Classify-time failure (parameterized over throw + malformed return)**:
+     a single parameterized test exercises both `classify` throwing and
+     `classify` returning `{}`. Both run through the same per-event try/catch
+     and recovery path; the consolidation honestly reflects that they are
+     one code path with two input shapes (pass-3 CONCERN). Assert
      `event.bypass_signals === undefined` AND `event.bypass_cause === undefined`
-     AND `stderr` contains `'classify threw'` AND the event JSON line in the
-     drift log is well-formed (no trailing comma, parseable).
-   - **Malformed return**: `classify` returns `{}` (missing both keys). Assert
-     `event.bypass_signals === undefined` AND `event.bypass_cause === undefined`
-     AND `stderr` contains `'malformed shape'` AND the event JSON line is
-     well-formed. The distinguishing assertion: stderr message differs from
-     the throw case.
+     AND the event JSON line in the drift log is well-formed AND stderr
+     contains one of `{'classify threw', 'malformed shape'}` matching the
+     branch under test.
    - **Module-load throw**: spawn the hook with a broken `bypass-taxonomy.js`
      (e.g., a file with a syntax error). Assert the hook process *starts*
      (does not exit nonzero), the first event still appends to the drift log,
-     and `stderr` contains `'module load failed'`. The distinguishing
-     assertion: this test exercises a code path the other two never reach
+     and `stderr` contains `'module load failed'`. This test exercises a
+     genuinely distinct code path the classify-time test cannot reach
      (the require-time try/catch in step 1 of § Hook integration).
 
 CI: existing Node + Python test jobs pick this up automatically.
@@ -595,6 +613,22 @@ F-1 and F-2 share a deadline because they're the same review meeting.
   - **pass-2 NITs**: cosmetic (disposition column collision). Not addressed
     in v2-draft3 — table dispositions stay as-is; future revision can
     diversify the column.
+- **v2-draft4** (this revision, post inquisitor pass 3 — pattern converged):
+  - **pass-3 BLOCKING fix**: `followups_filed:` field added to frontmatter
+    with `TBD` placeholders. AC #9 merge gate is now self-verifying.
+  - **pass-3 CONCERN fixes**:
+    - Classify-time failure tests consolidated from two (synchronous throw,
+      malformed return) into one parameterized test, since both exercise
+      the same code path. Module-load test stays separate (genuinely
+      distinct code path).
+    - `_UNKNOWN_SHARE_WARN = 0.10` framing made honest: "deliberately loose
+      so we can observe and learn"; F-2 commits to either tighten (if rate
+      is low) or extend enum (if rate is high).
+    - Hook-category-set evolution discipline acknowledged as a goodwill
+      clause; the threshold is the only real backstop; F-2's scope widened
+      to include CI-enforcement question as calibration debt.
+  - **pass-3 NIT**: volume-math horizon "≤ 100 MB" not changed — accepted
+    as "effectively never" without further qualification.
 
 ---
 🤖 _Generated by Claude Code on behalf of @cbeaulieu-gt_
