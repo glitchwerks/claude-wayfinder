@@ -1,12 +1,12 @@
-# Frontmatter Guide — claude-wayfinder
+# Dispatch Authoring Guide — claude-wayfinder
 
 ## Purpose
 
-> This guide is the long-form companion to the `claude-wayfinder:frontmatter` skill. The skill is what the agent loads at runtime; this doc is what the human reads when they want examples.
+> This guide is the long-form companion to the `claude-wayfinder:dispatch-authoring` skill. The skill is what the agent loads at runtime; this doc is what the human reads when they want examples.
 
-The `frontmatter` skill covers the rules and scoring math. This companion document turns those rules into concrete walkthroughs: a skill authored from scratch, a skill tuned to fix a stale entry, and an agent that mysteriously never gets dispatched. It also serves as the rule reference for `audit-catalog`, the catalog-wide static analysis CLI.
+The `dispatch-authoring` skill covers the rules and scoring math. This companion document turns those rules into concrete walkthroughs: a skill authored from scratch, a skill tuned to fix a stale entry, and an agent that mysteriously never gets dispatched. It also serves as the rule reference for `audit-catalog`, the catalog-wide static analysis CLI.
 
-Read the `frontmatter` skill body first (`skills/frontmatter/SKILL.md`) for the field definitions and scoring formula. Come here when you need worked examples, the complete audit-catalog rule table, or the exit-code contract.
+Read the `dispatch-authoring` skill body first (`skills/dispatch-authoring/SKILL.md`) for the field definitions and scoring formula. Come here when you need worked examples, the complete audit-catalog rule table, or the exit-code contract.
 
 ---
 
@@ -101,7 +101,7 @@ The general principle: after any significant revision to a skill or agent body, 
 
 ## Worked example: troubleshooting an unreachable agent
 
-This walkthrough uses a fictional agent to illustrate the `needs_more_detail` and `one-dimensional-triggers` failure modes. The symptom table in Section 8 of the `frontmatter` skill lists the root causes; this section makes one of them concrete.
+This walkthrough uses a fictional agent to illustrate the `needs_more_detail` and `one-dimensional-triggers` failure modes. The symptom table in Section 8 of the `dispatch-authoring` skill lists the root causes; this section makes one of them concrete.
 
 ### The scenario
 
@@ -338,8 +338,8 @@ The exit code reflects the worst severity in the **filtered** output, not the fu
 
 ## Cross-references
 
-- `skills/frontmatter/SKILL.md` — the runtime-loaded skill; contains the scoring math, footgun list, authoring workflow, tuning workflow, and troubleshooting symptom table.
+- `skills/dispatch-authoring/SKILL.md` — the runtime-loaded skill; contains the scoring math, footgun list, authoring workflow, tuning workflow, and troubleshooting symptom table.
 - `docs/schema.md` — canonical trigger field reference; start here for type definitions, defaults, and stability guarantees.
 - `docs/design/trigger-schema.md` — design rationale for why the schema has the shape it does.
-- `agent-authoring` skill (in `~/.claude/skills/agent-authoring/`) — broader harness authoring discipline covering agent structure, routing configuration, and the full lifecycle of a new agent; the frontmatter skill is its matcher-specific counterpart.
+- `agent-authoring` skill (in `~/.claude/skills/agent-authoring/`) — broader harness authoring discipline covering agent structure, routing configuration, and the full lifecycle of a new agent; the dispatch-authoring skill is its matcher-specific counterpart.
 - `src/claude_wayfinder/audit_catalog.py` — implementation source for all 12 CLI rules; the docstrings on each rule function are the normative descriptions.

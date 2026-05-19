@@ -92,7 +92,7 @@ Both run the same matcher against the same bundled fixtures. The CLI path is the
 The plugin ships two skills usable inside Claude Code:
 
 - `claude-wayfinder:dispatch` — runs the matcher in demo mode (bundled fixtures) or against your live catalog when `$DISPATCH_CATALOG_PATH` is set. See the `/dispatch` section above.
-- `claude-wayfinder:frontmatter` — matcher-aware authoring and troubleshooting knowledge for trigger frontmatter. Covers the seven-decision ladder, scoring math, weight ladder, path-glob footguns, conflict-pair detection, and the audit-catalog CLI pointer. See [`docs/frontmatter-guide.md`](docs/frontmatter-guide.md).
+- `claude-wayfinder:dispatch-authoring` — matcher-aware authoring and troubleshooting knowledge for the full dispatch authoring surface (trigger frontmatter, applicable_agents, applicable_skills, routable). Covers the seven-decision ladder, scoring math, weight ladder, path-glob footguns, conflict-pair detection, and the audit-catalog CLI pointer. See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
 
 ### What's next
 
@@ -173,7 +173,7 @@ The full CLI surface is documented via `python -m claude_wayfinder --help`. Key 
 - `demo` — run the matcher against bundled demo fixtures; covers all seven decision branches.
 - `dispatch` — run the matcher against a live catalog; reads dispatch context JSON from stdin.
 - `catalog build` — scan skill sidecars and agent frontmatter and write a `dispatch-catalog.json`.
-- `audit-catalog` — catalog-wide static analysis (conflict pairs, structural checks, matcher-aware semantic rules). See [`docs/frontmatter-guide.md`](docs/frontmatter-guide.md).
+- `audit-catalog` — catalog-wide static analysis (conflict pairs, structural checks, matcher-aware semantic rules). See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
 
 ## Library API
 

@@ -516,7 +516,7 @@ python -m claude_wayfinder audit-catalog --severity blocking
 python -m claude_wayfinder audit-catalog --json
 ```
 
-See [`docs/frontmatter-guide.md`](frontmatter-guide.md) for the complete rule reference and worked examples.
+See [`docs/dispatch-authoring-guide.md`](dispatch-authoring-guide.md) for the complete rule reference and worked examples.
 
 ---
 
