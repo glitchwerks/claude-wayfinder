@@ -20,6 +20,7 @@ import pytest
 from claude_wayfinder.audit_catalog import (
     Finding,
     Severity,
+    rule_duplicate_keyword_terms,
     rule_weight_not_in_ladder,
     rule_whitespace_in_term,
     run_audit,
@@ -236,3 +237,43 @@ class TestWhitespaceInTerm:
         assert len(findings) == 1
         assert findings[0].severity == Severity.BLOCKING
         assert "two words" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Task 9 — rule_duplicate_keyword_terms (BLOCKING)
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateKeywordTerms:
+    def test_clean(self) -> None:
+        e = _entry(
+            "ok",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("a", 1.0), Keyword("b", 0.5)),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_duplicate_keyword_terms([e]) == []
+
+    def test_duplicate_flagged(self) -> None:
+        # Note: the in-memory CatalogEntry can hold duplicates only if
+        # the loader was bypassed; we construct one directly here.
+        e = _entry(
+            "dup",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("a", 1.0), Keyword("a", 0.5)),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        findings = rule_duplicate_keyword_terms([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.BLOCKING
+        assert "'a'" in findings[0].message

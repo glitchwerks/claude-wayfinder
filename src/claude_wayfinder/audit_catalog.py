@@ -273,3 +273,26 @@ def rule_whitespace_in_term(catalog: list[CatalogEntry]) -> list[Finding]:
                     )
                 )
     return out
+
+
+@register
+def rule_duplicate_keyword_terms(catalog: list[CatalogEntry]) -> list[Finding]:
+    """Flag duplicate keyword terms within a single entry."""
+    out: list[Finding] = []
+    for e in catalog:
+        seen: dict[str, int] = {}
+        for kw in e.triggers.keywords:
+            seen[kw.term] = seen.get(kw.term, 0) + 1
+        for term, count in seen.items():
+            if count > 1:
+                out.append(
+                    Finding(
+                        severity=Severity.BLOCKING,
+                        rule="duplicate-keyword-term",
+                        entry=e.name,
+                        message=(
+                            f"keyword term '{term}' appears {count} times"
+                        ),
+                    )
+                )
+    return out
