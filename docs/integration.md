@@ -495,6 +495,31 @@ Key points:
 
 ---
 
+## Auditing the dispatch catalog
+
+Run `audit-catalog` before every release and as a pre-commit check whenever you modify skill sidecars or agent frontmatter — it catches structural and matcher-aware semantic problems that are difficult to spot by reading individual files.
+
+| Exit | Meaning | Typical use case |
+| ---- | ------- | --------------- |
+| 0 | No findings (after severity/target filtering) | Clean catalog; safe to merge. |
+| 1 | NIT findings only | Development-loop noise gate; acceptable before shipping. |
+| 2 | CONCERN findings present (no BLOCKING) | Review before shipping, but not a hard block. |
+| 3 | BLOCKING findings present | CI hard gate; do not merge until resolved. |
+
+Use `--severity blocking` as the CI gate to fail only on structural violations that the matcher cannot work around:
+
+```bash
+# CI gate — fail only on BLOCKING findings
+python -m claude_wayfinder audit-catalog --severity blocking
+
+# Full report — all findings, machine-readable
+python -m claude_wayfinder audit-catalog --json
+```
+
+See [`docs/frontmatter-guide.md`](frontmatter-guide.md) for the complete rule reference and worked examples.
+
+---
+
 ## Cross-references
 
 - **Schema documentation** — the catalog entry schema, dispatch context schema (5 input fields), and decision output schema (7 decision types) are documented in [`docs/schema.md`](schema.md).
