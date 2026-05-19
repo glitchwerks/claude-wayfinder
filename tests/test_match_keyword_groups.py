@@ -38,3 +38,65 @@ class TestKeywordGroupTypes:
         )
         assert len(group.slots) == 2
         assert group.weight == 1.0
+
+
+class TestTriggersParsing:
+    """_parse_triggers correctly reads keyword_groups from raw dicts."""
+
+    def test_triggers_defaults_keyword_groups_to_empty(self) -> None:
+        """Catalog entries without keyword_groups parse cleanly."""
+        triggers = _match_mod._parse_triggers({})
+        assert triggers.keyword_groups == ()
+
+    def test_parse_keyword_groups_dict_form(self) -> None:
+        """The canonical dict form (terms + optional name) parses."""
+        raw = {
+            "keyword_groups": [
+                {
+                    "slots": [
+                        {"name": "verbs", "terms": ["update", "edit"]},
+                        {"name": "nouns", "terms": ["docs", "readme"]},
+                    ],
+                    "weight": 1.0,
+                }
+            ]
+        }
+        triggers = _match_mod._parse_triggers(raw)
+        assert len(triggers.keyword_groups) == 1
+        group = triggers.keyword_groups[0]
+        assert group.weight == 1.0
+        assert len(group.slots) == 2
+        assert group.slots[0].name == "verbs"
+        assert group.slots[0].terms == ("update", "edit")
+        assert group.slots[1].name == "nouns"
+        assert group.slots[1].terms == ("docs", "readme")
+
+    def test_parse_keyword_groups_bare_list_form(self) -> None:
+        """Authors may write slots as bare lists (no name)."""
+        raw = {
+            "keyword_groups": [
+                {
+                    "slots": [
+                        ["github"],
+                        ["issue", "pr", "workflow"],
+                    ],
+                    "weight": 1.0,
+                }
+            ]
+        }
+        triggers = _match_mod._parse_triggers(raw)
+        group = triggers.keyword_groups[0]
+        assert group.slots[0].name is None
+        assert group.slots[0].terms == ("github",)
+        assert group.slots[1].terms == ("issue", "pr", "workflow")
+
+    def test_parse_keyword_groups_lowercases_terms(self) -> None:
+        """Terms are lowercased to match feature extraction."""
+        raw = {
+            "keyword_groups": [
+                {"slots": [["UPDATE"], ["DOCS"]], "weight": 1.0}
+            ]
+        }
+        triggers = _match_mod._parse_triggers(raw)
+        assert triggers.keyword_groups[0].slots[0].terms == ("update",)
+        assert triggers.keyword_groups[0].slots[1].terms == ("docs",)
