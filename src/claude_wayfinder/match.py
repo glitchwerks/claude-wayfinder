@@ -559,18 +559,21 @@ def load_catalog(path: Path) -> list[CatalogEntry]:
         path: Resolved path to ``dispatch-catalog.json``.
 
     Returns:
-        List of ``CatalogEntry`` objects.
+        List of ``CatalogEntry`` objects.  An empty list is returned for
+        catalogs whose ``entries`` array is present but empty.
 
     Raises:
         FileNotFoundError: If the catalog file does not exist.
         json.JSONDecodeError: If the file contains malformed JSON.
-        ValueError: If the catalog has zero entries.
     """
     raw_text = path.read_text(encoding="utf-8")
     catalog = json.loads(raw_text)
     raw_entries: list[dict[str, Any]] = catalog.get("entries", [])
+    # Empty entries list is a valid degraded state (#506 catalog-error
+    # path, fresh-checkout pre-build). Callers like audit-catalog need
+    # to operate on it without crashing. Return empty rather than raise.
     if not raw_entries:
-        raise ValueError("Catalog contains zero entries.")
+        return []
 
     entries: list[CatalogEntry] = []
     for raw in raw_entries:
@@ -1146,8 +1149,11 @@ def main(argv: list[str] | None = None) -> None:
         entries = load_catalog(catalog_path)
     except json.JSONDecodeError as exc:
         _emit_catalog_error(f"malformed JSON ({exc})")
-    except ValueError as exc:
-        _emit_catalog_error(str(exc))
+    if not entries:
+        # load_catalog returns [] for empty catalogs rather than raising
+        # (audit-catalog needs to load them without crashing).  The dispatch
+        # runtime treats zero entries as a degraded state and errors out.
+        _emit_catalog_error("Catalog contains zero entries.")
 
     catalog_hash = _compute_catalog_hash(catalog_raw_text)
 

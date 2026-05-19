@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import claude_wayfinder.audit_catalog as _audit_mod
 import claude_wayfinder.build_catalog as _build_catalog_mod
 from claude_wayfinder._dispatch import run_dispatch
 from claude_wayfinder.match import (
@@ -280,6 +281,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _build_catalog_mod.add_catalog_build_args(build_parser)
 
+    # --- audit-catalog subcommand ---
+    audit_parser = sub.add_parser(
+        "audit-catalog",
+        help=(
+            "Catalog-wide static analysis: conflict pairs, structural "
+            "validation, matcher-aware semantic checks."
+        ),
+    )
+    _audit_mod.add_audit_catalog_args(audit_parser)
+
     return parser
 
 
@@ -307,6 +318,9 @@ def main(argv: list[str] | None = None) -> int:
         # ``catalog`` with no sub-subcommand — print catalog help.
         parser.parse_args(["catalog", "--help"])
         return 1
+
+    if args.command == "audit-catalog":
+        return _audit_mod.run_audit_cli(args)
 
     # No sub-command given — print help and exit non-zero.
     parser.print_help()

@@ -1,0 +1,17 @@
+triggers:
+  command_prefixes:
+    - "/frontmatter"
+  keywords:
+    - { term: "frontmatter", weight: 1.0 }
+    - { term: "triggers", weight: 1.0 }
+    - { term: "keywords", weight: 0.5 }
+    - { term: "weight", weight: 0.5 }
+    - { term: "dispatch", weight: 0.5 }
+    - { term: "fnmatch", weight: 1.0 }
+    - { term: "path_globs", weight: 1.0 }
+    - { term: "applicable_skills", weight: 1.0 }
+    - { term: "conflict", weight: 0.5 }
+    - { term: "matcher", weight: 0.25 }
+    - { term: "routable", weight: 0.25 }
+applicable_agents:
+  - "*"
