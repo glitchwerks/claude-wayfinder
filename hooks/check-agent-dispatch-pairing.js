@@ -32,6 +32,20 @@ const os = require("node:os");
 const path = require("node:path");
 const parseInput = require("./parse-input");
 
+// Lazy load the bypass-taxonomy module with explicit module-load error
+// handling. A require-time throw cannot kill the hook because the require
+// runs inside its own try; the fallback `null` is short-circuited at
+// use-time (see emit path below). Spec §Hook integration.
+let _bypassTaxonomyClassify = null;
+try {
+  ({ classify: _bypassTaxonomyClassify } = require("./lib/bypass-taxonomy"));
+} catch (err) {
+  process.stderr.write(
+    `[bypass-taxonomy] module load failed; events will emit without enrichment: ${err.message}\n`
+  );
+  _bypassTaxonomyClassify = null;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -337,6 +351,38 @@ if (require.main === module) {
         session_id: sessionId,
         category,
       };
+
+      // Enrich with bypass_signals + bypass_cause when possible.
+      // Three guarded failure modes: module-load throw (handled above by
+      // _bypassTaxonomyClassify=null), per-event classify throw (try/catch
+      // below), and malformed return shape (if-checks below). All three
+      // recover by emitting the event without enrichment.
+      if (_bypassTaxonomyClassify) {
+        try {
+          const result = _bypassTaxonomyClassify(
+            category,
+            { subagent_type: input?.tool_input?.subagent_type ?? "" },
+            toolEvents
+          );
+          if (
+            result &&
+            typeof result.cause === "string" &&
+            result.signals &&
+            typeof result.signals === "object"
+          ) {
+            event.bypass_signals = result.signals;
+            event.bypass_cause = result.cause;
+          } else {
+            process.stderr.write(
+              "[bypass-taxonomy] classify returned malformed shape; emitting without enrichment\n"
+            );
+          }
+        } catch (err) {
+          process.stderr.write(
+            `[bypass-taxonomy] classify threw; emitting without enrichment: ${err.message}\n`
+          );
+        }
+      }
 
       appendDriftEvent(event, driftPath);
     } catch (e) {
