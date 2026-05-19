@@ -335,6 +335,31 @@ Built-in agents are embedded in the runtime binary and ship with no changelog th
 
 Builtin agents with `source="builtin"` are **routable by default** — unlike plugin agents (`source="plugin"`) which are inert until activated by an override. This reflects the fact that sidecar authors have explicitly opted the built-in into routing by writing a trigger block.
 
+### 2i. `keyword_groups` (added 2026-05-18 per #135)
+
+```yaml
+triggers:
+  keyword_groups:
+    - slots:
+        - {name: verbs, terms: [update, edit, modify, change]}
+        - {name: nouns, terms: [docs, readme, spec]}
+      weight: 1.0
+    - slots:
+        - [github]
+        - [issue, pr, workflow]
+      weight: 1.0
+```
+
+A `keyword_group` expresses a **conjunctive trigger** — *"all of slot A AND all of slot B"* — that fires only when every slot has at least one matching term in `features.keywords`.
+
+- `slots`: list of 2–8 slot objects. Each slot is either:
+  - A bare list of alternative term strings (`[a, b, c]`), or
+  - A dict `{terms: [a, b, c], name: "verbs"}` with an optional human-readable `name`.
+- `weight`: float in `{0.25, 0.5, 1.0}`. A satisfied group contributes `_GROUP_MULTIPLIER × weight` to the entry's score (currently `_GROUP_MULTIPLIER = 1.0`).
+- See §4 (keyword_groups matching) for matching rules; §6 (keyword_groups validation) for validation; §9.10 for a worked example.
+
+Authoritative design: `docs/superpowers/specs/2026-05-18-and-groups-design.md`.
+
 ---
 
 ## 3. The `features` JSON contract
@@ -448,6 +473,21 @@ Total score is clamped to `1.0`.
 
 PR review heuristic: if you can't justify "removing this `1.0` term means the skill should not match," it should be `0.5`.
 
+### `keyword_groups` matching
+
+A group is **satisfied** when *every* slot contains at least one term in `features.keywords`. Strict all-of; no partial credit.
+
+When satisfied:
+
+1. The group contributes `_GROUP_MULTIPLIER × group.weight` to the entry's pre-clamp score.
+2. **Replacement rule:** every singleton keyword on the same entry whose `term` appears in any slot of the satisfied group has its contribution **suppressed** (set to zero) for this scoring pass.
+
+When unsatisfied: zero contribution, no suppression. Singletons score normally.
+
+Multiple satisfied groups on the same entry **sum independently** — each adds its weight. The final `min(s, 1.0)` clamp absorbs any overflow.
+
+Authoritative pseudocode: `docs/superpowers/specs/2026-05-18-and-groups-design.md` § 5.
+
 ---
 
 ## 5. `applicable_agents` / `applicable_skills` — hard filter, strict empty
@@ -497,6 +537,21 @@ Ties (equidistant values) resolve to the larger weight.
 
 - **Unknown keys inside `triggers:`** are silently ignored. This lets future versions add fields without breaking older generators.
 - **Unknown top-level keys** in sidecar files and agent frontmatter are silently ignored.
+
+### `keyword_groups` validation
+
+| Condition | Severity |
+| --- | --- |
+| `slots:` missing or has 0 or 1 entries | **fatal** — use `keywords:` for single-term triggers |
+| `slots:` has more than 8 entries | **fatal** — max is 8 |
+| `slots:` has 4–8 entries | warning — real prompts rarely contain that many roles |
+| Slot has 0 terms or missing `terms:` | **fatal** |
+| Slot has exactly 1 term | warning — consider merging or using `keywords:` |
+| Same term in ≥ 2 slots of the SAME group | **fatal** — a term cannot fill two roles |
+| `weight` outside `{0.25, 0.5, 1.0}` | **fatal** |
+| `name:` on slot contains whitespace or non-identifier chars | warning |
+
+Cross-group term overlap on the same entry is allowed.
 
 ---
 
@@ -732,6 +787,35 @@ triggers:
 ```
 2026-04-30T14:22:03Z warning noisy-skill triggers declared but applicable_agents is empty — entry will never match
 ```
+
+### 9.10 `keyword_groups` example — doc-writer
+
+```yaml
+# Adds a verb-noun conjunctive trigger to doc-writer.
+# Existing singletons (docs, readme, spec, update, edit) preserved for
+# weak attachment signal when no verb is present.
+triggers:
+  keywords:
+    - {term: docs,   weight: 1.0}
+    - {term: readme, weight: 1.0}
+    - {term: spec,   weight: 1.0}
+    - {term: update, weight: 0.25}
+    - {term: edit,   weight: 0.25}
+  keyword_groups:
+    - slots:
+        - {name: verbs, terms: [update, edit, modify, change]}
+        - {name: nouns, terms: [docs, readme, spec]}
+      weight: 1.0
+```
+
+Behavior on representative prompts:
+
+| Prompt | doc-writer score | Reason |
+| --- | --- | --- |
+| `update the docs` | 1.00 | Group fires; both singletons suppressed (replacement rule) |
+| `edit the readme` | 1.00 | Group fires |
+| `the docs are great` | 0.50 | Group does NOT fire (no verb); singleton `docs@1.0` contributes 0.5 |
+| `modify the spec document` | 1.00 | Group fires |
 
 ---
 
