@@ -287,3 +287,179 @@ that only one of them legitimately fires on, or a `command_prefixes` entry
 that explicitly routes one of them. If the overlap is fundamental — the two
 entries genuinely do the same thing in the same context — consider whether
 they should be merged into one.
+
+---
+
+## 6. Authoring Workflow
+
+Use this workflow when writing trigger frontmatter for a new agent or skill
+from scratch.
+
+**Step 1 — Read the body in full.**
+Open the agent or skill file and read it completely before writing a single
+trigger. Triggers that are drafted from a one-line summary routinely miss
+the recurring terminology the body actually uses.
+
+**Step 2 — Identify prominent terms and assign weights.**
+As you read, note terms by how central they are to the entry's purpose:
+
+- The skill or agent **name**, or the core verb it acts on (e.g. `refactor`
+  for the refactoring agent, `dispatch` for the routing skill) → weight
+  `1.0`. At most one or two terms should sit here; if many terms seem equally
+  central, that is a sign the scope is too broad.
+- Recurring concept terms — vocabulary the body uses repeatedly and that
+  distinguishes this entry from neighboring ones → weight `0.5`.
+- Supporting or contextual terms — words that appear in the body and hint at
+  the use-case, but are not discriminating on their own → weight `0.25`.
+
+A well-calibrated entry typically has one or two `1.0` terms, three to five
+`0.5` terms, and a handful of `0.25` terms. If the `1.0` bucket is full of
+generic words (`code`, `file`, `run`) the entry will conflict with half the
+catalog.
+
+**Step 3 — Add `path_globs` for any file patterns the body implies.**
+If the body directs attention to specific file types or directory trees, add
+a `path_globs` entry for each. Always use `**/*.ext` for extension-based
+patterns (not `*.ext` — see the fnmatch footgun in Section 5). A
+`path_globs` entry adds `+0.4` per match and provides a second scoring
+dimension that significantly improves disambiguation against other entries
+with similar keyword sets.
+
+**Step 4 — Add `tool_mentions` for any tools the body explicitly names.**
+If the body tells the user to reach for a specific tool — `Bash`, `Edit`,
+`WebFetch`, etc. — list those tools in `tool_mentions`. Use the exact
+casing the harness uses (capitalize the first letter; see the case-sensitive
+footgun in Section 5).
+
+**Step 5 — Decide `applicable_skills` (for agents).**
+Read the body for skill-task language: verbs like "plan", "test", "review",
+"debug". List the skill names whose purpose aligns with those verbs in
+`applicable_skills`. Use `["*"]` only if the agent is genuinely purpose-
+agnostic. Do not leave the field blank or set it to `[]` unless you
+intentionally want no skills attached.
+
+**Step 6 — Prefer the v6 sidecar location over inline frontmatter.**
+Place the resulting YAML in the sidecar rather than embedding it in the
+agent or skill file's frontmatter block. Sidecars isolate trigger config
+from body copy, which makes diffs cleaner and code review faster. The
+correct paths are:
+
+- Owned skills: `skills/<name>/triggers.yml`
+- Plugin agents: `triggers/<plugin>/agents/<name>.yml`
+
+Inline frontmatter is still read by the generator, but a sidecar at
+the location above always overrides it.
+
+---
+
+## 7. Tuning Workflow
+
+Use this workflow when improving trigger frontmatter that already exists
+but is producing poor match results.
+
+**Step 1 — Read the body and the current triggers side-by-side.**
+Open both the sidecar (or inline frontmatter) and the agent or skill body
+at the same time. This side-by-side read is the only reliable way to spot
+divergence between what the entry does and what the triggers say it does.
+
+**Step 2 — Find stale keywords.**
+Look for terms in `triggers.keywords` that no longer appear in the body.
+Bodies change over time; triggers often do not. A stale keyword raises
+the entry's score on inputs that no longer reflect its actual purpose,
+creating misleading matches. Remove or replace stale terms.
+
+**Step 3 — Find missing keywords.**
+Scan the body for recurring terms that are absent from `triggers.keywords`.
+If a concept appears in every paragraph but is not listed as a keyword,
+the entry will miss prompts that use that concept. Add the term at the
+weight level appropriate to how central it is.
+
+**Step 4 — Check weight alignment.**
+For each existing keyword, ask whether its weight still reflects its
+centrality to the body. The most common drift pattern is a term that was
+elevated to `1.0` during an early iteration and was never revisited as
+the scope of the entry narrowed. A `1.0` weight that should be `0.5`
+inflates the score on prompts that mention that term even tangentially
+and widens conflict-pair risk.
+
+**Step 5 — Check conflict-pair risk.**
+Eyeball the catalog for other entries that share several of the same
+keywords. If two or more entries have three or more overlapping terms at
+`0.5` or `1.0` weight and no differentiating `path_globs` or
+`tool_mentions`, they will produce `ambiguous` decisions on the prompts
+where those terms overlap. Introduce a discriminator (see Section 5) or
+run `audit-catalog` (see Section 9) to surface all conflict pairs at once.
+
+**Step 6 — Check for structural violations.**
+Before committing, verify that:
+
+- Every `keywords` entry is a `{term, weight}` mapping, not a bare string.
+- Every weight is exactly one of `0.25`, `0.5`, or `1.0`.
+- No term contains leading or trailing whitespace (the generator does not
+  strip these; `" python"` and `"python"` are different terms).
+- `command_prefixes` entries each start with `/`.
+
+---
+
+## 8. Troubleshooting Workflow
+
+When an agent is not being dispatched or a skill is not attaching as
+expected, work through the symptom table below to identify the cause.
+
+| Symptom | Likely cause |
+|---|---|
+| Routable agent scores 0 on prompts that should match | Unreachable routable: `triggers` is empty or every keyword weight is `0`. |
+| Score never crosses the delegation floor (`0.85`) | One-dimensional triggers — the entry has only `keywords` and no `path_globs` or `tool_mentions`; max reachable score is limited. |
+| Agent matches everything indiscriminately | Keyword set too generic (`code`, `file`, `run`); conflict-pair risk against many other entries. |
+| Skill never attaches to the expected agent | `applicable_agents` on the skill sidecar excludes that agent name; or `applicable_skills: []` on the agent sidecar mutes all skill attachment. |
+| Weight you set in the sidecar is not what the matcher uses | Non-ladder weight (e.g. `0.75`) was silently clamped to the nearest step; check `catalog-generation.log`. |
+| A specific term never contributes to the score | The term appears in the entry's own `excludes` list, zeroing the entry whenever it is present in the input. |
+| A `tool_mentions` entry never matches | Case mismatch — the harness passes `Bash`, not `bash`; `WebFetch`, not `webfetch`. Use the exact harness casing. |
+
+**Diagnostic sequence when none of the above is obvious:**
+
+1. Run `audit-catalog` (see Section 9) and check the output for
+   structural warnings on the entry.
+2. Compare the entry's trigger YAML against the schema in `docs/schema.md`
+   field by field.
+3. Check whether a sidecar overrides the inline frontmatter you edited —
+   both exist, the sidecar wins, and the edit may have gone to the wrong
+   file.
+4. Confirm the entry is marked `routable: true` (or that the key is absent,
+   which defaults to `true`). An explicit `routable: false` removes the
+   entry from the scored-agent pool entirely.
+
+---
+
+## 9. When to Run the CLI
+
+> The matcher-aware checks the LLM cannot do consistently across all ~70
+> catalog entries — conflict-pair detection, unreachable-routable scans,
+> structural validation across the whole catalog — live in
+> `python -m claude_wayfinder audit-catalog`. Run it whenever you add or
+> substantially edit a routable agent, before opening a PR that ships new
+> frontmatter, or as a periodic catalog sanity check. See
+> `docs/frontmatter-guide.md` for the rule reference and exit-code
+> contract.
+
+The CLI is the authoritative source for catalog-wide problems. It is not a
+substitute for the field-by-field checks in Sections 6 and 7, but it
+catches conflict pairs and unreachable entries that would require reading
+the full catalog by hand to detect otherwise.
+
+---
+
+## 10. References
+
+- `docs/schema.md` — canonical trigger field reference; start here when
+  looking up the exact name, type, or default for any trigger field.
+- `docs/design/trigger-schema.md` — design rationale for the schema;
+  explains why certain field shapes were chosen and what alternatives were
+  considered.
+- `docs/frontmatter-guide.md` — extended worked-examples companion to this
+  skill; covers edge cases and advanced calibration patterns not addressed
+  above.
+- `agent-authoring` skill (in `~/.claude/skills/agent-authoring/`) —
+  broader harness authoring discipline covering agent structure, routing
+  configuration, and the full lifecycle of a new agent; this frontmatter
+  skill is its matcher-specific counterpart.
