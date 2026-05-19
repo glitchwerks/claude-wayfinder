@@ -224,3 +224,31 @@ def run_audit_cli(args: argparse.Namespace) -> int:
             f"{f.severity.name:<8}  [{f.rule}]  {f.entry}: {f.message}"
         )
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Rule: weight not in ladder (BLOCKING)
+# ---------------------------------------------------------------------------
+
+_LADDER: frozenset[float] = frozenset({0.25, 0.5, 1.0})
+
+
+@register
+def rule_weight_not_in_ladder(catalog: list[CatalogEntry]) -> list[Finding]:
+    """Flag any keyword whose weight is not in {0.25, 0.5, 1.0}."""
+    out: list[Finding] = []
+    for e in catalog:
+        for kw in e.triggers.keywords:
+            if kw.weight not in _LADDER:
+                out.append(
+                    Finding(
+                        severity=Severity.BLOCKING,
+                        rule="weight-not-in-ladder",
+                        entry=e.name,
+                        message=(
+                            f"keyword '{kw.term}' weight {kw.weight} "
+                            f"not in {{0.25, 0.5, 1.0}}"
+                        ),
+                    )
+                )
+    return out

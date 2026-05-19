@@ -20,9 +20,10 @@ import pytest
 from claude_wayfinder.audit_catalog import (
     Finding,
     Severity,
+    rule_weight_not_in_ladder,
     run_audit,
 )
-from claude_wayfinder.match import CatalogEntry, Triggers
+from claude_wayfinder.match import CatalogEntry, Keyword, Triggers
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -155,3 +156,44 @@ class TestAuditCatalogCliHelp:
     def test_help_lists_catalog_flag(self, help_output: str) -> None:
         """--catalog flag appears in audit-catalog help text."""
         assert "--catalog" in help_output
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — rule_weight_not_in_ladder (BLOCKING)
+# ---------------------------------------------------------------------------
+
+
+class TestWeightNotInLadder:
+    """BLOCKING: keyword weight outside {0.25, 0.5, 1.0}."""
+
+    def test_clean_catalog_no_finding(self) -> None:
+        e = _entry(
+            "ok",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("foo", 1.0), Keyword("bar", 0.5)),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_weight_not_in_ladder([e]) == []
+
+    def test_off_ladder_weight_flagged(self) -> None:
+        e = _entry(
+            "bad",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("foo", 0.7),),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        findings = rule_weight_not_in_ladder([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.BLOCKING
+        assert findings[0].entry == "bad"
+        assert "0.7" in findings[0].message
