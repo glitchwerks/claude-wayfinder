@@ -338,3 +338,53 @@ def rule_path_glob_footgun(catalog: list[CatalogEntry]) -> list[Finding]:
                         )
                     )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: tool-name case error (CONCERN)
+# ---------------------------------------------------------------------------
+
+# Canonical case-correct names for tools the matcher recognises.
+# Extend cautiously — adding a name here can flag previously-clean
+# catalogs.
+_CANONICAL_TOOLS: tuple[str, ...] = (
+    "Agent",
+    "Bash",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Monitor",
+    "NotebookEdit",
+    "Read",
+    "Skill",
+    "TaskCreate",
+    "ToolSearch",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+)
+_CANONICAL_TOOLS_LOWER: dict[str, str] = {
+    t.lower(): t for t in _CANONICAL_TOOLS
+}
+
+
+@register
+def rule_tool_name_case_error(catalog: list[CatalogEntry]) -> list[Finding]:
+    """Flag tool_mentions matching a known tool but with wrong case."""
+    out: list[Finding] = []
+    for e in catalog:
+        for tm in sorted(e.triggers.tool_mentions):
+            canonical = _CANONICAL_TOOLS_LOWER.get(tm.lower())
+            if canonical is not None and canonical != tm:
+                out.append(
+                    Finding(
+                        severity=Severity.CONCERN,
+                        rule="tool-name-case-error",
+                        entry=e.name,
+                        message=(
+                            f"tool_mention '{tm}' is case-incorrect; "
+                            f"matcher expects '{canonical}'"
+                        ),
+                    )
+                )
+    return out

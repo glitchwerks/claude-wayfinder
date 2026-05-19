@@ -22,6 +22,7 @@ from claude_wayfinder.audit_catalog import (
     Severity,
     rule_duplicate_keyword_terms,
     rule_path_glob_footgun,
+    rule_tool_name_case_error,
     rule_weight_not_in_ladder,
     rule_whitespace_in_term,
     run_audit,
@@ -331,3 +332,58 @@ class TestPathGlobFootgun:
             ),
         )
         assert rule_path_glob_footgun([e]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 11 — rule_tool_name_case_error (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestToolNameCaseError:
+    def test_correct_case_ok(self) -> None:
+        e = _entry(
+            "ok",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=tuple(),
+                tool_mentions=frozenset({"Bash"}),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_tool_name_case_error([e]) == []
+
+    def test_wrong_case_flagged(self) -> None:
+        e = _entry(
+            "bad",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=tuple(),
+                tool_mentions=frozenset({"bash"}),
+                excludes=frozenset(),
+            ),
+        )
+        findings = rule_tool_name_case_error([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert "bash" in findings[0].message
+        assert "Bash" in findings[0].message
+
+    def test_unknown_tool_not_flagged(self) -> None:
+        # Unknown tool names are passed through — only known tools with
+        # wrong case are flagged.
+        e = _entry(
+            "unknown",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=tuple(),
+                tool_mentions=frozenset({"CustomToolXYZ"}),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_tool_name_case_error([e]) == []
