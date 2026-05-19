@@ -277,6 +277,258 @@ def discover_plugin_overrides(
     return results
 
 
+def discover_plugin_agent_overrides(
+    triggers_root: Path,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """Walk the plugin-agent-override tree and return sidecar entries.
+
+    Scans ``<triggers_root>/<plugin>/agents/<name>.yml`` for all ``.yml``
+    files exactly three levels deep (one deeper than skill overrides).
+    Each file is parsed and returned as a tuple
+    ``("agent", "<plugin>:<name>", parsed_dict)``.  The plugin-namespaced
+    name matches the loader's convention, e.g.
+    ``superpowers:doc-writer``.
+
+    The reserved sub-directory ``builtin/`` is **skipped** entirely,
+    including any ``builtin/agents/`` subtree.  Builtin sidecars are
+    processed exclusively by Pass 2.6 via ``discover_builtin_agents``
+    and must not be treated as plugin-agent-override entries.
+
+    Unlike ``discover_plugin_overrides``, which can append new entries
+    when no matching dormant entry exists, this walker is used for
+    strict Mode 2a (match-required) semantics: the application loop
+    must emit a warning and drop any sidecar that does not match a
+    dormant ``source="plugin"`` agent entry.
+
+    Files that fail to parse are silently skipped (callers will see
+    them missing from the returned list and log them accordingly).
+
+    Args:
+        triggers_root: Root directory of the plugin override tree
+            (typically ``~/.claude/triggers/``).
+
+    Returns:
+        A list of ``("agent", name, sidecar_dict)`` tuples, one per
+        valid ``.yml`` file found.  Empty list when the directory is
+        absent or contains no valid ``agents/`` subdirectories.
+    """
+    if not triggers_root.is_dir():
+        return []
+    results: list[tuple[str, str, dict[str, Any]]] = []
+    for plugin_dir in sorted(triggers_root.iterdir()):
+        if not plugin_dir.is_dir():
+            continue
+        # Reserved sub-directory: handled by Pass 2.6, not Pass 3b.
+        # Skip the entire subtree, including any agents/ inside builtin/.
+        if plugin_dir.name == _BUILTIN_AGENTS_SUBDIR:
+            continue
+        agents_subdir = plugin_dir / "agents"
+        if not agents_subdir.is_dir():
+            continue
+        for agent_file in sorted(agents_subdir.glob("*.yml")):
+            try:
+                text = agent_file.read_text(encoding="utf-8").strip()
+                if not text:
+                    continue
+                parsed = yaml.safe_load(text)
+            except yaml.YAMLError as exc:
+                _logger.warning(
+                    "YAML parse error in %s: %s", agent_file, exc
+                )
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            plugin_name = plugin_dir.name
+            agent_name = agent_file.stem
+            entry_name = f"{plugin_name}:{agent_name}"
+            results.append(("agent", entry_name, parsed))
+    return results
+
+
+def discover_colocated_agent_sidecars(
+    agents_dir: Path,
+    issues_sink: list[ValidationIssue] | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Walk an agents directory for colocated ``*.triggers.yml`` sidecars.
+
+    Scans ``agents_dir/*.triggers.yml`` (non-recursive, matching the
+    ``agents_dir/*.md`` agent discovery pattern) and returns one tuple per
+    valid sidecar file.  These sidecars carry dispatch metadata —
+    ``triggers:`` and optionally ``applicable_skills:`` — for an agent
+    ``.md`` file with the same stem.
+
+    This function only parses the YAML; matching against discovered agent
+    entries and applying the sidecar data happens in the caller (Pass 2b
+    for owned agents, Pass 4b for project-local agents).
+
+    Files that fail to parse as valid YAML emit a ``_logger.warning``, add
+    a ``warning`` :class:`ValidationIssue` to *issues_sink* when supplied,
+    and are dropped from the result.  Files that parse to something other
+    than a dict are silently skipped (same shape as
+    :func:`discover_plugin_agent_overrides`).  Missing or non-directory
+    paths return an empty list.
+
+    Args:
+        agents_dir: Directory to scan.  Non-recursively globbed for
+            ``*.triggers.yml`` files.  Silently ignored if absent or
+            not a directory.
+        issues_sink: Optional accumulator for :class:`ValidationIssue`
+            records.  YAML parse failures append a ``warning`` entry here
+            so callers can surface them in the build log.  Pass ``None``
+            to suppress issue accumulation (useful for unit-testing the
+            walker in isolation).
+
+    Returns:
+        A list of ``(stem, sidecar_dict)`` tuples — one per successfully
+        parsed ``.triggers.yml`` file.  ``stem`` is the bare filename
+        without the ``.triggers.yml`` suffix (e.g. ``"code-writer"`` for
+        ``code-writer.triggers.yml``).  Empty list when the directory
+        is absent or contains no ``.triggers.yml`` files.
+    """
+    if not agents_dir.is_dir():
+        return []
+    results: list[tuple[str, dict[str, Any]]] = []
+    for sidecar_file in sorted(agents_dir.glob("*.triggers.yml")):
+        # Stem for ``code-writer.triggers.yml`` is ``code-writer``.
+        # Path.stem strips only the last suffix, so we strip manually.
+        raw_stem = sidecar_file.name
+        stem = raw_stem[: raw_stem.index(".triggers.yml")]
+        try:
+            text = sidecar_file.read_text(encoding="utf-8").strip()
+            if not text:
+                continue
+            parsed = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            _logger.warning(
+                "YAML parse error in colocated agent sidecar '%s': %s",
+                sidecar_file,
+                exc,
+            )
+            if issues_sink is not None:
+                issues_sink.append(
+                    ValidationIssue(
+                        "warning",
+                        stem,
+                        f"YAML parse error in colocated agent sidecar"
+                        f" '{sidecar_file.name}': {exc}",
+                    )
+                )
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        results.append((stem, parsed))
+    return results
+
+
+def _apply_colocated_sidecars(
+    agents_dir: Path,
+    entries: list[dict[str, Any]],
+    source_tag: str,
+    all_issues: list[ValidationIssue],
+) -> None:
+    """Apply colocated ``*.triggers.yml`` sidecars to already-assembled entries.
+
+    Mutates *entries* in place.  This is the shared implementation for
+    Pass 2b (owned agents, ``source_tag="owned"``) and Pass 4b (project
+    agents, ``source_tag="project"``).
+
+    For each sidecar found in *agents_dir*:
+
+    - **Matched** — a sibling ``.md`` was discovered and produced a catalog
+      entry with ``name == stem`` and ``kind == "agent"`` with the correct
+      ``source``: the entry's ``triggers`` and ``applicable_skills`` are
+      replaced with the sidecar's values.  When the existing entry already
+      carries non-empty inline triggers a ``_logger.warning`` is emitted
+      (D2 — sidecar shadows inline triggers).
+    - **Orphan** — no matching entry found: emit ``_logger.warning`` and
+      drop the sidecar (D3 — no new entry is created).
+
+    Sidecar files that fail YAML parsing are already dropped by
+    :func:`discover_colocated_agent_sidecars` before this function is
+    called.
+
+    Args:
+        agents_dir: Directory containing ``.triggers.yml`` sidecars.
+        entries: The in-progress entries list to mutate.
+        source_tag: ``"owned"`` or ``"project"`` — used to filter the
+            lookup index so a same-named entry with a different source
+            (e.g. from a plugin or builtin) is not accidentally matched.
+        all_issues: Accumulator for :class:`ValidationIssue` records.
+            Warnings are appended here as well as being logged via
+            ``_logger``.
+    """
+    sidecars = discover_colocated_agent_sidecars(agents_dir, issues_sink=all_issues)
+    if not sidecars:
+        return
+
+    # Build a (name, kind, source) → index lookup over current entries.
+    # source_tag scoping ensures a same-named plugin entry is not matched.
+    by_name_kind_source: dict[tuple[str, str, str], int] = {
+        (e["name"], e["kind"], e.get("source", "owned")): i
+        for i, e in enumerate(entries)
+    }
+
+    for stem, sidecar in sidecars:
+        match_key = (stem, "agent", source_tag)
+        if match_key not in by_name_kind_source:
+            # Orphan sidecar — no matching agent .md discovered.
+            _logger.warning(
+                "colocated agent sidecar '%s.triggers.yml' in '%s' has no"
+                " matching agent .md file — sidecar dropped",
+                stem,
+                agents_dir,
+            )
+            all_issues.append(
+                ValidationIssue(
+                    "warning",
+                    stem,
+                    f"colocated agent sidecar '{stem}.triggers.yml' has no"
+                    f" matching agent .md file — sidecar dropped",
+                )
+            )
+            continue
+
+        idx = by_name_kind_source[match_key]
+        entry = entries[idx]
+
+        # D2: warn when the entry already has non-empty inline triggers.
+        existing_triggers = entry.get("triggers", {})
+        has_inline_triggers = any(
+            existing_triggers.get(f) for f in TRIGGER_FIELDS
+        )
+        if has_inline_triggers:
+            sidecar_path = agents_dir / f"{stem}.triggers.yml"
+            _logger.warning(
+                "colocated agent sidecar '%s' shadows inline triggers in"
+                " '%s.md' — sidecar takes precedence",
+                sidecar_path,
+                stem,
+            )
+            all_issues.append(
+                ValidationIssue(
+                    "warning",
+                    stem,
+                    f"colocated agent sidecar '{stem}.triggers.yml' shadows"
+                    f" inline triggers in '{stem}.md' — sidecar takes"
+                    " precedence",
+                )
+            )
+
+        # Apply sidecar triggers and applicable_skills to the entry in place.
+        # We write directly to the existing entry dict rather than calling
+        # validate_entry here.  The downstream _resolve_applicable_references
+        # pass (after all passes complete) validates trigger field shapes and
+        # resolves applicable_skills references — the same pipeline that
+        # handles inline-frontmatter triggers.  This mirrors how Pass 3b wires
+        # plugin-agent sidecars: sidecar data is written onto the entry, and
+        # full validation happens downstream (spec §5 "Integration with
+        # existing entry validation").
+        if "triggers" in sidecar:
+            entry["triggers"] = sidecar["triggers"]
+        if "applicable_skills" in sidecar:
+            entry["applicable_skills"] = sidecar["applicable_skills"]
+
+
 def _clamp_weight(w: float) -> float:
     """Return the allowed weight value nearest to ``w``.
 
@@ -1970,6 +2222,20 @@ def build(
         else:
             entries.append(result)
 
+    # --- Pass 2b: owned-agent colocated sidecars ---
+    # Walk agents_dir/*.triggers.yml and apply sidecar dispatch metadata to
+    # the owned agent entries assembled in Pass 2.  Matched sidecars override
+    # inline triggers (with a warning when both are present — D2).  Orphan
+    # sidecars (no matching .md) emit a warning and are dropped (D3).
+    # source="owned" is preserved — the sidecar is a delivery mechanism, not
+    # an authorship change (D4).
+    _apply_colocated_sidecars(
+        agents_dir=agents_dir,
+        entries=entries,
+        source_tag="owned",
+        all_issues=all_issues,
+    )
+
     # --- Pass 2.5: plugin-provided skills and agents (dormant) ---
     # Plugin entries land with source="plugin" and zero triggers so they
     # are dormant by default.  This pass runs after the owned-agents pass
@@ -2127,6 +2393,111 @@ def build(
             else:
                 entries.append(result)
 
+    # --- Pass 3b: plugin-agent sidecar overrides ---
+    # Walk <plugin_overrides_dir>/<plugin>/agents/*.yml for user-authored
+    # sidecars that activate dormant plugin-discovered agents.  Strict
+    # Mode 2a: a sidecar must match an existing source="plugin" agent
+    # entry.  Unmatched sidecars (ghost sidecars) emit a warning and are
+    # dropped — unlike skill overrides, which can append new entries.
+    # This asymmetry is intentional: ghost agent entries cause hard
+    # Agent({subagent_type: <ghost>}) failures the router cannot recover
+    # from, whereas ghost skill entries degrade gracefully (score 0.0).
+    if plugin_overrides_dir is not None:
+        for _kind, ag_entry_name, ag_sidecar in discover_plugin_agent_overrides(
+            plugin_overrides_dir
+        ):
+            n_discovered += 1
+            # Agent sidecars (spec §4) do NOT carry 'kind' — the kind is
+            # structural: the file is in agents/ so it is always kind="agent".
+            # Validate directly as an agent rather than routing through
+            # _process_plugin_override (which defaults to kind="skill" when
+            # 'kind' is absent and supports tombstones which agents do not).
+            if ag_sidecar.get("disabled") is True:
+                all_issues.append(
+                    ValidationIssue(
+                        "warning",
+                        ag_entry_name,
+                        f"agent override sidecar '{ag_entry_name}' uses disabled"
+                        " tombstone form — tombstones are not supported for"
+                        " agent sidecars; sidecar dropped",
+                    )
+                )
+                n_excluded += 1
+                continue
+
+            # Strip sidecar-specific keys before passing to validate_entry.
+            effective_ag: dict[str, Any] = {
+                k: v
+                for k, v in ag_sidecar.items()
+                if k not in ("kind", "disabled", "reason")
+            }
+            effective_ag.setdefault("name", ag_entry_name)
+            ag_vr = validate_entry(
+                effective_ag, kind="agent", source_stem=ag_entry_name
+            )
+            all_issues.extend(ag_vr.issues)
+            if ag_vr.entry is None:
+                n_excluded += 1
+                continue
+            ag_result: dict[str, Any] = ag_vr.entry
+            ag_result["source"] = "plugin-override"
+
+            # Strict Mode 2a: match against dormant source="plugin" agents only.
+            # Build a (name, kind) index so that a same-named skill entry does
+            # not accidentally satisfy the agent match.
+            by_name_kind: dict[tuple[str, str], int] = {
+                (e["name"], e["kind"]): i for i, e in enumerate(entries)
+            }
+            match_key = (ag_entry_name, "agent")
+            if match_key in by_name_kind:
+                existing_ag = entries[by_name_kind[match_key]]
+                if existing_ag.get("source") == "owned":
+                    # Owned agents are immutable — reject the sidecar.
+                    all_issues.append(
+                        ValidationIssue(
+                            "warning",
+                            ag_entry_name,
+                            f"agent override sidecar targets owned entry"
+                            f" '{ag_entry_name}' — rejected; owned entry"
+                            " preserved",
+                        )
+                    )
+                else:
+                    # Replace in place (plugin-discovered dormant → override).
+                    # Set routable=True explicitly per spec §7 Q5 (defensive,
+                    # even though is_agent_routable already gates on source).
+                    ag_result["routable"] = True
+                    _logger.info(
+                        "override layers on plugin-discovered agent '%s'",
+                        ag_entry_name,
+                    )
+                    all_issues.append(
+                        ValidationIssue(
+                            "info",
+                            ag_entry_name,
+                            f"override layers on plugin-discovered agent"
+                            f" '{ag_entry_name}'",
+                        )
+                    )
+                    entries[by_name_kind[match_key]] = ag_result
+            else:
+                # Ghost sidecar — no matching dormant plugin agent found.
+                _logger.warning(
+                    "agent override sidecar '%s' has no matching plugin-discovered"
+                    " agent entry — sidecar dropped",
+                    ag_entry_name,
+                )
+                all_issues.append(
+                    ValidationIssue(
+                        "warning",
+                        ag_entry_name,
+                        f"agent override sidecar '{ag_entry_name}' has no"
+                        " matching plugin-discovered agent entry — sidecar"
+                        " dropped",
+                    )
+                )
+                n_excluded += 1
+
     # --- Pass 4: project-local skills and agents ---
     if project_root is not None:
         project_claude = project_root / ".claude"
@@ -2156,6 +2527,18 @@ def build(
             else:
                 result["source"] = "project"
                 project_entries.append(result)
+
+        # --- Pass 4b: project-agent colocated sidecars ---
+        # Walk proj_agent_dir/*.triggers.yml and apply sidecar dispatch
+        # metadata to project agent entries assembled above.  Runs before
+        # the merge step so orphan detection uses the pre-merge project
+        # entry list (spec §7 Q5).
+        _apply_colocated_sidecars(
+            agents_dir=proj_agent_dir,
+            entries=project_entries,
+            source_tag="project",
+            all_issues=all_issues,
+        )
 
         # Merge: project entries override user-global entries on collision.
         if project_entries:

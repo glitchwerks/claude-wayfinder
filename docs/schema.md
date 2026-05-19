@@ -12,7 +12,7 @@ This document is the stability contract for the catalog schema, dispatch context
 
 The catalog JSON file carries a top-level `schema_version` integer field. The current value is **`1`** (set in `src/claude_wayfinder/build_catalog.py`).
 
-The trigger format used to populate those entries is **v6 sidecar** — skills store trigger configuration in a `triggers.yml` file next to `SKILL.md`, and agents use inline frontmatter. This supersedes v5, where skills used inline frontmatter as well. See [docs/design/trigger-schema.md](design/trigger-schema.md) for the full sidecar format reference.
+The trigger format used to populate those entries is **v6 sidecar** — skills store trigger configuration in a `triggers.yml` file next to `SKILL.md`, and agents use either inline frontmatter or a colocated `<name>.triggers.yml` sidecar. When both are present the sidecar takes precedence. This supersedes v5, where skills used inline frontmatter as well. See [docs/design/trigger-schema.md](design/trigger-schema.md) for the full sidecar format reference.
 
 ### Stability
 
@@ -43,11 +43,11 @@ Each object in the `entries` array of `dispatch-catalog.json` represents one age
 
 | Value | Meaning |
 |---|---|
-| `"owned"` | Scanned from the user's own `skills/` or `agents/` directory tree. The default for first-party content. |
+| `"owned"` | Scanned from the user's own `skills/` or `agents/` directory tree. The default for first-party content. Trigger configuration may come from inline frontmatter in the agent `.md` or from a colocated `<name>.triggers.yml` sidecar next to it; the sidecar takes precedence when both are present. |
 | `"plugin"` | Discovered from an installed plugin. Entries land dormant (zero triggers) and never drive a routing decision unless activated by a plugin-override sidecar. Plugin agents with `source="plugin"` are additionally excluded from the agent scoring pool by `is_agent_routable`. |
-| `"plugin-override"` | Loaded from a `triggers/<plugin>/<skill>.yml` override file. Replaces the matching `source="plugin"` entry, or adds a new entry when no plugin-discovered entry exists. `is_agent_routable` treats this source as routable. |
+| `"plugin-override"` | Loaded from a `triggers/<plugin>/<skill>.yml` override file (skills) or a `triggers/<plugin>/agents/<name>.yml` override file (agents), disambiguated by the `kind` field. For skills, replaces the matching `source="plugin"` entry or adds a new entry when no plugin-discovered entry exists. For agents, replaces the matching dormant `source="plugin"` agent entry only — no new entry is created when no match is found (strict Mode 2a: unmatched sidecars emit a warning and are dropped). `is_agent_routable` treats this source as routable. |
 | `"builtin"` | Loaded from a `triggers/builtin/<Agent>.yml` operator sidecar. Represents runtime-embedded agents (e.g. `Explore`, `Plan`). Routable by default. Requires `min_claude_version` in the sidecar; entries are excluded if the running version is outside `[min, max]`. |
-| `"project"` | Scanned from `<repo>/.claude/skills/` or `<repo>/.claude/agents/` when the generator runs inside a git repository. Project entries override user-global entries on name collision and carry the highest precedence in the source-tagged model. |
+| `"project"` | Scanned from `<repo>/.claude/skills/` or `<repo>/.claude/agents/` when the generator runs inside a git repository. Project entries override user-global entries on name collision and carry the highest precedence in the source-tagged model. As with `"owned"`, trigger configuration may come from inline frontmatter or a colocated `<name>.triggers.yml` sidecar next to the agent `.md`; the sidecar takes precedence when both are present. |
 
 ### `triggers` object structure
 

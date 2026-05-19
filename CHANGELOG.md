@@ -6,6 +6,69 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-19
+
+Minor release. Adds **sidecar trigger overrides** for all three agent
+provenance classes (plugin, user-owned, project-local), so users no
+longer need to mutate inline `triggers:` frontmatter in agent `.md`
+files — including plugin-shipped agents whose files would be
+overwritten on update. Includes one drift-scanner fix and a manifest
+cleanup. No breaking changes.
+
+### Added
+
+- **Plugin-agent sidecar overrides** at
+  `~/.claude/triggers/<plugin>/agents/<name>.yml`. A user-authored
+  sidecar activates an otherwise-dormant `source="plugin"` agent
+  entry, flipping it to `source="plugin-override"` and supplying
+  triggers + `applicable_skills`. Strict-override semantics: orphan
+  sidecars (no matching installed plugin agent) emit a warning and
+  are dropped — never produce ghost catalog entries. Builtin agents
+  (`triggers/builtin/`) are guarded against accidental capture.
+  Catalog builder gains a new Pass 3b walker; the staleness watcher
+  gains a `triggers/<plugin>/agents/` walk. (#140, spec #141, PR #142)
+
+- **Owned + project agent sidecar overrides** as colocated
+  `<name>.triggers.yml` files next to the agent `.md` — in both
+  `~/.claude/agents/` and `<repo>/.claude/agents/`. Sidecar wins
+  over inline `triggers:` frontmatter on collision (with a warning);
+  orphan sidecars are dropped (with a warning); invalid YAML is
+  warn-and-skip. Sources stay `owned` / `project` — sidecar is
+  delivery mechanism, not authorship. Inline triggers continue to
+  work indefinitely; users opt in to sidecars at their own pace.
+  New Pass 2b and Pass 4b walkers; staleness watcher extended to
+  `*.triggers.yml` in both agent trees. (#148, spec #149, PR #150)
+
+### Fixed
+
+- `router-health` advisory-override drift scanner no longer stops
+  reading the transcript at the first `skill_calls` event, so
+  overrides that happen after a skill activation are now counted.
+  Previously, sessions where a skill was invoked before an
+  advisory-override decision under-reported. (#145)
+
+### Maintenance
+
+- Removed redundant `.claude-plugin/marketplace.json` — the
+  marketplace manifest in the `glitchwerks/plugins` repo is the
+  authoritative source. Carrying a copy here introduced drift
+  risk on every release. (#147)
+
+### Schema
+
+- `docs/schema.md` and `docs/design/trigger-schema.md` document the
+  new sidecar locations and `source="plugin-override"` extending
+  to `kind="agent"`. No `schema_version` bump — additive only.
+
+### Known follow-ups (non-blocking)
+
+- `_apply_colocated_sidecars` skips `validate_entry`, so sidecar
+  inputs bypass weight clamping, keyword dedup, and deprecated-field
+  stripping that inline frontmatter receives. Tracked in #151.
+- `_apply_colocated_sidecars` doesn't explicitly write `routable=True`,
+  so an owned agent with `routable: false` in frontmatter plus a
+  sidecar stays silently inert at routing time. Tracked in #153.
+
 ## [0.4.2] — 2026-05-18
 
 Patch release: one user-visible bug fix (#134) plus regression-test

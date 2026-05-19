@@ -3966,3 +3966,844 @@ class TestValidateKeywordGroups:
         _, issues = self._validate(groups)
         warns = [i.message for i in issues if i.severity == "warning"]
         assert any("name" in m and ("whitespace" in m or "identifier" in m) for m in warns)
+
+
+# ---------------------------------------------------------------------------
+# Issue #140 — Pass 3b: plugin-agent sidecar overrides
+# ---------------------------------------------------------------------------
+
+
+def test_discover_plugin_agent_overrides_finds_namespaced_agent_entries(
+    tmp_path: Path,
+) -> None:
+    """walk triggers/<plugin>/agents/<name>.yml yields (agent, <p>:<n>, dict).
+
+    The function must return tuples whose first element is ``"agent"`` and
+    whose second element is the plugin-namespaced entry name.  This is the
+    primary contract difference from ``discover_plugin_overrides``, which
+    returns ``"skill"`` tuples.
+    """
+    from claude_wayfinder.build_catalog import discover_plugin_agent_overrides
+
+    triggers_root = tmp_path / "triggers"
+    agents_dir = triggers_root / "superpowers" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "doc-writer.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "document", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+    ms_agents_dir = triggers_root / "microsoft-docs" / "agents"
+    ms_agents_dir.mkdir(parents=True)
+    (ms_agents_dir / "reviewer.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "review", weight: 1.0 }
+            applicable_skills: ["python"]
+            """
+        ),
+        encoding="utf-8",
+    )
+    entries = discover_plugin_agent_overrides(triggers_root)
+    kinds = {kind for kind, _name, _sidecar in entries}
+    names = {name for _kind, name, _sidecar in entries}
+    assert kinds == {"agent"}, f"expected all tuples to have kind='agent', got {kinds}"
+    assert "superpowers:doc-writer" in names
+    assert "microsoft-docs:reviewer" in names
+
+
+def test_discover_plugin_agent_overrides_skips_builtin_subdir(
+    tmp_path: Path,
+) -> None:
+    """triggers/builtin/agents/ must not be walked by the agent-override walker.
+
+    The ``builtin/`` subtree is reserved for Pass 2.6.  The agent-override
+    walker must skip the entire ``builtin/`` directory, including any
+    ``agents/`` subdirectory it might contain.
+    """
+    from claude_wayfinder.build_catalog import discover_plugin_agent_overrides
+
+    triggers_root = tmp_path / "triggers"
+    # Create a builtin/agents/ sidecar — should be ignored.
+    builtin_agents_dir = triggers_root / "builtin" / "agents"
+    builtin_agents_dir.mkdir(parents=True)
+    (builtin_agents_dir / "Explore.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "explore", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+    # Create a real plugin agent override — should be included.
+    real_agents_dir = triggers_root / "superpowers" / "agents"
+    real_agents_dir.mkdir(parents=True)
+    (real_agents_dir / "brainstormer.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "brainstorm", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+    entries = discover_plugin_agent_overrides(triggers_root)
+    names = {name for _kind, name, _sidecar in entries}
+    assert "builtin:Explore" not in names, (
+        "builtin/agents/ sidecar must be skipped by discover_plugin_agent_overrides"
+    )
+    assert "superpowers:brainstormer" in names, (
+        "real plugin agent override should be found"
+    )
+
+
+def test_discover_plugin_agent_overrides_returns_empty_when_no_agents_dirs(
+    tmp_path: Path,
+) -> None:
+    """Walker returns [] when no triggers/<plugin>/agents/ dirs exist.
+
+    A triggers/ tree that has only flat ``<skill>.yml`` files (no agents/
+    subdirs) must produce an empty result — the walker must not confuse
+    skill sidecars with agent sidecars.
+    """
+    from claude_wayfinder.build_catalog import discover_plugin_agent_overrides
+
+    triggers_root = tmp_path / "triggers"
+    skill_dir = triggers_root / "superpowers"
+    skill_dir.mkdir(parents=True)
+    # Flat skill sidecar — must not be picked up.
+    (skill_dir / "brainstorming.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "brainstorm", weight: 1.0 }
+            applicable_agents: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+    entries = discover_plugin_agent_overrides(triggers_root)
+    assert entries == [], f"expected [], got {entries}"
+
+
+def test_plugin_agent_sidecar_replaces_dormant_plugin_agent(
+    tmp_path: Path,
+) -> None:
+    """Pass 3b: matched sidecar produces routable plugin-override agent entry.
+
+    A dormant plugin agent (source='plugin') targeted by a
+    ``triggers/<plugin>/agents/<name>.yml`` sidecar must:
+      - become source='plugin-override'
+      - become kind='agent'
+      - have routable=True explicitly set
+      - carry the sidecar's triggers
+      - carry the sidecar's applicable_skills
+    """
+    from claude_wayfinder.build_catalog import build
+
+    plugin_root = tmp_path / "plugins"
+    _make_plugin_install(plugin_root, "superpowers@mkt", agents=["doc-writer"])
+
+    triggers_root = tmp_path / "triggers"
+    agents_dir = triggers_root / "superpowers" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "doc-writer.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "document", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=tmp_path / "no-agents",
+        plugin_overrides_dir=triggers_root,
+        plugins_dir=plugin_root,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "superpowers:doc-writer"),
+        None,
+    )
+    assert entry is not None, "superpowers:doc-writer missing from catalog"
+    assert entry["source"] == "plugin-override", (
+        f"expected source='plugin-override', got {entry['source']!r}"
+    )
+    assert entry["kind"] == "agent", f"expected kind='agent', got {entry['kind']!r}"
+    assert entry.get("routable") is True, (
+        f"expected routable=True, got {entry.get('routable')!r}"
+    )
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "document" in kw_terms, (
+        f"sidecar keyword 'document' not in catalog triggers {kw_terms}"
+    )
+    assert entry.get("applicable_skills") == ["*"], (
+        f"expected applicable_skills=['*'], got {entry.get('applicable_skills')!r}"
+    )
+
+
+def test_plugin_agent_sidecar_unmatched_emits_warning_and_is_dropped(
+    tmp_path: Path,
+) -> None:
+    """Pass 3b: unmatched sidecar (ghost) emits a warning and is not added.
+
+    An agent sidecar that targets a name with no matching dormant plugin
+    entry must not append a new entry to the catalog, and must emit a
+    warning-level log entry identifying the ghost sidecar.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    # No plugin installed — no dormant 'superpowers:ghost-agent' entry.
+    triggers_root = tmp_path / "triggers"
+    agents_dir = triggers_root / "superpowers" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "ghost-agent.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "ghost", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=tmp_path / "no-agents",
+        plugin_overrides_dir=triggers_root,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    names = [e["name"] for e in catalog["entries"]]
+    assert "superpowers:ghost-agent" not in names, (
+        "ghost agent sidecar must not produce a catalog entry"
+    )
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "warning" in log_text, "ghost sidecar must emit a warning"
+    assert "ghost-agent" in log_text, (
+        "warning must identify the ghost sidecar target name"
+    )
+
+
+def test_plugin_agent_sidecar_namespace_collision_skill_and_agent_coexist(
+    tmp_path: Path,
+) -> None:
+    """Q3: (kind='skill', name='p:n') and (kind='agent', name='p:n') may coexist.
+
+    When a plugin ships both a skill named ``foo`` and an agent named ``foo``,
+    and the user authors both a skill sidecar at ``triggers/p/foo.yml`` and
+    an agent sidecar at ``triggers/p/agents/foo.yml``, both entries must be
+    present in the catalog because the dedup key is ``(kind, name)``.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    plugin_root = tmp_path / "plugins"
+    # Plugin ships both a skill 'foo' and an agent 'foo'.
+    install_dir = plugin_root / "myplugin_mkt"
+    skill_dir = install_dir / "skills" / "foo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: myplugin:foo\ndescription: Plugin skill foo.\n---\n",
+        encoding="utf-8",
+    )
+    agent_dir = install_dir / "agents"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "foo.md").write_text(
+        "---\nname: myplugin:foo\ndescription: Plugin agent foo.\n---\n",
+        encoding="utf-8",
+    )
+    _write_manifest(
+        plugin_root,
+        version=2,
+        plugins={
+            "myplugin@mkt": [
+                {"scope": "user", "installPath": str(install_dir), "version": "1.0"}
+            ]
+        },
+    )
+
+    triggers_root = tmp_path / "triggers"
+    # Skill override for 'foo'.
+    skill_override_dir = triggers_root / "myplugin"
+    skill_override_dir.mkdir(parents=True)
+    (skill_override_dir / "foo.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "foo-skill", weight: 1.0 }
+            applicable_agents: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+    # Agent override for 'foo'.
+    agent_override_dir = triggers_root / "myplugin" / "agents"
+    agent_override_dir.mkdir(parents=True)
+    (agent_override_dir / "foo.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "foo-agent", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=tmp_path / "no-agents",
+        plugin_overrides_dir=triggers_root,
+        plugins_dir=plugin_root,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    foo_entries = [e for e in catalog["entries"] if e["name"] == "myplugin:foo"]
+    kinds = {e["kind"] for e in foo_entries}
+    assert "skill" in kinds, f"skill entry for myplugin:foo not found; entries: {foo_entries}"
+    assert "agent" in kinds, f"agent entry for myplugin:foo not found; entries: {foo_entries}"
+
+
+def test_plugin_agent_sidecar_owned_agent_is_protected(
+    tmp_path: Path,
+) -> None:
+    """Pass 3b: an agent sidecar targeting an owned entry is rejected.
+
+    If the user has an owned agent (source='owned') with the same
+    plugin-namespaced name, the sidecar must not overwrite it — consistent
+    with the owned-entry protection already applied to skill overrides.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    # Owned agent named 'superpowers:code-writer'.
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "code-writer.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: superpowers:code-writer
+            description: Owned agent that happens to have a plugin namespace.
+            triggers:
+              keywords:
+                - { term: "owned", weight: 1.0 }
+            applicable_skills: ["python"]
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    triggers_root = tmp_path / "triggers"
+    agents_dir = triggers_root / "superpowers" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "code-writer.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "override-attempt", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        plugin_overrides_dir=triggers_root,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(e for e in catalog["entries"] if e["name"] == "superpowers:code-writer")
+    # The owned entry must be preserved.
+    assert entry["source"] == "owned", (
+        f"owned entry was overwritten; source is {entry['source']!r}"
+    )
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "owned" in kw_terms, "owned entry triggers were replaced by sidecar"
+    assert "override-attempt" not in kw_terms, (
+        "sidecar triggers must not appear in protected owned entry"
+    )
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "warning" in log_text, "owned-entry protection must emit a warning"
+
+
+# ---------------------------------------------------------------------------
+# Issue #148 — Pass 2b/4b: colocated owned/project agent sidecar overrides
+# ---------------------------------------------------------------------------
+
+
+def test_colocated_sidecar_overrides_inline_triggers_for_owned_agent(
+    tmp_path: Path,
+) -> None:
+    """Pass 2b: matched colocated sidecar replaces inline triggers in owned agent.
+
+    An owned agent at ``agents/code-writer.md`` that has inline ``triggers:``
+    frontmatter must have those triggers replaced when a colocated sidecar
+    ``agents/code-writer.triggers.yml`` is present.  The resulting catalog
+    entry must carry the sidecar triggers and applicable_skills.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "code-writer.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: code-writer
+            description: Writes code.
+            triggers:
+              keywords:
+                - { term: "inline", weight: 1.0 }
+            applicable_skills: ["python"]
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "code-writer.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "sidecar", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "code-writer"),
+        None,
+    )
+    assert entry is not None, "code-writer must be present in catalog"
+    assert entry["source"] == "owned", (
+        f"source must remain 'owned', got {entry['source']!r}"
+    )
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "sidecar" in kw_terms, (
+        f"sidecar keyword must replace inline triggers; got {kw_terms}"
+    )
+    assert "inline" not in kw_terms, (
+        "inline triggers must be replaced by sidecar"
+    )
+    assert entry.get("applicable_skills") == ["*"], (
+        f"applicable_skills must come from sidecar; got {entry.get('applicable_skills')!r}"
+    )
+    # D2: warn when sidecar shadows inline triggers
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "warning" in log_text, (
+        "shadowing inline triggers with sidecar must emit a warning"
+    )
+    assert "code-writer" in log_text, (
+        "warning must identify the affected agent"
+    )
+
+
+def test_colocated_sidecar_no_warning_when_no_inline_triggers_for_owned(
+    tmp_path: Path,
+) -> None:
+    """Pass 2b: sidecar on agent with no inline triggers applies cleanly.
+
+    When the owned agent has no inline ``triggers:`` block, the colocated
+    sidecar must apply silently — no warning emitted for D2.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "doc-writer.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: doc-writer
+            description: Documents things.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "doc-writer.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "document", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "doc-writer"),
+        None,
+    )
+    assert entry is not None, "doc-writer must be in catalog"
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "document" in kw_terms, "sidecar triggers must be applied"
+    # No shadowing warning when no inline triggers.
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "shadow" not in log_text, (
+        "no shadowing warning when agent had no inline triggers"
+    )
+
+
+def test_colocated_sidecar_orphan_emits_warning_no_entry_for_owned(
+    tmp_path: Path,
+) -> None:
+    """Pass 2b: orphan sidecar (no matching .md) emits warning and is dropped.
+
+    A colocated sidecar ``agents/ghost.triggers.yml`` with no corresponding
+    ``agents/ghost.md`` must not produce a catalog entry, and must emit a
+    warning identifying the orphan.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    # Orphan sidecar — no ghost.md exists.
+    (agents / "ghost.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "ghost", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    names = [e["name"] for e in catalog["entries"]]
+    assert "ghost" not in names, (
+        "orphan sidecar must not produce a catalog entry"
+    )
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "warning" in log_text, "orphan sidecar must emit a warning"
+    assert "ghost" in log_text, "warning must identify the orphan sidecar stem"
+
+
+def test_colocated_sidecar_invalid_yaml_warn_skip_owned(
+    tmp_path: Path,
+) -> None:
+    """Pass 2b: sidecar with invalid YAML emits warning and is skipped.
+
+    The agent entry must be preserved with its inline triggers (or empty
+    triggers if none).  The build must not crash.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "code-writer.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: code-writer
+            description: Writes code.
+            triggers:
+              keywords:
+                - { term: "inline-preserved", weight: 1.0 }
+            applicable_skills: ["python"]
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "code-writer.triggers.yml").write_text(
+        "triggers:\n  keywords:\n    - { term: [unclosed\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "code-writer"),
+        None,
+    )
+    assert entry is not None, "agent entry must be preserved when sidecar has invalid YAML"
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "inline-preserved" in kw_terms, (
+        "inline triggers must survive invalid sidecar"
+    )
+    log_text = log_path.read_text(encoding="utf-8")
+    # The sidecar YAML parse failure must produce a warning that identifies
+    # the sidecar by name (not just any pre-existing warning like unknown refs).
+    assert "code-writer.triggers.yml" in log_text or "code-writer" in log_text.lower(), (
+        "invalid sidecar YAML must emit a warning identifying the sidecar"
+    )
+    # Confirm it was a YAML-parse warning by checking for 'YAML' or 'parse'.
+    lower_log = log_text.lower()
+    assert "yaml" in lower_log or "parse" in lower_log, (
+        "invalid sidecar YAML warning must mention YAML or parse error"
+    )
+
+
+def test_colocated_sidecar_does_not_register_as_agent_entry(
+    tmp_path: Path,
+) -> None:
+    """Q3: *.triggers.yml must not be picked up by the *.md agent glob.
+
+    Placing both ``agents/my-agent.md`` and ``agents/my-agent.triggers.yml``
+    in the same directory must result in exactly one catalog entry named
+    ``my-agent`` — the ``.triggers.yml`` file must not be processed as an
+    agent definition.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "my-agent.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: my-agent
+            description: My agent.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "my-agent.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "my", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    my_agent_entries = [e for e in catalog["entries"] if "my-agent" in e["name"]]
+    assert len(my_agent_entries) == 1, (
+        f"exactly one entry expected for my-agent; got {my_agent_entries}"
+    )
+    assert my_agent_entries[0]["kind"] == "agent"
+
+
+def test_colocated_sidecar_overrides_inline_triggers_for_project_agent(
+    tmp_path: Path,
+) -> None:
+    """Pass 4b: matched colocated sidecar overrides triggers for project agent.
+
+    A project-local agent at ``<repo>/.claude/agents/linter.md`` with inline
+    triggers must have those triggers replaced by a colocated
+    ``<repo>/.claude/agents/linter.triggers.yml`` sidecar.  Source must
+    remain ``"project"``.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    repo = tmp_path / "repo"
+    proj_agents = repo / ".claude" / "agents"
+    proj_agents.mkdir(parents=True)
+    (proj_agents / "linter.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: linter
+            description: Runs linters.
+            triggers:
+              keywords:
+                - { term: "inline-proj", weight: 1.0 }
+            applicable_skills: []
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (proj_agents / "linter.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "sidecar-proj", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=tmp_path / "no-agents",
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        project_root=repo,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "linter"),
+        None,
+    )
+    assert entry is not None, "linter must be in catalog"
+    assert entry["source"] == "project", (
+        f"source must remain 'project', got {entry['source']!r}"
+    )
+    kw_terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert "sidecar-proj" in kw_terms, "sidecar triggers must be applied to project entry"
+    assert "inline-proj" not in kw_terms, "inline triggers must be replaced"
+    assert entry.get("applicable_skills") == ["*"], (
+        f"applicable_skills must come from sidecar; got {entry.get('applicable_skills')!r}"
+    )
+
+
+def test_colocated_sidecar_orphan_dropped_for_project_agent(
+    tmp_path: Path,
+) -> None:
+    """Pass 4b: orphan sidecar in project agents dir emits warning and is dropped.
+
+    A project-local sidecar with no matching ``.md`` counterpart must not
+    create a new entry.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    repo = tmp_path / "repo"
+    proj_agents = repo / ".claude" / "agents"
+    proj_agents.mkdir(parents=True)
+    # Orphan sidecar — no ghost.md in project.
+    (proj_agents / "ghost-proj.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "proj-ghost", weight: 1.0 }
+            applicable_skills: ["*"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=tmp_path / "no-agents",
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        project_root=repo,
+        now="2026-05-18T00:00:00Z",
+    )
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    names = [e["name"] for e in catalog["entries"]]
+    assert "ghost-proj" not in names, (
+        "orphan project sidecar must not produce a catalog entry"
+    )
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "warning" in log_text, "orphan project sidecar must emit a warning"
+    assert "ghost-proj" in log_text, "warning must identify the orphan stem"

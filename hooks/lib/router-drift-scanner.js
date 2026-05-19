@@ -112,9 +112,16 @@ function parseTranscript(entries) {
  * then called a different agent than the one recommended.
  *
  * Algorithm: scan the event list for `dispatch` events with decision="advisory".
- * Look at the very next event in the list. If it is an `agent_call` whose
- * `subagent_type` differs from the advisory `agent`, emit a drift record.
- * If no agent_call follows (router chose not to delegate), no drift.
+ * For each advisory, scan forward past any interposed `skill_call` events to
+ * find the first `agent_call` or `dispatch` event:
+ *   - `agent_call` found: if its `subagent_type` differs from the advisory
+ *     `agent`, emit a drift record.
+ *   - `dispatch` found: the advisory was abandoned (a new routing decision
+ *     arrived before any agent was called) — do not emit drift.
+ *   - End of list: router chose not to delegate — no drift.
+ *
+ * This replaces the old single-event lookahead that silently skipped the
+ * canonical sequence: advisory → skill_call → agent_call (issue #144).
  *
  * @param {object[]} events  Output of parseTranscript.
  * @returns {object[]}       Array of advisory_override event objects.
@@ -126,16 +133,21 @@ function detectAdvisoryOverride(events) {
     const ev = events[i];
     if (ev.kind !== "dispatch" || ev.decision !== "advisory") continue;
 
-    // Look at the next event
-    const next = events[i + 1];
-    if (!next || next.kind !== "agent_call") continue;
-
-    if (next.subagent_type !== ev.agent) {
-      driftEvents.push({
-        type: "advisory_override",
-        recommended_agent: ev.agent,
-        actual_agent: next.subagent_type,
-      });
+    // Scan forward past skill_calls to find the first agent_call or dispatch.
+    for (let j = i + 1; j < events.length; j++) {
+      const next = events[j];
+      if (next.kind === "dispatch") break; // new routing decision — advisory abandoned
+      if (next.kind === "agent_call") {
+        if (next.subagent_type !== ev.agent) {
+          driftEvents.push({
+            type: "advisory_override",
+            recommended_agent: ev.agent,
+            actual_agent: next.subagent_type,
+          });
+        }
+        break; // found the outcome either way
+      }
+      // skill_call (or any future event kind): keep scanning
     }
   }
 

@@ -955,3 +955,170 @@ test("refresh-catalog-on-stale exits silently when setup-state is MISSING", () =
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Issue #140 — triggers/<plugin>/agents/ staleness detection
+// ---------------------------------------------------------------------------
+
+test("triggers/<plugin>/agents/*.yml newer than catalog triggers regeneration", () => {
+  // When a user creates or modifies a plugin-agent sidecar override at
+  // triggers/<plugin>/agents/<name>.yml, the catalog must be rebuilt.
+  // This test verifies that maxSourceMtime() includes files under
+  // triggers/<plugin>/agents/ in its staleness candidates.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-triggers-"));
+  const { skillFile, agentFile, catalogFile, sentinelFile } = makeFakeClaudeHome(tmp);
+  const generatorScript = makeFakeGenerator(tmp, sentinelFile, 0);
+
+  // Write a plugin-agent override sidecar.
+  const triggersAgentsDir = path.join(tmp, "triggers", "superpowers", "agents");
+  fs.mkdirSync(triggersAgentsDir, { recursive: true });
+  const agentSidecarFile = path.join(triggersAgentsDir, "doc-writer.yml");
+  fs.writeFileSync(
+    agentSidecarFile,
+    "triggers:\n  keywords:\n    - { term: \"document\", weight: 1.0 }\napplicable_skills: [\"*\"]\n"
+  );
+
+  // Backdate owned source files and the catalog so they are old.
+  const pastTime = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(skillFile, pastTime, pastTime);
+  fs.utimesSync(agentFile, pastTime, pastTime);
+  writeCatalog(catalogFile);
+  fs.utimesSync(catalogFile, pastTime, pastTime);
+
+  // Agent sidecar is "now" — newer than the backdated catalog.
+  fs.utimesSync(agentSidecarFile, new Date(), new Date());
+
+  const result = runHook({
+    CLAUDE_HOME: tmp,
+    DISPATCH_CATALOG_PATH: catalogFile,
+    DISPATCH_GENERATOR_CMD: `node ${generatorScript}`,
+  });
+
+  assert.ok(
+    fs.existsSync(sentinelFile),
+    `Generator was not called when triggers/<plugin>/agents/*.yml is newer than catalog. stdout: ${result.stdout}, stderr: ${result.stderr}`
+  );
+  assert.equal(result.exitCode, 0);
+});
+
+test("triggers/<plugin>/agents/*.yml older than catalog — no spurious regeneration", () => {
+  // When the agent override sidecar is older than the catalog, the hook
+  // must NOT trigger a rebuild (no false positives).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-triggers-fresh-"));
+  const { skillFile, agentFile, catalogFile, sentinelFile } = makeFakeClaudeHome(tmp);
+  const generatorScript = makeFakeGenerator(tmp, sentinelFile, 0);
+
+  // Write a plugin-agent override sidecar.
+  const triggersAgentsDir = path.join(tmp, "triggers", "superpowers", "agents");
+  fs.mkdirSync(triggersAgentsDir, { recursive: true });
+  const agentSidecarFile = path.join(triggersAgentsDir, "doc-writer.yml");
+  fs.writeFileSync(
+    agentSidecarFile,
+    "triggers:\n  keywords:\n    - { term: \"document\", weight: 1.0 }\napplicable_skills: [\"*\"]\n"
+  );
+
+  // All source files (owned + agent sidecar) are old.
+  const pastTime = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(skillFile, pastTime, pastTime);
+  fs.utimesSync(agentFile, pastTime, pastTime);
+  fs.utimesSync(agentSidecarFile, pastTime, pastTime);
+
+  // Catalog is "now" — newer than all source files.
+  writeCatalog(catalogFile);
+  // (catalog mtime defaults to now)
+
+  const result = runHook({
+    CLAUDE_HOME: tmp,
+    DISPATCH_CATALOG_PATH: catalogFile,
+    DISPATCH_GENERATOR_CMD: `node ${generatorScript}`,
+  });
+
+  assert.ok(
+    !fs.existsSync(sentinelFile),
+    `Generator was called unexpectedly when agent sidecar is older than catalog. stdout: ${result.stdout}`
+  );
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.trim(), "");
+});
+
+// Issue #148 — agents/*.triggers.yml colocated sidecar staleness detection
+// ---------------------------------------------------------------------------
+
+test("agents/*.triggers.yml newer than catalog triggers regeneration (owned)", () => {
+  // When a user creates or modifies a colocated owned-agent sidecar at
+  // agents/<name>.triggers.yml, the catalog must be rebuilt.
+  // This test verifies that maxSourceMtime() includes *.triggers.yml files
+  // in the owned agents directory in its staleness candidates.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-owned-sidecar-"));
+  const { skillFile, agentFile, catalogFile, sentinelFile } = makeFakeClaudeHome(tmp);
+  const generatorScript = makeFakeGenerator(tmp, sentinelFile, 0);
+
+  // Write a colocated owned-agent sidecar.
+  const agentsDir = path.join(tmp, "agents");
+  const colocatedSidecarFile = path.join(agentsDir, "example.triggers.yml");
+  fs.writeFileSync(
+    colocatedSidecarFile,
+    "triggers:\n  keywords:\n    - { term: \"example\", weight: 1.0 }\napplicable_skills: [\"*\"]\n"
+  );
+
+  // Backdate owned source files and the catalog so they are old.
+  const pastTime = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(skillFile, pastTime, pastTime);
+  fs.utimesSync(agentFile, pastTime, pastTime);
+  writeCatalog(catalogFile);
+  fs.utimesSync(catalogFile, pastTime, pastTime);
+
+  // Colocated sidecar is "now" — newer than the backdated catalog.
+  fs.utimesSync(colocatedSidecarFile, new Date(), new Date());
+
+  const result = runHook({
+    CLAUDE_HOME: tmp,
+    DISPATCH_CATALOG_PATH: catalogFile,
+    DISPATCH_GENERATOR_CMD: `node ${generatorScript}`,
+  });
+
+  assert.ok(
+    fs.existsSync(sentinelFile),
+    `Generator was not called when agents/*.triggers.yml is newer than catalog. stdout: ${result.stdout}, stderr: ${result.stderr}`
+  );
+  assert.equal(result.exitCode, 0);
+});
+
+test("agents/*.triggers.yml older than catalog — no spurious regeneration (owned)", () => {
+  // When the owned colocated sidecar is older than the catalog, the hook
+  // must NOT trigger a rebuild (no false positives).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rcos-owned-sidecar-fresh-"));
+  const { skillFile, agentFile, catalogFile, sentinelFile } = makeFakeClaudeHome(tmp);
+  const generatorScript = makeFakeGenerator(tmp, sentinelFile, 0);
+
+  // Write a colocated owned-agent sidecar.
+  const agentsDir = path.join(tmp, "agents");
+  const colocatedSidecarFile = path.join(agentsDir, "example.triggers.yml");
+  fs.writeFileSync(
+    colocatedSidecarFile,
+    "triggers:\n  keywords:\n    - { term: \"example\", weight: 1.0 }\napplicable_skills: [\"*\"]\n"
+  );
+
+  // All source files (owned + colocated sidecar) are old.
+  const pastTime = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(skillFile, pastTime, pastTime);
+  fs.utimesSync(agentFile, pastTime, pastTime);
+  fs.utimesSync(colocatedSidecarFile, pastTime, pastTime);
+
+  // Catalog is "now" — newer than all source files.
+  writeCatalog(catalogFile);
+  // (catalog mtime defaults to now)
+
+  const result = runHook({
+    CLAUDE_HOME: tmp,
+    DISPATCH_CATALOG_PATH: catalogFile,
+    DISPATCH_GENERATOR_CMD: `node ${generatorScript}`,
+  });
+
+  assert.ok(
+    !fs.existsSync(sentinelFile),
+    `Generator was called unexpectedly when owned colocated sidecar is older than catalog. stdout: ${result.stdout}`
+  );
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.trim(), "");
+});
