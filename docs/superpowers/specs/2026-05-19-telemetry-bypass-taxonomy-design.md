@@ -4,14 +4,15 @@ date: 2026-05-19
 tracking: glitchwerks/claude-wayfinder#143
 supersedes: glitchwerks/claude-wayfinder#152 (abandoned)
 postmortem: docs/superpowers/postmortems/2026-05-18-telemetry-enrichment-pivot/POSTMORTEM.md
+inquisitor_pass_1: 2026-05-19 (3 BLOCKING / 6 CONCERN / 2 NIT — addressed in this revision)
 status: draft
 touches:
   - hooks/check-agent-dispatch-pairing.js
   - hooks/lib/bypass-taxonomy.js
-  - hooks/lib/bypass-taxonomy.test.js
+  - hooks/tests/bypass-taxonomy.test.js
   - scripts/analyze-drift-causes.py
   - tests/test_analyze_drift_causes.py
-  - scripts/router_health.py
+  - src/claude_wayfinder/_health.py
   - skills/router-health/SKILL.md
 skills_relevant:
   - hook-authoring
@@ -23,39 +24,43 @@ skills_relevant:
 ## Motivation
 
 v1 (PR #152, abandoned) tried to recover *what the matcher would have decided*
-for the 98% of drift events where the matcher never ran. That design died on
+for the ~98% of drift events where the matcher never ran. That design died on
 substrate confusion and cross-process contract fragility. See the postmortem
 for full forensics: `docs/superpowers/postmortems/2026-05-18-telemetry-enrichment-pivot/POSTMORTEM.md`.
 
-v2 has a narrower goal: **categorize *what actually happened* for each bypass
-event**, using only data the PreToolUse hook already has on the tool-call shape.
-No user-prompt content is captured. No matcher counterfactual is computed. No
-cross-event joining is attempted.
+v2 has a narrower goal: **categorize *what actually happened* for each drift
+event**, using only data the PreToolUse hook already has on the tool-call
+shape. No user-prompt content is captured. No matcher counterfactual is
+computed. No cross-event joining is attempted.
 
-Current event distribution (`~/.claude/state/router-drift.jsonl`, ~1086 events
-as of 2026-05-19):
+Current event distribution (`~/.claude/state/router-drift.jsonl`, 1132 events
+from 2026-05-03 to 2026-05-19 = 16 days = **~71 events/day**):
 
-| Category            | Share |
-| ------------------- | ----- |
-| `skill_mediated`    | ~52%  |
-| `bypass`            | ~46%  |
-| `advisory_override` | ~0%   |
-| malformed           | ~2%   |
+| Hook category       | Share | Enriched by this spec? |
+| ------------------- | ----: | ---------------------- |
+| `skill_mediated`    | ~52%  | ✓                      |
+| `bypass`            | ~46%  | ✓                      |
+| `stale_dispatch`    | small (exact share TBD from analyzer first run) | ✓ |
+| `router_mediated`   | not emitted as a drift event — included for completeness | n/a |
+| `advisory_override` | ~0%   | ✗ (deferred; not load-bearing) |
+| malformed           | ~2%   | n/a                    |
 
-The 98% of events in `bypass` + `skill_mediated` are the target of this work.
-`advisory_override` is left alone — it is structurally rare and not load-bearing
-for current questions.
+v1-postmortem volume math is re-validated: 71/day at ~250 B/event delta =
+**~17 KB/day → ~6.3 MB/year**. No rotation needed in the foreseeable horizon.
 
 ## Goal
 
 Enable the user to answer, from `~/.claude/state/router-drift.jsonl` and the
 `router-health` report, questions of the form:
 
-- "What fraction of bypasses are skill-mediated by design, vs. router-direct
+- "How often does the router fire a *second* Agent under a single dispatch
+  authorization (`router_direct_after_consumed_dispatch`)? This is the
+  hypothesized #1 router discipline failure mode."
+- "What fraction of bypasses are skill-mediated by design vs. router-direct
   Agent calls without dispatch?"
 - "Which sub-agent is most often invoked via a `router_direct_no_dispatch`
   path? (i.e., where is router discipline weakest?)"
-- "Are there bypass causes the taxonomy doesn't recognize (`unknown` share)?"
+- "Is the taxonomy itself adequate? (`unknown` share trend.)"
 
 ## Non-goals
 
@@ -73,10 +78,10 @@ Enable the user to answer, from `~/.claude/state/router-drift.jsonl` and the
 ```
                                                        ┌─────────────────────────┐
 PreToolUse(Agent) ─► check-agent-dispatch-pairing.js ──┤ bypass-taxonomy.classify│
-                                                       │   (signals + hint)      │
-                                                       └────────────┬────────────┘
-                                                                    │
-                                            additive fields on existing drift event
+   (emits 3 enriched                                   │   (signals + cause)     │
+    categories:                                        └────────────┬────────────┘
+    bypass, skill_mediated,                                         │
+    stale_dispatch)                       additive fields on existing drift event
                                                                     │
                                                                     ▼
                                                   ~/.claude/state/router-drift.jsonl
@@ -89,78 +94,115 @@ PreToolUse(Agent) ─► check-agent-dispatch-pairing.js ──┤ bypass-taxono
 
 Three new pieces, all additive:
 
-1. `hooks/lib/bypass-taxonomy.js` — pure function with unit tests.
+1. `hooks/lib/bypass-taxonomy.js` — pure function with unit tests under
+   `hooks/tests/bypass-taxonomy.test.js` (matches existing convention; see
+   `hooks/tests/dispatch-log.test.js`).
 2. `scripts/analyze-drift-causes.py` — ad-hoc CLI analyzer.
-3. New section in the `router-health` report.
+3. New "Bypass causes" section in `src/claude_wayfinder/_health.py`'s report
+   output, inserted between "Runtime Telemetry" and "Informational Metrics".
+
+## What the hook actually emits today (load-bearing read)
+
+Inquisitor pass 1 surfaced that the hook (`hooks/check-agent-dispatch-pairing.js:150–217`,
+`classifyDispatchRich()`) emits drift events in three structurally distinct
+shapes — not the two v2-draft1 assumed:
+
+| Hook `category`    | Triggered when                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| `bypass`           | Either: no dispatch in history, OR dispatch exists but a prior Agent already consumed it (`countAgent ≥ 1` since last dispatch) |
+| `skill_mediated`   | No dispatch, but a non-`dispatch` Skill preceded                                                        |
+| `stale_dispatch`   | Dispatch exists, not consumed, but past the hook's own staleness window                                 |
+
+The "dispatch was consumed by a prior Agent" case is the hypothesized #1
+router discipline failure — chaining a second Agent under one dispatch. The
+v2-draft1 cause enum aliased it into the same bucket as the "no dispatch at
+all" case. **v2-draft2 splits it.** That split is the single most important
+change in this revision.
 
 ## Signal set
 
-Every `bypass` and `skill_mediated` drift event gains two additive fields:
+Every `bypass`, `skill_mediated`, and `stale_dispatch` drift event gains two
+additive fields:
 
 ```json
 "bypass_signals": {
   "subagent_type": "code-writer",
-  "dispatch_skill_called_recently": false,
+  "dispatch_skill_called_recently": true,
+  "count_agent_since_dispatch": 1,
   "last_skill_call_name": "gh-pr-review-address",
   "last_skill_call_is_interactive": true,
-  "in_skill_context": true,
-  "turns_since_user_message": 3,
-  "preceded_by_hook_injection": false
+  "turns_since_user_message": 3
 },
-"bypass_cause": "skill_mediated_interactive"
+"bypass_cause": "router_direct_after_consumed_dispatch"
 ```
 
 Field-by-field derivation rules:
 
-| Field                              | Source                                                                                                              |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `subagent_type`                    | Agent tool call's `subagent_type` parameter (already available to the hook).                                        |
-| `dispatch_skill_called_recently`   | Boolean — was a `claude-wayfinder:dispatch` skill_call observed in `conversation_history` within the last 3 turns?  |
-| `last_skill_call_name`             | Name of the most recent skill_call in `conversation_history`, or `null` if none.                                    |
-| `last_skill_call_is_interactive`   | `last_skill_call_name ∈ INTERACTIVE_SKILLS` (gh-create-issue, project-review, gh-pr-review-address, claude-audit, gh-refresh-issues). |
-| `in_skill_context`                 | Boolean — is the Agent tool call lexically inside a Skill execution context? (Already a signal the existing hook computes for the `skill_mediated` vs `bypass` category split.) |
-| `turns_since_user_message`         | Integer — hop count to the most recent `user` turn in `conversation_history`.                                       |
-| `preceded_by_hook_injection`       | Boolean — did the immediately preceding turn carry an `additionalContext` block from a `PostToolUse` or similar hook? |
+| Field                              | Source                                                                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `subagent_type`                    | Agent tool call's `subagent_type` parameter. Kept despite N2-style redundancy with the parent event because the analyzer cross-tabs by it heavily; saves a join. |
+| `dispatch_skill_called_recently`   | Boolean — was a `claude-wayfinder:dispatch` skill_call observed in `conversation_history` since the last `user` turn?                  |
+| `count_agent_since_dispatch`       | Integer ≥ 0 — number of Agent tool_uses between the most recent dispatch skill_call and this Agent call. `0` means dispatch is "live" (or no dispatch exists — see next row); `≥1` means a prior Agent already consumed it. When `dispatch_skill_called_recently == false`, this value is `0` by convention (no dispatch ⇒ no Agents since dispatch). The decision tree never reads this field when `dispatch_skill_called_recently == false`, so the convention is safe. **NEW signal added in v2-draft2 to address B1.** |
+| `last_skill_call_name`             | String or `null` — name of the most recent skill_call in `conversation_history`. `null` if none.                                       |
+| `last_skill_call_is_interactive`   | `last_skill_call_name ∈ INTERACTIVE_SKILLS` (see hardcoded set below).                                                                  |
+| `turns_since_user_message`         | Integer — hop count to the most recent `user` turn in `conversation_history`. Not used by the decision tree; surfaced for analyzer use. |
 
-`STALE_DISPATCH_WINDOW_TURNS = 3` and `INTERACTIVE_SKILLS` are module-level
-constants in `bypass-taxonomy.js` and are the spec's authoritative source for
-those values.
+**Signals dropped from v2-draft1**:
+
+- `in_skill_context` — redundant with the hook's existing `category` field
+  (`category === 'skill_mediated'` *is* the signal). Kept conceptually but not
+  re-emitted.
+- `preceded_by_hook_injection` — v2-draft1 asserted this was derivable from
+  `conversation_history` but gave no parser. Rather than ship a hand-waved
+  signal, v2-draft2 drops it and lets hook-injected dispatches flow to
+  `unknown` (which has its own threshold, see § router-health integration).
+  Future work can add a concrete derivation if `unknown` share is dominated
+  by hook-injected events.
+
+`INTERACTIVE_SKILLS` and any window constants are module-level constants in
+`bypass-taxonomy.js` and are the spec's authoritative source for those values.
 
 ## Cause enum
 
 ```
-skill_mediated_interactive              expected   — last skill was a known interactive skill
-skill_mediated_other                    review     — in_skill_context, skill not in interactive set
-postuse_hook_initiated                  expected   — preceded by hook injection (e.g. ask-about-inquisitor)
-router_direct_no_dispatch               unwanted   — router invoked Agent with no recent dispatch call
-router_direct_after_stale_dispatch      unwanted   — dispatch called but > STALE_DISPATCH_WINDOW_TURNS turns ago,
-                                                     fresh user turn intervened
-unknown                                 review     — signals don't match any defined cause
+skill_mediated_interactive               expected   — last skill was a known interactive skill
+skill_mediated_other                     review     — skill_mediated category, skill not in interactive set
+router_direct_after_consumed_dispatch    unwanted   — bypass category, count_agent_since_dispatch ≥ 1
+                                                      (a prior Agent already used the dispatch authorization)
+router_direct_no_dispatch                unwanted   — bypass category, no dispatch in history
+stale_dispatch                           review     — stale_dispatch category (matches hook category;
+                                                      no further sub-typing in v1)
+unknown                                  review     — none of the above. Has its own threshold (see below).
 ```
 
-**Crucial precondition.** Drift events from this hook only fire when pairing
-*failed* — i.e., the dispatch skill call did not authorize this Agent
-invocation. So an event arriving at `classify()` with `dispatch_skill_called_recently == true`
-necessarily means the dispatch call exists in history but is *stale* (a user
-turn intervened, or the window has expired in some other way that the hook's
-own pairing check rejected). `classify()` does not re-derive staleness — it
-takes the hook's "this event fires" as the staleness signal.
+**Naming note on `stale_dispatch`.** The cause name deliberately matches the
+hook's existing category name to avoid the name collision inquisitor flagged.
+The cause for a `stale_dispatch`-category event is just "stale_dispatch" —
+no creative renaming, no false distinction.
 
-Decision tree (evaluated top-to-bottom; first match wins):
+**Decision tree** — drives off `category` first (the hook fact), then off
+signals. This eliminates the ordering ambiguity of the v2-draft1 tree.
 
 ```
-if preceded_by_hook_injection:                                  → postuse_hook_initiated
-elif in_skill_context and last_skill_call_is_interactive:       → skill_mediated_interactive
-elif in_skill_context:                                          → skill_mediated_other
-elif dispatch_skill_called_recently:                            → router_direct_after_stale_dispatch
-elif turns_since_user_message ≤ 2:                              → router_direct_no_dispatch
-else:                                                           → unknown
+input: category, signals
+match category:
+  case 'stale_dispatch':                          → stale_dispatch
+  case 'skill_mediated':
+    if signals.last_skill_call_is_interactive:    → skill_mediated_interactive
+    else:                                         → skill_mediated_other
+  case 'bypass':
+    if signals.count_agent_since_dispatch >= 1:   → router_direct_after_consumed_dispatch
+    elif not signals.dispatch_skill_called_recently:
+                                                  → router_direct_no_dispatch
+    else:                                         → unknown
+                                                    # bypass + dispatch_recent + no consumption — should not
+                                                    # arise per hook logic; defensive bucket; expected ~0.
+  default:                                        → unknown
 ```
 
-`unknown` catches the case where no recent dispatch call exists AND the user
-turn is far back (chained automation that isn't hook-injected). Conservative
-on purpose — the analyzer will surface `unknown` share and the taxonomy can
-evolve to absorb a recognizable subset of it.
+The `unknown` bucket is **observable via its own threshold** (see
+router-health integration). If `unknown` share rises, the taxonomy is wrong
+and the enum gets extended.
 
 ## Module API
 
@@ -174,57 +216,84 @@ const INTERACTIVE_SKILLS = new Set([
   'claude-audit',
   'gh-refresh-issues',
 ]);
-
-const STALE_DISPATCH_WINDOW_TURNS = 3;
+// Caveat: this set has no automatic completeness gate. When a new
+// interactive skill ships, its events will fall to `skill_mediated_other`
+// until the set is updated. The analyzer surfaces `skill_mediated_other`
+// share so this is observable; see § follow-ups, item F-3.
 
 /**
- * Classify a bypass/skill_mediated drift event by inspecting only the tool-call
- * shape and recent conversation history. No prompt content is read.
+ * Classify a drift event by inspecting only the tool-call shape and the
+ * hook's already-computed `category`. No prompt content is read.
  *
- * @param {{subagent_type: string, prompt: string}} toolCall
- * @param {Array<TranscriptEntry>} conversationHistory  Recent turns (most-recent last)
- * @param {{inSkillContext: boolean}} options           Caller-supplied facts the
- *                                                       existing pairing hook already
- *                                                       computes
+ * Pure function — no I/O, no module-level mutation.
+ *
+ * @param {string} category                    Hook's category field —
+ *                                              'bypass' | 'skill_mediated' | 'stale_dispatch'.
+ * @param {{subagent_type: string}} toolCall   Agent tool-use parameters.
+ * @param {Array<TranscriptEntry>} conversationHistory
+ *                                              Recent turns (most-recent last).
  * @returns {{
- *   signals: {
- *     subagent_type: string,
- *     dispatch_skill_called_recently: boolean,
- *     last_skill_call_name: string|null,
- *     last_skill_call_is_interactive: boolean,
- *     in_skill_context: boolean,
- *     turns_since_user_message: number,
- *     preceded_by_hook_injection: boolean,
- *   },
+ *   signals: BypassSignals,
  *   cause: 'skill_mediated_interactive' | 'skill_mediated_other'
- *        | 'postuse_hook_initiated' | 'router_direct_no_dispatch'
- *        | 'router_direct_after_stale_dispatch' | 'unknown'
+ *        | 'router_direct_after_consumed_dispatch'
+ *        | 'router_direct_no_dispatch'
+ *        | 'stale_dispatch' | 'unknown',
  * }}
+ *
+ * @throws {Error} on malformed inputs (missing category, non-array history).
+ *                  The hook integration catches and emits the event without
+ *                  enrichment — see § Hook integration.
  */
-function classify(toolCall, conversationHistory, options) { ... }
+function classify(category, toolCall, conversationHistory) { ... }
 
-module.exports = { classify, INTERACTIVE_SKILLS, STALE_DISPATCH_WINDOW_TURNS };
+module.exports = { classify, INTERACTIVE_SKILLS };
 ```
 
-The module has no I/O. It can be unit-tested with hand-crafted history arrays.
+The module has no I/O. Unit-testable with hand-crafted history arrays.
 
 ## Hook integration
 
 `hooks/check-agent-dispatch-pairing.js` changes:
 
-1. Add `const { classify } = require('./lib/bypass-taxonomy');` at the top.
-2. Just before the existing drift-event `.emit()` for `category === 'bypass'`
-   or `category === 'skill_mediated'`, call `classify(toolCall, conversationHistory, {inSkillContext})`.
-3. Merge `{bypass_signals: result.signals, bypass_cause: result.cause}` into
-   the event payload.
-4. If `classify` throws (malformed input, missing fields), the hook logs a
-   warning to stderr and emits the event without the new fields. **Telemetry
-   enrichment never blocks dispatch.**
+1. Load the module **once at hook startup**, outside the per-event try
+   block, with explicit module-load error handling:
+   ```js
+   let bypassTaxonomyClassify;
+   try {
+     ({ classify: bypassTaxonomyClassify } = require('./lib/bypass-taxonomy'));
+   } catch (err) {
+     console.error('[bypass-taxonomy] module load failed; events will emit without enrichment:', err);
+     bypassTaxonomyClassify = null;  // no-op fallback
+   }
+   ```
+   This addresses C6: a `require`-time throw cannot kill the hook because
+   the require runs inside its own try, and the fallback `null` is
+   short-circuited at use-time.
+2. Just before the existing drift-event emit (for `category ∈ {bypass,
+   skill_mediated, stale_dispatch}`), call:
+   ```js
+   if (bypassTaxonomyClassify) {
+     try {
+       const result = bypassTaxonomyClassify(category, toolCall, conversationHistory);
+       if (result && result.signals && result.cause) {
+         event.bypass_signals = result.signals;
+         event.bypass_cause = result.cause;
+       } else {
+         console.error('[bypass-taxonomy] classify returned malformed shape; emitting without enrichment');
+       }
+     } catch (err) {
+       console.error('[bypass-taxonomy] classify threw; emitting without enrichment:', err);
+     }
+   }
+   ```
+3. The unenriched event still emits in all failure modes: module-load
+   throw, classify throw, malformed return shape. **Telemetry enrichment
+   never blocks dispatch.**
 
 No change to:
 - The pairing-check decision logic.
 - Which events fire.
-- The `category` field's contract.
+- The hook's `category` field's contract.
 - `advisory_override` event shape.
 
 ## Analyzer script
@@ -233,17 +302,17 @@ No change to:
 
 ```
 $ python scripts/analyze-drift-causes.py --days 7
-Bypass cause distribution (last 7 days, 3247 events):
+Bypass cause distribution (last 7 days, 497 events; 12 pre-enrichment baseline):
 
-  skill_mediated_interactive          1834  56.5%   ✓ expected
-  router_direct_no_dispatch            612  18.8%   ⚠ unwanted
-  postuse_hook_initiated               401  12.4%   ✓ expected
-  skill_mediated_other                 287   8.8%   ? review
-  router_direct_after_stale_dispatch    87   2.7%   ⚠ unwanted
-  unknown                               26   0.8%
+  skill_mediated_interactive               260  52.3%   ✓ expected
+  router_direct_after_consumed_dispatch    102  20.5%   ⚠ unwanted
+  router_direct_no_dispatch                 71  14.3%   ⚠ unwanted
+  skill_mediated_other                      40   8.0%   ? review
+  stale_dispatch                            18   3.6%   ? review
+  unknown                                    6   1.2%
 
-Disagreement check: 14 events (0.4%) where signals don't support the cause
-  → run with --disagreements to inspect
+Disagreement check: 2 events (0.4%) where re-derived cause from signals
+  ≠ stored bypass_cause. → run with --disagreements to inspect.
 ```
 
 Flags:
@@ -254,37 +323,52 @@ Flags:
 | `--since ISO`       | Window from explicit ISO timestamp (overrides `--days`).                                  |
 | `--disagreements`   | Print events where re-derived cause from signals ≠ stored `bypass_cause`.                 |
 | `--by-agent`        | Cross-tab cause × `subagent_type`.                                                        |
-| `--json`            | Machine-readable output for downstream tooling.                                           |
+| `--json`            | Machine-readable output.                                                                  |
 
-Implementation: pure stdlib + `pathlib` + `json`, no external dependencies.
+Implementation: pure stdlib (`pathlib`, `json`, `dataclasses`, `argparse`).
 Uses the same `~/.claude/.venv` Python the existing `_health.py` uses.
+Pattern follows `_health.py:217–319` (`compute_metrics`).
 
 Pre-enrichment events (no `bypass_signals` field) are silently skipped from
-the cause-distribution counts but counted in a `pre-enrichment baseline` line
-in the report.
+the cause-distribution counts but reported as a "pre-enrichment baseline"
+count in the header.
 
 ## router-health integration
 
-`scripts/router_health.py --report` gains one new section, between the
-existing "Drift events" and "Notable findings" sections:
+`src/claude_wayfinder/_health.py` `format_report_output()` gains one new
+section, inserted between "Runtime Telemetry" (line 1030) and "Informational
+Metrics" (line 1069):
 
 ```
-## Bypass causes (7-day window)
+## Bypass causes (7-day window, 497 events)
 
-| Cause                                  |  Count |   Share | Disposition |
-| -------------------------------------- | -----: | ------: | ----------- |
-| skill_mediated_interactive             |   1834 |  56.5%  | expected    |
-| router_direct_no_dispatch              |    612 |  18.8%  | unwanted    |
-| postuse_hook_initiated                 |    401 |  12.4%  | expected    |
-| skill_mediated_other                   |    287 |   8.8%  | review      |
-| router_direct_after_stale_dispatch     |     87 |   2.7%  | unwanted    |
+| Cause                                   |  Count |  Share | Disposition |
+| --------------------------------------- | -----: | -----: | ----------- |
+| skill_mediated_interactive              |    260 | 52.3%  | expected    |
+| router_direct_after_consumed_dispatch   |    102 | 20.5%  | unwanted    |
+| router_direct_no_dispatch               |     71 | 14.3%  | unwanted    |
+| skill_mediated_other                    |     40 |  8.0%  | review      |
+| stale_dispatch                          |     18 |  3.6%  | review      |
+| unknown                                 |      6 |  1.2%  | review      |
 
-PASS — unwanted-bypass share at 21.5% (threshold: <30% for now; tighten after baseline).
+PASS — unwanted-bypass share 34.8% (threshold: <50% bootstrap)
+PASS — unknown share 1.2% (threshold: <10%)
+PASS — sample size 497 (threshold: ≥100; report shows "N/A — insufficient data" below)
 ```
 
-The threshold (`UNWANTED_BYPASS_SHARE_THRESHOLD = 0.30`) is intentionally loose
-in v1. After ~2 weeks of post-ship data, the threshold is tightened based on
-observed baseline via a follow-up PR.
+Two thresholds, both following the existing underscore-prefix constant
+convention (`_health.py:36–39`):
+
+- `_UNWANTED_BYPASS_SHARE_MAX = 0.50` (bootstrap value — see § follow-ups F-2).
+- `_UNKNOWN_SHARE_WARN = 0.10` (addresses C2 — `unknown` is silently capped).
+
+Plus a low-N guard:
+
+- `_BYPASS_CAUSE_MIN_SAMPLE = 100`. When the 7-day window contains fewer than
+  100 enriched events, the section renders `N/A — insufficient post-enrichment
+  data (have N, need 100)` and emits no PASS/FAIL. This protects against
+  noisy early-deployment numbers driving threshold changes (addresses
+  inquisitor's low-N concern adjacent to C5).
 
 `skills/router-health/SKILL.md` gains one trigger phrase: "bypass causes."
 
@@ -295,34 +379,35 @@ new fields. No retroactive computation, no migration script.
 
 Rationale: backfilling would require replaying `conversation_history` from
 transcripts, which is expensive, lossy (transcripts get rotated), and
-unnecessary — the analyzer naturally windows to recent data.
+unnecessary — the analyzer naturally windows to recent data and the low-N
+guard above prevents premature conclusions.
 
-Analyzer + router-health silently skip events lacking `bypass_signals` (treated
-as pre-enrichment baseline). The "pre-enrichment baseline" row in analyzer
-output makes this visible.
+Analyzer + router-health silently skip events lacking `bypass_signals`
+(treated as pre-enrichment baseline). Both display the pre-enrichment count
+so the gap is visible.
 
 ## Storage growth
 
-Current drift event volume: ~1086 events accumulated to date, recent rate
-~50/day across all categories, ~98% (~49/day) get enriched.
+Revalidated against live file (`wc -l ~/.claude/state/router-drift.jsonl`):
+**1132 events over 16 days = ~71 events/day** (v2-draft1 said 50; off by 30%).
 
-Per-enriched-event delta: ~250 bytes (7 small fields + cause string + JSON
-overhead). Daily growth: **~12 KB/day** → **~4.4 MB/year**. No rotation
-needed in the foreseeable horizon.
-
-If volume rises 10×, rotation gets revisited; **rotation is explicitly out of
-scope for v1**. The postmortem's volume-math flag (v1 was 12-60× off) is
-re-validated: the 475/day figure in the postmortem counted dispatch-log not
-drift-log; drift-log is much smaller.
+Enriched events: ~98% of daily events get the new fields. Per-enriched-event
+delta: ~250 B (6 fields + cause string + JSON overhead). Daily growth:
+**~17 KB/day → ~6.3 MB/year.** No rotation needed; **rotation is explicitly
+out of scope for v1**.
 
 ## Testing
 
 Three layers:
 
-1. **`hooks/lib/bypass-taxonomy.test.js`** — pure-function unit tests:
+1. **`hooks/tests/bypass-taxonomy.test.js`** — pure-function unit tests
+   following the convention of `hooks/tests/dispatch-log.test.js`:
    - one per cause (6 tests, one per enum value)
-   - one for each signal-derivation rule (7 tests)
-   - one per signal-disagreement edge case (e.g., `in_skill_context && !last_skill_call_name` — a malformed input case that should resolve to `unknown` rather than throw)
+   - one per signal-derivation rule (6 tests)
+   - one per failure mode: throw on malformed category, return-shape integrity
+     when category is unrecognized
+   - `INTERACTIVE_SKILLS` set is the exhaustive list the v1 spec ships with
+     (smoke test: assert set size matches documentation)
 
    Run via the existing Node test setup.
 
@@ -332,43 +417,63 @@ Three layers:
    - malformed events skipped silently
    - `--disagreements` flag surfaces disagreement events
    - window filtering (`--days`, `--since`) works
-   - pre-enrichment events counted in baseline row, not in cause distribution
+   - pre-enrichment events counted in baseline header, not in cause distribution
+   - low-N case: window with < 100 enriched events renders N/A row
 
-3. **No new integration test for the hook.** The existing pairing-hook tests
-   cover the emission path; we add one assertion that the enriched payload
-   shape is present when bypass_signals are computed successfully, and that
-   the hook still emits an event when `classify` throws.
+3. **Hook integration** — three failure-mode tests (addresses C6):
+   - `classify` throws synchronously → drift event still emits without
+     enrichment, stderr captures the warning
+   - `classify` returns malformed shape (e.g., missing `cause` key) → drift
+     event still emits without enrichment
+   - module `require` throws at startup (simulated by injecting a broken
+     `bypass-taxonomy.js`) → hook still starts, drift event still emits,
+     stderr captures the load failure
 
 CI: existing Node + Python test jobs pick this up automatically.
 
 ## Acceptance criteria
 
 1. New events in `~/.claude/state/router-drift.jsonl` with
-   `category ∈ {bypass, skill_mediated}` carry the `bypass_signals` and
-   `bypass_cause` fields described above.
+   `category ∈ {bypass, skill_mediated, stale_dispatch}` carry the
+   `bypass_signals` and `bypass_cause` fields described above.
 2. `bypass_cause` values are drawn from the enum: `skill_mediated_interactive`,
-   `skill_mediated_other`, `postuse_hook_initiated`,
-   `router_direct_no_dispatch`, `router_direct_after_stale_dispatch`,
-   `unknown`.
-3. `hooks/lib/bypass-taxonomy.js` exists with the documented API and unit
-   tests covering every cause and every signal-derivation rule.
+   `skill_mediated_other`, `router_direct_after_consumed_dispatch`,
+   `router_direct_no_dispatch`, `stale_dispatch`, `unknown`.
+3. `hooks/lib/bypass-taxonomy.js` exists with the documented API; tests in
+   `hooks/tests/bypass-taxonomy.test.js` (not `hooks/lib/`).
 4. `scripts/analyze-drift-causes.py` exists and produces the report shape
-   shown above for at least the `--days N` and `--disagreements` flags.
-5. `scripts/router_health.py --report` includes the new "Bypass causes"
-   section with PASS/WARN/FAIL based on the configured threshold.
+   shown above for at least `--days N` and `--disagreements` flags.
+5. `_health.py` (`format_report_output`) includes the new "Bypass causes"
+   section with low-N guard and both thresholds.
 6. `skills/router-health/SKILL.md` description mentions "bypass causes" as a
    trigger phrase.
-7. The hook never blocks dispatch on a classify error — verified by a test
-   that injects a throw and asserts the drift event is still emitted (without
-   the new fields).
+7. Hook never blocks dispatch on enrichment failure — verified by three
+   failure-mode tests (synchronous throw, malformed return, module-load throw).
 8. `_health.py` existing parsing continues to work — verified by running the
    existing tests against a fixture file that mixes pre-enrichment and
    post-enrichment events.
-9. The postmortem's load-bearing facts are not violated:
-   - No user-prompt content is captured in drift events.
-   - No `decision_id` contract is proposed.
-   - No `agents/general-purpose.md` edits are required.
-   - No cross-event joining is attempted.
+9. **Follow-up issues filed before this spec's PR merges** (addresses C5):
+   - F-1: "Telemetry v2 — file follow-up issue for threshold tightening
+     after 2-week baseline" — due 2026-06-02.
+   - F-2: "Telemetry v2 — review `_UNWANTED_BYPASS_SHARE_MAX` after baseline"
+     — referenced from F-1.
+   - F-3: "Telemetry v2 — audit INTERACTIVE_SKILLS set quarterly" — first
+     review due 2026-08-19.
+10. The postmortem's load-bearing facts are not violated:
+    - No user-prompt content is captured in drift events.
+    - No `decision_id` contract is proposed.
+    - No `agents/general-purpose.md` edits are required.
+    - No cross-event joining is attempted.
+
+## Follow-ups (filed before merge — see AC #9)
+
+| ID  | Title                                                                          | Due        |
+| --- | ------------------------------------------------------------------------------ | ---------- |
+| F-1 | Threshold review for `_UNWANTED_BYPASS_SHARE_MAX` after 2-week baseline        | 2026-06-02 |
+| F-2 | Decision: should `unknown`-share threshold tighten alongside F-1?              | 2026-06-02 |
+| F-3 | Quarterly audit of `INTERACTIVE_SKILLS` set for completeness                   | 2026-08-19 |
+
+F-1 and F-2 share a deadline because they're the same review meeting.
 
 ## Out of scope
 
@@ -379,6 +484,10 @@ CI: existing Node + Python test jobs pick this up automatically.
 - Cross-event joining via `decision_id`.
 - Dashboards beyond the router-health text section.
 - Capturing any user-prompt content.
+- Automatic detection of new interactive skills (handled via the F-3
+  quarterly audit).
+- Concrete derivation of `preceded_by_hook_injection` (deferred; hook-initiated
+  events flow to `unknown` and surface via the `_UNKNOWN_SHARE_WARN` threshold).
 
 ## Relationship to existing artifacts
 
@@ -387,10 +496,37 @@ CI: existing Node + Python test jobs pick this up automatically.
   same calibration questions) and **explicitly defers** Enrichments 2/3/4
   (matcher_decision shape changes) to a separate issue.
 - **PR #152 (abandoned)** — superseded by this spec.
-- **PR #155 (postmortem)** — the load-bearing-facts reference for this spec.
+- **PR #155 (postmortem)** — the load-bearing-facts reference.
 - **Issue #135 (AND-groups)** — independent. Its AC #7 adds `groups_fired` to
   the rationale string of `matcher_decision`; that is a `dispatch-log` field
   and unaffected by this spec.
+
+## Revision log
+
+- **v2-draft1** (initial brainstorm): 7 signals, 6-cause enum including
+  `postuse_hook_initiated` and `router_direct_after_stale_dispatch`; tests
+  under `hooks/lib/`; single unwanted-share threshold; 50/day volume.
+- **v2-draft2** (this revision, post inquisitor pass 1):
+  - **B1 fix**: new signal `count_agent_since_dispatch`; cause
+    `router_direct_after_consumed_dispatch` added to capture chained-Agent
+    discipline failures; `router_direct_after_stale_dispatch` removed (its
+    semantics now live in the hook's `stale_dispatch` category).
+  - **B2 fix**: enriched category set extended to include `stale_dispatch`;
+    cause enum mirrors the hook category name to avoid collision.
+  - **B3 fix**: `in_skill_context` dropped (redundant with hook category);
+    `preceded_by_hook_injection` and `postuse_hook_initiated` dropped (no
+    concrete signal derivation; events flow to `unknown` with threshold).
+  - **C1 fix**: test path corrected to `hooks/tests/bypass-taxonomy.test.js`.
+  - **C2 fix**: `_UNKNOWN_SHARE_WARN = 0.10` added.
+  - **C3 fix**: volume math redone against live file (71/day).
+  - **C4 fix**: F-3 follow-up filed for quarterly INTERACTIVE_SKILLS audit.
+  - **C5 fix**: F-1/F-2 follow-ups committed as acceptance criteria with dates.
+  - **C6 fix**: module load wrapped in dedicated try/catch; three failure-mode
+    tests added.
+  - **N1 fix**: decision tree drives off `category` first (hook fact), then
+    signals; ordering ambiguity eliminated.
+  - **N2 fix**: `subagent_type` retention in signals is now explicitly
+    justified by analyzer-join convenience.
 
 ---
 🤖 _Generated by Claude Code on behalf of @cbeaulieu-gt_
