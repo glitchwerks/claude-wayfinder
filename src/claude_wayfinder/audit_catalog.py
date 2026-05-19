@@ -310,6 +310,21 @@ def run_audit_cli(args: argparse.Namespace) -> int:
         Exit code derived from filtered findings (0-3), or 1 on load
         error.
     """
+    # Windows default stdout encoding is cp1252, which crashes on the
+    # `↔` (U+2194) character used in conflict-pair entry labels and
+    # other non-ASCII glyphs that may appear in rule messages. Force
+    # UTF-8 with replacement so the audit never crashes on rendering.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                # Stream may be a non-reconfigurable wrapper (e.g. in
+                # test capture); fall through — the print() call below
+                # may still succeed for ASCII-only findings.
+                pass
+
     catalog_path = _resolve_catalog_path(getattr(args, "catalog", None))
     try:
         entries = load_catalog(catalog_path)
