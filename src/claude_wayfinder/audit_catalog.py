@@ -461,3 +461,96 @@ def rule_unreachable_routable(catalog: list[CatalogEntry]) -> list[Finding]:
                 )
             )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: conflict pairs (CONCERN)
+# ---------------------------------------------------------------------------
+
+# Discriminator fields are those the matcher uses to break ties beyond
+# the shared keyword overlap. A discriminator only reliably breaks a
+# tie when one agent is *more specific* on that dimension and the other
+# is *unscoped* — i.e., one agent's set is empty while the other's is
+# not. Two non-empty disjoint sets do NOT break the tie across the
+# typical prompt distribution: on prompts that fill neither agent's
+# dimension (the common case for path_globs, since most prompts have
+# no file paths), both agents score identically on keywords and the
+# matcher produces an ambiguous decision.
+_DISCRIMINATOR_FIELDS: tuple[str, ...] = (
+    "command_prefixes",
+    "tool_mentions",
+    "path_globs",
+)
+
+
+def _discriminator_sets(t) -> dict[str, frozenset[str]]:
+    """Per-field discriminator sets for a Triggers object."""
+    return {
+        "command_prefixes": frozenset(t.command_prefixes),
+        "tool_mentions": frozenset(t.tool_mentions),
+        "path_globs": frozenset(t.path_globs),
+    }
+
+
+def _has_breaking_discriminator(
+    a_sets: dict[str, frozenset[str]],
+    b_sets: dict[str, frozenset[str]],
+) -> bool:
+    """True iff some discriminator field is single-sided-asymmetric.
+
+    Single-sided-asymmetric on field F means exactly one of (a[F], b[F])
+    is empty and the other is non-empty. That is the only case where the
+    discriminator reliably breaks the tie across the prompt distribution
+    — the unscoped agent loses to the scoped agent when the input fills
+    the field, and they tie on overlapping keywords when it doesn't, so
+    the *scored-not-tied* subspace strictly favours one agent.
+
+    Two non-empty disjoint sets (e.g. ``**/*.py`` vs ``**/*.ts``) do NOT
+    qualify — on the common case of prompts with no file paths, neither
+    agent's path_globs fire, both score identically on keywords, and the
+    matcher emits ambiguous.
+    """
+    for field in _DISCRIMINATOR_FIELDS:
+        a_empty = not a_sets[field]
+        b_empty = not b_sets[field]
+        if a_empty != b_empty:
+            # Exactly one is empty → single-sided asymmetry.
+            return True
+    return False
+
+
+@register
+def rule_conflict_pairs(catalog: list[CatalogEntry]) -> list[Finding]:
+    """Flag pairs of routable agents with heavy keyword overlap & no breaking discriminator."""
+    routable_agents = [
+        e for e in catalog if e.kind == "agent" and e.routable
+    ]
+    out: list[Finding] = []
+    for i, a in enumerate(routable_agents):
+        a_terms = {kw.term.lower() for kw in a.triggers.keywords}
+        a_sets = _discriminator_sets(a.triggers)
+        for b in routable_agents[i + 1:]:
+            b_terms = {kw.term.lower() for kw in b.triggers.keywords}
+            overlap = a_terms & b_terms
+            if len(overlap) < 3:
+                continue
+            b_sets = _discriminator_sets(b.triggers)
+            # Only single-sided-asymmetric discriminators reliably break
+            # the tie. Disjoint non-empty sets (two specialists in
+            # different domains) still tie on keyword-only prompts.
+            if _has_breaking_discriminator(a_sets, b_sets):
+                continue
+            out.append(
+                Finding(
+                    severity=Severity.CONCERN,
+                    rule="conflict-pair",
+                    entry=f"{a.name} ↔ {b.name}",
+                    message=(
+                        f"agents '{a.name}' and '{b.name}' share "
+                        f"{len(overlap)} keywords ({sorted(overlap)}) "
+                        "with no discriminating path_globs/tool_mentions/"
+                        "command_prefixes — matcher will produce ambiguous"
+                    ),
+                )
+            )
+    return out

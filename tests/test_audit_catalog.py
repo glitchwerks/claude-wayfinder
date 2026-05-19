@@ -20,6 +20,7 @@ import pytest
 from claude_wayfinder.audit_catalog import (
     Finding,
     Severity,
+    rule_conflict_pairs,
     rule_duplicate_keyword_terms,
     rule_one_dimensional_triggers,
     rule_path_glob_footgun,
@@ -504,3 +505,79 @@ class TestUnreachableRoutable:
             ),
         )
         assert rule_unreachable_routable([e]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 14 — rule_conflict_pairs (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestConflictPairs:
+    def _e(self, name: str, terms: list[str], **overrides) -> CatalogEntry:
+        return _entry(
+            name,
+            triggers=Triggers(
+                command_prefixes=frozenset(overrides.get("cp", set())),
+                agent_mentions=frozenset(),
+                path_globs=tuple(overrides.get("pg", ())),
+                keywords=tuple(Keyword(t, 1.0) for t in terms),
+                tool_mentions=frozenset(overrides.get("tm", set())),
+                excludes=frozenset(),
+            ),
+            **{k: v for k, v in overrides.items() if k not in {"cp", "pg", "tm"}},
+        )
+
+    def test_no_overlap_clean(self) -> None:
+        a = self._e("a", ["one", "two", "three"])
+        b = self._e("b", ["four", "five", "six"])
+        assert rule_conflict_pairs([a, b]) == []
+
+    def test_two_overlap_clean(self) -> None:
+        a = self._e("a", ["one", "two", "three"])
+        b = self._e("b", ["one", "two", "nine"])
+        assert rule_conflict_pairs([a, b]) == []
+
+    def test_three_overlap_no_discriminator_flagged(self) -> None:
+        a = self._e("a", ["one", "two", "three", "four"])
+        b = self._e("b", ["one", "two", "three", "nine"])
+        findings = rule_conflict_pairs([a, b])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert findings[0].rule == "conflict-pair"
+        assert "a" in findings[0].message and "b" in findings[0].message
+
+    def test_three_overlap_with_asymmetric_discriminator_clean(self) -> None:
+        # b has a unique path_glob (a has none) — asymmetric discriminator.
+        # The matcher can break the tie on any input that fills path_globs,
+        # so this is not a conflict.
+        a = self._e("a", ["one", "two", "three"])
+        b = self._e("b", ["one", "two", "three"], pg=["**/*.py"])
+        assert rule_conflict_pairs([a, b]) == []
+
+    def test_three_overlap_disjoint_globs_flagged(self) -> None:
+        # Both agents have non-empty path_globs but the sets are disjoint
+        # (a covers .py, b covers .ts). The OLD signature-equality check
+        # cleared this pair because the sigs differ. The CORRECT check
+        # asks whether the discriminator is *single-sided-asymmetric* —
+        # one side empty, one side non-empty. Here both sides are non-
+        # empty, so neither agent is the "unscoped fallback" the matcher
+        # can demote on path-bearing prompts. On the typical no-path
+        # prompt, both score identically on the keyword overlap and the
+        # matcher emits ambiguous. That is the failure mode this rule
+        # must catch.
+        a = self._e("a", ["one", "two", "three"], pg=["**/*.py"])
+        b = self._e("b", ["one", "two", "three"], pg=["**/*.ts"])
+        findings = rule_conflict_pairs([a, b])
+        assert len(findings) == 1
+        assert findings[0].rule == "conflict-pair"
+
+    def test_case_insensitive_overlap(self) -> None:
+        a = self._e("a", ["One", "Two", "Three"])
+        b = self._e("b", ["one", "two", "three"])
+        findings = rule_conflict_pairs([a, b])
+        assert len(findings) == 1
+
+    def test_non_routable_skipped(self) -> None:
+        a = self._e("a", ["one", "two", "three"], routable=False)
+        b = self._e("b", ["one", "two", "three"])
+        assert rule_conflict_pairs([a, b]) == []
