@@ -68,8 +68,29 @@ function extractSignals(toolCall, toolEvents) {
 }
 
 function deriveCause(category, signals) {
-  // Stub — filled in by Task 2.
-  return "unknown";
+  switch (category) {
+    case "stale_dispatch":
+      return "stale_dispatch";
+
+    case "skill_mediated":
+      return signals.last_skill_call_is_interactive
+        ? "skill_mediated_interactive"
+        : "skill_mediated_other";
+
+    case "bypass":
+      // Check dispatch presence FIRST so null count_agent_since_dispatch
+      // is never reached by the >=1 comparison. (Spec §Cause enum, pass-2 fix.)
+      if (!signals.dispatch_skill_called_recently) {
+        return "router_direct_no_dispatch";
+      }
+      if (signals.count_agent_since_dispatch >= 1) {
+        return "router_direct_after_consumed_dispatch";
+      }
+      return "unknown";
+
+    default:
+      return "unknown";
+  }
 }
 
-module.exports = { classify, INTERACTIVE_SKILLS };
+module.exports = { classify, INTERACTIVE_SKILLS, _deriveCauseForTest: deriveCause };
