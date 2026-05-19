@@ -4,7 +4,8 @@ date: 2026-05-19
 tracking: glitchwerks/claude-wayfinder#143
 supersedes: glitchwerks/claude-wayfinder#152 (abandoned)
 postmortem: docs/superpowers/postmortems/2026-05-18-telemetry-enrichment-pivot/POSTMORTEM.md
-inquisitor_pass_1: 2026-05-19 (3 BLOCKING / 6 CONCERN / 2 NIT — addressed in this revision)
+inquisitor_pass_1: 2026-05-19 (3 BLOCKING / 6 CONCERN / 2 NIT — addressed in v2-draft2)
+inquisitor_pass_2: 2026-05-19 (2 BLOCKING / 5 CONCERN / 2 NIT — addressed in v2-draft3, this revision)
 status: draft
 touches:
   - hooks/check-agent-dispatch-pairing.js
@@ -141,8 +142,8 @@ Field-by-field derivation rules:
 | Field                              | Source                                                                                                                                  |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `subagent_type`                    | Agent tool call's `subagent_type` parameter. Kept despite N2-style redundancy with the parent event because the analyzer cross-tabs by it heavily; saves a join. |
-| `dispatch_skill_called_recently`   | Boolean — was a `claude-wayfinder:dispatch` skill_call observed in `conversation_history` since the last `user` turn?                  |
-| `count_agent_since_dispatch`       | Integer ≥ 0 — number of Agent tool_uses between the most recent dispatch skill_call and this Agent call. `0` means dispatch is "live" (or no dispatch exists — see next row); `≥1` means a prior Agent already consumed it. When `dispatch_skill_called_recently == false`, this value is `0` by convention (no dispatch ⇒ no Agents since dispatch). The decision tree never reads this field when `dispatch_skill_called_recently == false`, so the convention is safe. **NEW signal added in v2-draft2 to address B1.** |
+| `dispatch_skill_called_recently`   | Boolean — was **any** `claude-wayfinder:dispatch` skill_call observed in `conversation_history`? **The window must match the hook's window** (`classifyDispatchRich` lines 162-170): full history back to the most recent dispatch, no user-turn boundary. If the spec's signal uses a tighter window than the hook does, the two disagree and the decision tree re-creates the misclassification pass-1 B1 was meant to fix. |
+| `count_agent_since_dispatch`       | Integer ≥ 0 **OR `null`**. When a dispatch skill_call exists in history: count of Agent tool_uses between that dispatch and this Agent call. When no dispatch exists in history: `null` (NOT `0`). The `null` sentinel preserves the discriminating information the analyzer's `--disagreements` check needs to audit the dominant `router_direct_no_dispatch` bucket — see pass-2 review. The decision tree explicitly skips this field when `dispatch_skill_called_recently == false`. **NEW signal added in v2-draft2 to address B1.** |
 | `last_skill_call_name`             | String or `null` — name of the most recent skill_call in `conversation_history`. `null` if none.                                       |
 | `last_skill_call_is_interactive`   | `last_skill_call_name ∈ INTERACTIVE_SKILLS` (see hardcoded set below).                                                                  |
 | `turns_since_user_message`         | Integer — hop count to the most recent `user` turn in `conversation_history`. Not used by the decision tree; surfaced for analyzer use. |
@@ -180,6 +181,16 @@ hook's existing category name to avoid the name collision inquisitor flagged.
 The cause for a `stale_dispatch`-category event is just "stale_dispatch" —
 no creative renaming, no false distinction.
 
+**Hook category set evolution discipline.** Because cause names mirror hook
+category names, the spec is coupled to a set the hook owns. If the hook
+splits or renames a category (e.g., `stale_dispatch_by_count` vs
+`stale_dispatch_by_time`), this spec **must** be revised in the same PR that
+changes the hook — the migration is: (a) extend the cause enum, (b) update
+the decision tree's `match` branches, (c) add a row to the router-health
+table. **Until the spec is revised, new hook categories fall through to
+`unknown` via the decision tree's `default:` branch**, which the
+`_UNKNOWN_SHARE_WARN` threshold will surface within a 7-day window.
+
 **Decision tree** — drives off `category` first (the hook fact), then off
 signals. This eliminates the ordering ambiguity of the v2-draft1 tree.
 
@@ -191,12 +202,16 @@ match category:
     if signals.last_skill_call_is_interactive:    → skill_mediated_interactive
     else:                                         → skill_mediated_other
   case 'bypass':
-    if signals.count_agent_since_dispatch >= 1:   → router_direct_after_consumed_dispatch
-    elif not signals.dispatch_skill_called_recently:
+    if not signals.dispatch_skill_called_recently:
                                                   → router_direct_no_dispatch
+                                                    # signals.count_agent_since_dispatch is null here; not read.
+    elif signals.count_agent_since_dispatch >= 1: → router_direct_after_consumed_dispatch
     else:                                         → unknown
-                                                    # bypass + dispatch_recent + no consumption — should not
-                                                    # arise per hook logic; defensive bucket; expected ~0.
+                                                    # bypass + dispatch exists + count == 0 — should not arise
+                                                    # per hook logic (verified against classifyDispatchRich
+                                                    # lines 162-216: dispatch found + countAgent==0 returns
+                                                    # router_mediated or stale_dispatch, never bypass).
+                                                    # Defensive bucket; expected ~0.
   default:                                        → unknown
 ```
 
@@ -357,10 +372,13 @@ PASS — sample size 497 (threshold: ≥100; report shows "N/A — insufficient 
 ```
 
 Two thresholds, both following the existing underscore-prefix constant
-convention (`_health.py:36–39`):
+convention (`_health.py:36–39`). **Both are bootstrap values** — neither has
+empirical grounding pre-deployment, and both are recalibrated together at the
+2026-06-02 review (F-1/F-2):
 
-- `_UNWANTED_BYPASS_SHARE_MAX = 0.50` (bootstrap value — see § follow-ups F-2).
-- `_UNKNOWN_SHARE_WARN = 0.10` (addresses C2 — `unknown` is silently capped).
+- `_UNWANTED_BYPASS_SHARE_MAX = 0.50` (bootstrap; tighten after baseline).
+- `_UNKNOWN_SHARE_WARN = 0.10` (bootstrap; the baseline `unknown` rate from
+  hook-initiated dispatches alone is unknown until we ship — see § Follow-ups F-2).
 
 Plus a low-N guard:
 
@@ -393,8 +411,10 @@ Revalidated against live file (`wc -l ~/.claude/state/router-drift.jsonl`):
 
 Enriched events: ~98% of daily events get the new fields. Per-enriched-event
 delta: ~250 B (6 fields + cause string + JSON overhead). Daily growth:
-**~17 KB/day → ~6.3 MB/year.** No rotation needed; **rotation is explicitly
-out of scope for v1**.
+**~17 KB/day → ~6.3 MB/year.** Even at 2× current rate (12.6 MB/year) the file
+stays well under 100 MB for years; **rotation stays out of scope for v1 with
+the explicit horizon "drift-log file ≤ 100 MB"**. If the file approaches that
+threshold, file a new issue at that time.
 
 ## Testing
 
@@ -420,14 +440,25 @@ Three layers:
    - pre-enrichment events counted in baseline header, not in cause distribution
    - low-N case: window with < 100 enriched events renders N/A row
 
-3. **Hook integration** — three failure-mode tests (addresses C6):
-   - `classify` throws synchronously → drift event still emits without
-     enrichment, stderr captures the warning
-   - `classify` returns malformed shape (e.g., missing `cause` key) → drift
-     event still emits without enrichment
-   - module `require` throws at startup (simulated by injecting a broken
-     `bypass-taxonomy.js`) → hook still starts, drift event still emits,
-     stderr captures the load failure
+3. **Hook integration** — three failure-mode tests with **distinct
+   behavioral assertions** (addresses C6, sharpened in pass 2 to avoid
+   "checkbox-thrice" degeneration). Each test must assert a different
+   observable consequence:
+   - **Synchronous throw**: `classify` throws `new Error('boom')`. Assert
+     `event.bypass_signals === undefined` AND `event.bypass_cause === undefined`
+     AND `stderr` contains `'classify threw'` AND the event JSON line in the
+     drift log is well-formed (no trailing comma, parseable).
+   - **Malformed return**: `classify` returns `{}` (missing both keys). Assert
+     `event.bypass_signals === undefined` AND `event.bypass_cause === undefined`
+     AND `stderr` contains `'malformed shape'` AND the event JSON line is
+     well-formed. The distinguishing assertion: stderr message differs from
+     the throw case.
+   - **Module-load throw**: spawn the hook with a broken `bypass-taxonomy.js`
+     (e.g., a file with a syntax error). Assert the hook process *starts*
+     (does not exit nonzero), the first event still appends to the drift log,
+     and `stderr` contains `'module load failed'`. The distinguishing
+     assertion: this test exercises a code path the other two never reach
+     (the require-time try/catch in step 1 of § Hook integration).
 
 CI: existing Node + Python test jobs pick this up automatically.
 
@@ -452,13 +483,22 @@ CI: existing Node + Python test jobs pick this up automatically.
 8. `_health.py` existing parsing continues to work — verified by running the
    existing tests against a fixture file that mixes pre-enrichment and
    post-enrichment events.
-9. **Follow-up issues filed before this spec's PR merges** (addresses C5):
-   - F-1: "Telemetry v2 — file follow-up issue for threshold tightening
-     after 2-week baseline" — due 2026-06-02.
-   - F-2: "Telemetry v2 — review `_UNWANTED_BYPASS_SHARE_MAX` after baseline"
-     — referenced from F-1.
-   - F-3: "Telemetry v2 — audit INTERACTIVE_SKILLS set quarterly" — first
-     review due 2026-08-19.
+9. **Follow-up issues filed before the implementing PR's merge, AND
+   referenced by issue number in this spec before that PR merges** (so an
+   AC reviewer can verify by reading the spec; addresses pass-2 CONCERN on
+   F-1/F-2/F-3 traceability). Each issue gets label `telemetry-v2-followup`
+   and milestone `Telemetry v2 baseline review` (created at the same time):
+   - F-1: "Telemetry v2 — 2-week post-ship baseline review meeting"
+     — assignee: @cbeaulieu-gt, due 2026-06-02.
+   - F-2: "Telemetry v2 — recalibrate `_UNWANTED_BYPASS_SHARE_MAX` and
+     `_UNKNOWN_SHARE_WARN` from baseline data" — blocks on F-1, due 2026-06-02.
+   - F-3: "Telemetry v2 — first quarterly INTERACTIVE_SKILLS audit"
+     — assignee: @cbeaulieu-gt, due 2026-08-19.
+
+   **Merge gate**: this spec's frontmatter gains `followups_filed:` listing
+   the three issue numbers. The implementing PR's description must reference
+   all three. Reviewer's verification is a one-line check, not a manual
+   search.
 10. The postmortem's load-bearing facts are not violated:
     - No user-prompt content is captured in drift events.
     - No `decision_id` contract is proposed.
@@ -506,7 +546,7 @@ F-1 and F-2 share a deadline because they're the same review meeting.
 - **v2-draft1** (initial brainstorm): 7 signals, 6-cause enum including
   `postuse_hook_initiated` and `router_direct_after_stale_dispatch`; tests
   under `hooks/lib/`; single unwanted-share threshold; 50/day volume.
-- **v2-draft2** (this revision, post inquisitor pass 1):
+- **v2-draft2** (post inquisitor pass 1):
   - **B1 fix**: new signal `count_agent_since_dispatch`; cause
     `router_direct_after_consumed_dispatch` added to capture chained-Agent
     discipline failures; `router_direct_after_stale_dispatch` removed (its
@@ -527,6 +567,34 @@ F-1 and F-2 share a deadline because they're the same review meeting.
     signals; ordering ambiguity eliminated.
   - **N2 fix**: `subagent_type` retention in signals is now explicitly
     justified by analyzer-join convenience.
+- **v2-draft3** (this revision, post inquisitor pass 2):
+  - **pass-2 BLOCKING #1 fix (window mismatch)**: `dispatch_skill_called_recently`
+    now explicitly defined against the hook's window (full history back to
+    last dispatch, no user-turn boundary), matching `classifyDispatchRich`
+    lines 162-170. Without this, signal extractor and hook would disagree
+    and silently re-create pass-1 B1's misclassification.
+  - **pass-2 BLOCKING #2 fix (count_0 convention)**: `count_agent_since_dispatch`
+    is now `null` (not `0`) when no dispatch exists in history. The `0`
+    convention collapsed the input space and disabled the analyzer's
+    `--disagreements` self-audit for the dominant `router_direct_no_dispatch`
+    bucket. The decision tree skips this field in the no-dispatch branch.
+  - **pass-2 CONCERN fixes**:
+    - `_UNKNOWN_SHARE_WARN = 0.10` re-labeled as bootstrap (with rationale)
+      and folded into F-2's recalibration scope.
+    - F-1/F-2/F-3 now have assignees, labels, milestone, and a merge gate
+      (`followups_filed:` in this spec's frontmatter, referenced by the
+      implementing PR description).
+    - Three failure-mode tests now have distinct behavioral assertions
+      (stderr message text differs; module-load test exercises a unique
+      code path the other two never reach).
+    - Volume math horizon named explicitly ("drift-log file ≤ 100 MB").
+    - Hook category set evolution discipline now spelled out: spec must be
+      revised in the same PR that changes the hook category set; until then,
+      new categories fall through to `unknown` and surface via
+      `_UNKNOWN_SHARE_WARN`.
+  - **pass-2 NITs**: cosmetic (disposition column collision). Not addressed
+    in v2-draft3 — table dispositions stay as-is; future revision can
+    diversify the column.
 
 ---
 🤖 _Generated by Claude Code on behalf of @cbeaulieu-gt_
