@@ -296,3 +296,45 @@ def rule_duplicate_keyword_terms(catalog: list[CatalogEntry]) -> list[Finding]:
                     )
                 )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: path-glob footgun (CONCERN)
+# ---------------------------------------------------------------------------
+
+import re as _re  # noqa: E402
+
+# Matches `*.<ext>` with a single alphanumeric extension component only.
+# Does NOT match compound extensions like `*.tar.gz` or `*.min.js` —
+# those are uncommon enough in dispatch globs that the false-negative
+# is acceptable, and the rule body's "add a `**/*.<ext>` sibling"
+# suggestion would be wrong for them anyway (the correct sibling for
+# `*.tar.gz` is `**/*.tar.gz`, not `**/*.gz`). Future maintainers:
+# extend this regex to compound extensions only if you also extend
+# the sibling-suggestion logic in the rule body.
+_BARE_EXT_RE = _re.compile(r"^\*\.[A-Za-z0-9]+$")
+
+
+@register
+def rule_path_glob_footgun(catalog: list[CatalogEntry]) -> list[Finding]:
+    """Flag bare `*.<ext>` path-globs missing a `**/*.<ext>` sibling."""
+    out: list[Finding] = []
+    for e in catalog:
+        globs = set(e.triggers.path_globs)
+        for g in e.triggers.path_globs:
+            if _BARE_EXT_RE.match(g):
+                ext = g[2:]  # strip "*."
+                if f"**/*.{ext}" not in globs:
+                    out.append(
+                        Finding(
+                            severity=Severity.CONCERN,
+                            rule="path-glob-footgun",
+                            entry=e.name,
+                            message=(
+                                f"path_glob '{g}' matches only top-level "
+                                f"files under fnmatch; use '**/*.{ext}' "
+                                "for nested matching or add it as a sibling"
+                            ),
+                        )
+                    )
+    return out

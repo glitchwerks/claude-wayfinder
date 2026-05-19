@@ -21,6 +21,7 @@ from claude_wayfinder.audit_catalog import (
     Finding,
     Severity,
     rule_duplicate_keyword_terms,
+    rule_path_glob_footgun,
     rule_weight_not_in_ladder,
     rule_whitespace_in_term,
     run_audit,
@@ -277,3 +278,56 @@ class TestDuplicateKeywordTerms:
         assert len(findings) == 1
         assert findings[0].severity == Severity.BLOCKING
         assert "'a'" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — rule_path_glob_footgun (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestPathGlobFootgun:
+    def test_double_star_ok(self) -> None:
+        e = _entry(
+            "ok",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("**/*.py",),
+                keywords=tuple(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_path_glob_footgun([e]) == []
+
+    def test_bare_star_ext_flagged(self) -> None:
+        e = _entry(
+            "footgun",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("*.py",),
+                keywords=tuple(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        findings = rule_path_glob_footgun([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert "*.py" in findings[0].message
+
+    def test_bare_with_double_star_sibling_ok(self) -> None:
+        # If both `*.py` and `**/*.py` are present, the author opted in.
+        e = _entry(
+            "both",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("*.py", "**/*.py"),
+                keywords=tuple(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_path_glob_footgun([e]) == []
