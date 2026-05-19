@@ -9,6 +9,11 @@ Covers:
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
+import pytest
+
 # ---------------------------------------------------------------------------
 # Module-level imports under test
 # ---------------------------------------------------------------------------
@@ -98,3 +103,55 @@ class TestRunAuditEmpty:
         """An empty catalog list should produce zero findings."""
         findings = run_audit([])
         assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# CLI surface
+# ---------------------------------------------------------------------------
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    """Invoke ``python -m claude_wayfinder`` with the given arguments.
+
+    Args:
+        *args: CLI arguments appended after the module name.
+
+    Returns:
+        A ``CompletedProcess`` instance with captured stdout/stderr.
+    """
+    return subprocess.run(
+        [sys.executable, "-m", "claude_wayfinder", *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+class TestAuditCatalogCliHelp:
+    """audit-catalog --help exits 0 and surfaces the documented flags."""
+
+    @pytest.fixture(scope="class")
+    def help_output(self) -> str:
+        """Run audit-catalog --help and return stdout.
+
+        Returns:
+            The help text emitted to stdout.
+        """
+        cp = _run_cli("audit-catalog", "--help")
+        assert cp.returncode == 0, cp.stderr
+        return cp.stdout
+
+    def test_help_lists_json_flag(self, help_output: str) -> None:
+        """--json flag appears in audit-catalog help text."""
+        assert "--json" in help_output
+
+    def test_help_lists_severity_flag(self, help_output: str) -> None:
+        """--severity flag appears in audit-catalog help text."""
+        assert "--severity" in help_output
+
+    def test_help_lists_target_flag(self, help_output: str) -> None:
+        """--target flag appears in audit-catalog help text."""
+        assert "--target" in help_output
+
+    def test_help_lists_catalog_flag(self, help_output: str) -> None:
+        """--catalog flag appears in audit-catalog help text."""
+        assert "--catalog" in help_output
