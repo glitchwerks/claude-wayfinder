@@ -21,6 +21,7 @@ from claude_wayfinder.audit_catalog import (
     Finding,
     Severity,
     rule_duplicate_keyword_terms,
+    rule_one_dimensional_triggers,
     rule_path_glob_footgun,
     rule_tool_name_case_error,
     rule_weight_not_in_ladder,
@@ -387,3 +388,61 @@ class TestToolNameCaseError:
             ),
         )
         assert rule_tool_name_case_error([e]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 12 — rule_one_dimensional_triggers (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestOneDimensionalTriggers:
+    def test_two_dimensions_ok(self) -> None:
+        e = _entry(
+            "ok",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("**/*.py",),
+                keywords=(Keyword("python", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_one_dimensional_triggers([e]) == []
+
+    def test_only_keywords_flagged(self) -> None:
+        e = _entry(
+            "thin",
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("python", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        findings = rule_one_dimensional_triggers([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert (
+            "one dimension" in findings[0].message.lower()
+            or "dimension" in findings[0].message.lower()
+        )
+
+    def test_non_routable_not_flagged(self) -> None:
+        # Skills and non-routable agents are not subject to the floor.
+        e = _entry(
+            "skill-thin",
+            kind="skill",
+            routable=False,
+            triggers=Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=tuple(),
+                keywords=(Keyword("python", 1.0),),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+            ),
+        )
+        assert rule_one_dimensional_triggers([e]) == []

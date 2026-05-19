@@ -388,3 +388,49 @@ def rule_tool_name_case_error(catalog: list[CatalogEntry]) -> list[Finding]:
                     )
                 )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: one-dimensional triggers (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+def _trigger_dimensions(t) -> int:
+    """Count the number of populated positive dimensions on a Triggers."""
+    return sum(
+        1
+        for present in (
+            bool(t.command_prefixes),
+            bool(t.agent_mentions),
+            bool(t.path_globs),
+            bool(t.keywords),
+            bool(t.tool_mentions),
+        )
+        if present
+    )
+
+
+@register
+def rule_one_dimensional_triggers(
+    catalog: list[CatalogEntry],
+) -> list[Finding]:
+    """Flag routable agents that populate only one trigger dimension."""
+    out: list[Finding] = []
+    for e in catalog:
+        if e.kind != "agent" or not e.routable:
+            continue
+        dims = _trigger_dimensions(e.triggers)
+        if dims == 1:
+            out.append(
+                Finding(
+                    severity=Severity.CONCERN,
+                    rule="one-dimensional-triggers",
+                    entry=e.name,
+                    message=(
+                        "routable agent populates only one trigger "
+                        "dimension; matcher's feature-density floor "
+                        "requires two — agent may be unreachable"
+                    ),
+                )
+            )
+    return out
