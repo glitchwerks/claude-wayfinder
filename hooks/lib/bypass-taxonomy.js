@@ -56,13 +56,48 @@ function classify(category, toolCall, toolEvents) {
 }
 
 function extractSignals(toolCall, toolEvents) {
-  // Stub — filled in by Task 3.
+  const evts = Array.isArray(toolEvents) ? toolEvents : [];
+
+  // Locate the most recent dispatch Skill call — matches the hook's
+  // window (full history, no user-turn boundary).
+  let lastDispatchIdx = -1;
+  for (let i = evts.length - 1; i >= 0; i--) {
+    if (evts[i].toolName === "Skill" && evts[i].skillName === "dispatch") {
+      lastDispatchIdx = i;
+      break;
+    }
+  }
+
+  let countAgentSinceDispatch = null;
+  if (lastDispatchIdx !== -1) {
+    countAgentSinceDispatch = 0;
+    for (let i = lastDispatchIdx + 1; i < evts.length; i++) {
+      if (evts[i].toolName === "Agent") {
+        countAgentSinceDispatch++;
+      }
+    }
+  }
+
+  // Find the most recent non-dispatch Skill call (for skill_mediated cases).
+  let lastSkillCallName = null;
+  for (let i = evts.length - 1; i >= 0; i--) {
+    const e = evts[i];
+    if (e.toolName === "Skill" && e.skillName && e.skillName !== "dispatch") {
+      lastSkillCallName = e.skillName;
+      break;
+    }
+  }
+
   return {
     subagent_type: (toolCall && toolCall.subagent_type) || "",
-    dispatch_skill_called_recently: false,
-    count_agent_since_dispatch: null,
-    last_skill_call_name: null,
-    last_skill_call_is_interactive: false,
+    dispatch_skill_called_recently: lastDispatchIdx !== -1,
+    count_agent_since_dispatch: countAgentSinceDispatch,
+    last_skill_call_name: lastSkillCallName,
+    last_skill_call_is_interactive:
+      lastSkillCallName !== null && INTERACTIVE_SKILLS.has(lastSkillCallName),
+    // turns_since_user_message — not currently computable from the
+    // toolEvents shape alone (which lacks turn-role info). Surface as 0
+    // for v1; the analyzer does not depend on it. F-2 review can revisit.
     turns_since_user_message: 0,
   };
 }

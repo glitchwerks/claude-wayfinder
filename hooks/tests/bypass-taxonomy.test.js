@@ -99,3 +99,87 @@ test("null count_agent_since_dispatch is never compared with >=", () => {
   );
   assert.equal(cause, "router_direct_no_dispatch");
 });
+
+// ── Task 3: signal extraction ─────────────────────────────────────────────────
+
+// Signal-extraction tests. classify() is the public entry; we feed it a
+// hand-crafted toolEvents array (same shape as classifyDispatchRich consumes:
+// {toolName, skillName?}).
+
+function ev(toolName, skillName) {
+  return skillName ? { toolName, skillName } : { toolName };
+}
+
+test("signals: no dispatch in history → recently=false, count=null", () => {
+  const { signals } = classify("bypass", { subagent_type: "code-writer" }, [
+    ev("Read"),
+    ev("Edit"),
+  ]);
+  assert.equal(signals.dispatch_skill_called_recently, false);
+  assert.equal(signals.count_agent_since_dispatch, null);
+  assert.equal(signals.last_skill_call_name, null);
+  assert.equal(signals.last_skill_call_is_interactive, false);
+});
+
+test("signals: dispatch in history, no Agent after → recently=true, count=0", () => {
+  const { signals } = classify(
+    "stale_dispatch",
+    { subagent_type: "code-writer" },
+    [ev("Skill", "dispatch"), ev("Read"), ev("Edit")]
+  );
+  assert.equal(signals.dispatch_skill_called_recently, true);
+  assert.equal(signals.count_agent_since_dispatch, 0);
+});
+
+test("signals: dispatch in history, one Agent after → recently=true, count=1", () => {
+  const { signals } = classify(
+    "bypass",
+    { subagent_type: "code-writer" },
+    [ev("Skill", "dispatch"), ev("Agent"), ev("Read")]
+  );
+  assert.equal(signals.dispatch_skill_called_recently, true);
+  assert.equal(signals.count_agent_since_dispatch, 1);
+});
+
+test("signals: dispatch + two Agents after → count=2", () => {
+  const { signals } = classify(
+    "bypass",
+    { subagent_type: "ops" },
+    [ev("Skill", "dispatch"), ev("Agent"), ev("Edit"), ev("Agent")]
+  );
+  assert.equal(signals.count_agent_since_dispatch, 2);
+});
+
+test("signals: last_skill_call_name is the most recent non-dispatch Skill", () => {
+  const { signals } = classify(
+    "skill_mediated",
+    { subagent_type: "code-writer" },
+    [ev("Skill", "gh-create-issue"), ev("Read")]
+  );
+  assert.equal(signals.last_skill_call_name, "gh-create-issue");
+  assert.equal(signals.last_skill_call_is_interactive, true);
+});
+
+test("signals: last_skill_call_is_interactive false for unknown skill", () => {
+  const { signals } = classify(
+    "skill_mediated",
+    { subagent_type: "code-writer" },
+    [ev("Skill", "weird-custom-skill"), ev("Read")]
+  );
+  assert.equal(signals.last_skill_call_name, "weird-custom-skill");
+  assert.equal(signals.last_skill_call_is_interactive, false);
+});
+
+test("signals: subagent_type passes through", () => {
+  const { signals } = classify(
+    "bypass",
+    { subagent_type: "doc-writer" },
+    []
+  );
+  assert.equal(signals.subagent_type, "doc-writer");
+});
+
+test("signals: empty/null toolCall gives empty subagent_type, no throw", () => {
+  const { signals } = classify("bypass", null, []);
+  assert.equal(signals.subagent_type, "");
+});
