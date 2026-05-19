@@ -218,6 +218,44 @@ def _call_match_in_process(
     return stdout_buf.getvalue(), stderr_buf.getvalue(), rc or 0
 
 
+def dispatch(
+    *,
+    catalog_path: Path,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """In-process dispatch wrapper for tests and library callers.
+
+    Serialises *context* to JSON, invokes the matcher with *catalog_path*
+    (bypassing env-var resolution), and returns the parsed decision dict.
+
+    Args:
+        catalog_path: Path to the dispatch catalog JSON file.
+        context: Dispatch context dict matching the runtime contract:
+            ``{task_description, file_paths?, agent_mentions?,
+            tool_mentions?, command_prefix?}``.
+
+    Returns:
+        Parsed decision dict with keys: ``decision``, ``confidence``,
+        ``rationale``, and optionally ``agent``, ``skills``,
+        ``alternatives``.
+
+    Raises:
+        ValueError: If the matcher exits non-zero or returns no output.
+        json.JSONDecodeError: If the matcher output is not valid JSON.
+    """
+    stdin_data = json.dumps(context)
+    stdout_text, _stderr_text, rc = _call_match_in_process(
+        stdin_data=stdin_data,
+        catalog_path=catalog_path,
+    )
+    if rc != 0 or not stdout_text.strip():
+        raise ValueError(
+            f"dispatch() matcher exited with rc={rc}; "
+            f"stderr={_stderr_text!r}"
+        )
+    return json.loads(stdout_text)
+
+
 def run_dispatch(
     stdin_data: str | None = None,
     out: Any = None,
