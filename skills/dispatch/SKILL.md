@@ -99,29 +99,48 @@ See `docs/integration.md` for the end-to-end wiring guide.
 
 ## Prerequisites
 
-Python ≥ 3.11 must be on your `$PATH` and `claude-wayfinder` must be
-installed:
+`claude-wayfinder` must be installed in a Python ≥ 3.11 environment. After
+running `/setup-wayfinder`, the plugin venv lives at
+`${CLAUDE_PLUGIN_DATA}/venv/` — that is the canonical interpreter to use.
+
+**Use the plugin venv's interpreter explicitly.** Do not rely on bare
+`python` resolving to the right environment via `$PATH` — on Windows in
+particular, a global Python (e.g. `C:\Python313\python.exe`) often takes
+precedence over the venv and does NOT have `claude-wayfinder` installed,
+producing `No module named claude_wayfinder` at runtime.
+
+| Platform | Path |
+|----------|------|
+| POSIX    | `${CLAUDE_PLUGIN_DATA}/venv/bin/python` |
+| Windows  | `${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe` |
+
+The skill's invocations below show the explicit path. Bare `python` is
+fine as a shorthand **only** when the plugin venv is activated in the
+calling shell, or its `bin/Scripts` dir is first on `$PATH`.
 
 ```bash
 # Confirm the package is available
-python -m claude_wayfinder dispatch --help
-
-# Install if needed
-git clone https://github.com/glitchwerks/claude-wayfinder.git
-cd claude-wayfinder
-pip install -e ".[dev]"
+"${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe" -m claude_wayfinder dispatch --help   # Windows
+"${CLAUDE_PLUGIN_DATA}/venv/bin/python" -m claude_wayfinder dispatch --help           # POSIX
 ```
+
+If `claude-wayfinder` is not installed yet, run `/setup-wayfinder` — that
+skill materializes the venv at the canonical location and pins the
+matching plugin version into it.
 
 ## Running
 
 ```bash
+PY="${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe"   # Windows
+# PY="${CLAUDE_PLUGIN_DATA}/venv/bin/python"          # POSIX
+
 # Demo mode (no catalog configured)
-python -m claude_wayfinder dispatch
+"$PY" -m claude_wayfinder dispatch
 
 # Real-catalog mode
 export DISPATCH_CATALOG_PATH=/path/to/dispatch-catalog.json
 echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
-  | python -m claude_wayfinder dispatch
+  | "$PY" -m claude_wayfinder dispatch
 ```
 
 ## Stale-catalog warning
@@ -138,7 +157,8 @@ Proceeding with stale catalog.
 
 Execution **proceeds** with the stale catalog — staleness is a
 degraded-quality signal, not an error.  Run
-`python -m claude_wayfinder catalog build` to refresh.
+`"$PY" -m claude_wayfinder catalog build` (using the same explicit
+interpreter path resolved in the **Running** section above) to refresh.
 
 ## The 7 decision branches
 
