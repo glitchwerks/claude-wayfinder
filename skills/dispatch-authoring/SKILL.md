@@ -67,6 +67,7 @@ discussion behind the sidecar approach see `docs/design/trigger-schema.md`.
 | `agent_mentions` | `triggers:` block | Agent names whose explicit mention in the prompt immediately short-circuits to score `1.0`. |
 | `path_globs` | `triggers:` block | `fnmatch`-style globs matched against the `file_paths` dimension of the input. Each matched glob adds `0.4` to the score. |
 | `keywords` | `triggers:` block | List of `{term, weight}` mappings. Each term found in the input keywords adds `0.5 × weight` to the score. |
+| `keyword_groups` | `triggers:` block | **AND-group conjunctive triggers** (added v0.6.0, #135). List of `{slots: [{name, terms: [...]}, ...], weight}` groups. A group fires only when **all** of its slots match — each slot must have ≥ 1 of its terms present in the input keywords. On match, the group adds `0.5 × weight` (same multiplier as flat keywords). Use when a routing decision should require co-occurrence of two or more terms (e.g. verb + noun) rather than either alone. |
 | `tool_mentions` | `triggers:` block | Tool names matched against the input `tool_mentions` dimension. Each match adds `0.5`. |
 | `excludes` | `triggers:` block | Terms that hard-zero the entry's score when found in the input keywords. |
 | `applicable_agents` | skill sidecar top-level | Hard allowlist of agent names that may receive this skill. `["*"]` means any agent. `[]` means no agent — the skill is dormant. |
@@ -166,9 +167,38 @@ calculated.
 - Per `keywords` match: `+0.5 × weight` (verified at
   `src/claude_wayfinder/match.py:84` — `_KEYWORD_MULTIPLIER = 0.5`;
   raised from 0.3 to fix single-keyword skills never attaching)
+- Per `keyword_groups` match: `+0.5 × weight` per group that fires
+  (a group fires only when **all** of its slots are satisfied; same
+  multiplier as flat keywords; #135 / v0.6.0)
 - Per `tool_mentions` match: `+0.5`
 
 The final additive score is **clamped to `1.0`** before being returned.
+
+### AND-group worked example
+
+An entry has a `keyword_groups` block requiring both a "verb" and a "noun"
+to co-occur:
+
+```yaml
+keyword_groups:
+  - slots:
+      - {name: verbs, terms: [create, open, file]}
+      - {name: nouns, terms: [issue, ticket, bug]}
+    weight: 1.0
+```
+
+| Prompt                              | verbs slot | nouns slot | Group fires? | Score from this group |
+| ----------------------------------- | :---------: | :---------: | :-----------: | --------------------: |
+| "open the issue tracker"            |     ✓       |     ✓       |     yes       |  `+0.5 × 1.0 = +0.5`  |
+| "create the issue body"             |     ✓       |     ✓       |     yes       |  `+0.5`               |
+| "open the file"                     |     ✓       |     ✗       |     no        |  `+0.0`               |
+| "tell me about issues"              |     ✗       |     ✓       |     no        |  `+0.0`               |
+
+The flat-`keywords` equivalent would score on either side firing alone —
+scoring `+0.5` on "open the file" and "tell me about issues" too, since
+each individual term contributes independently. The AND-group structurally
+requires co-occurrence, which is the right shape when the trigger only
+makes sense for the combined intent.
 
 ### Worked example
 
@@ -238,6 +268,17 @@ unexpectedly.
   without a leading slash will not match a user-typed `/dispatch` command,
   because the dispatcher passes the slash as part of the string.
 
+- **`keyword_groups` requires ≥ 2 slots per group.** A single-slot group is
+  semantically equivalent to a flat `keywords` entry — the catalog
+  generator warns and drops single-slot groups. Use plain `keywords`
+  instead when you only want one set of alternatives. Each slot needs a
+  non-empty `terms` list; empty `terms` makes the slot unsatisfiable and
+  drops the group.
+
+- **`keyword_groups` weights follow the same `{0.25, 0.5, 1.0}` ladder as
+  flat keywords.** Off-ladder weights on a group are clamped with a
+  validator warning, same as on flat keyword entries.
+
 ---
 
 ## 5. Footguns
@@ -276,6 +317,13 @@ thin. This is about the *entry* being weakly reachable across the distribution
 of prompts the matcher actually sees. The fix is to pair keywords with at
 least one `path_globs`, `tool_mentions`, or `command_prefixes` entry, giving
 the matcher a second scoring dimension to work with.
+
+**Flat `keywords` over-fire when terms only make sense together.** If your
+entry should match `"open issue"` but not `"open file"` or `"recent issues"`
+alone, flat keywords score each term independently and accumulate on
+either side firing alone. Use `keyword_groups` to require co-occurrence:
+each `slot` carries one set of alternatives, and the group fires only
+when **all** slots are satisfied. See the §3 worked example.
 
 **Conflict pairs produce `ambiguous` decisions.** Two entries whose
 `keywords` lists share three or more overlapping case-insensitive terms,
