@@ -4807,3 +4807,325 @@ def test_colocated_sidecar_orphan_dropped_for_project_agent(
     log_text = log_path.read_text(encoding="utf-8")
     assert "warning" in log_text, "orphan project sidecar must emit a warning"
     assert "ghost-proj" in log_text, "warning must identify the orphan stem"
+
+
+# Issue #151 + #153 — _apply_colocated_sidecars validation and routable=True
+# ---------------------------------------------------------------------------
+
+
+def test_colocated_sidecar_keyword_weight_clamped(
+    tmp_path: Path,
+) -> None:
+    """#151: colocated sidecar keywords with off-ladder weights are clamped.
+
+    A sidecar with a keyword weight of 0.7 (not in {0.25, 0.5, 1.0}) must
+    be clamped to 0.5 and a warning recorded in all_issues / the log file.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "clamper.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: clamper
+            description: Tests weight clamping.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "clamper.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "clamp-me", weight: 0.7 }
+            applicable_skills: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "clamper"),
+        None,
+    )
+    assert entry is not None, "clamper must be present in catalog"
+    keywords = entry["triggers"]["keywords"]
+    assert len(keywords) == 1, f"expected 1 keyword; got {keywords!r}"
+    weight = keywords[0]["weight"]
+    assert weight in (0.25, 0.5, 1.0), (
+        f"weight must be clamped to an allowed value; got {weight}"
+    )
+    assert weight == 0.5, f"0.7 must clamp to 0.5 (nearest); got {weight}"
+
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "clamped" in log_text, (
+        "a clamping warning must be written to the log"
+    )
+
+
+def test_colocated_sidecar_keyword_duplicates_deduped(
+    tmp_path: Path,
+) -> None:
+    """#151: colocated sidecar keywords with duplicate terms are deduped.
+
+    A sidecar listing ['foo', 'foo', 'bar'] must produce a catalog entry
+    with only ['bar', 'foo'] (deduped, last-wins) and a dedup warning in
+    the log.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "deduper.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: deduper
+            description: Tests keyword deduplication.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "deduper.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "foo", weight: 1.0 }
+                - { term: "foo", weight: 0.5 }
+                - { term: "bar", weight: 1.0 }
+            applicable_skills: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "deduper"),
+        None,
+    )
+    assert entry is not None, "deduper must be present in catalog"
+    terms = [k["term"] for k in entry["triggers"]["keywords"]]
+    assert terms.count("foo") == 1, (
+        f"duplicate 'foo' must be deduplicated; terms={terms!r}"
+    )
+    assert "bar" in terms, f"'bar' must remain after dedup; terms={terms!r}"
+
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "deduplicated" in log_text, (
+        "a dedup warning must be written to the log"
+    )
+
+
+def test_colocated_sidecar_deprecated_field_stripped(
+    tmp_path: Path,
+) -> None:
+    """#151: colocated sidecar file_extensions field is stripped with warning.
+
+    A sidecar carrying the deprecated ``file_extensions:`` trigger field must
+    have that field stripped from the catalog entry, and a deprecation warning
+    must appear in the log.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "stripper.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: stripper
+            description: Tests deprecated field stripping.
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "stripper.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "strip", weight: 1.0 }
+              file_extensions:
+                - ".py"
+            applicable_skills: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "stripper"),
+        None,
+    )
+    assert entry is not None, "stripper must be present in catalog"
+    triggers = entry["triggers"]
+    assert "file_extensions" not in triggers, (
+        f"deprecated field must be stripped; triggers={triggers!r}"
+    )
+
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "deprecated" in log_text, (
+        "a deprecation warning must be written to the log"
+    )
+
+
+def test_colocated_sidecar_sets_routable_true_for_owned_agent(
+    tmp_path: Path,
+) -> None:
+    """#153: colocated sidecar forces routable=True even if frontmatter has False.
+
+    An owned agent with ``routable: false`` in frontmatter must end up with
+    ``routable: True`` in the catalog entry once a colocated sidecar is applied.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "inert.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: inert
+            description: Agent that starts non-routable.
+            routable: false
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (agents / "inert.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "activate", weight: 1.0 }
+            applicable_skills: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=agents,
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "inert"),
+        None,
+    )
+    assert entry is not None, "inert must be present in catalog"
+    assert entry.get("routable") is True, (
+        f"routable must be True after sidecar applied; got {entry.get('routable')!r}"
+    )
+
+
+def test_colocated_sidecar_sets_routable_true_for_project_agent(
+    tmp_path: Path,
+) -> None:
+    """#153 Pass 4b: colocated sidecar forces routable=True for project agents.
+
+    A project-local agent with ``routable: false`` must end up with
+    ``routable: True`` in the catalog entry after a colocated sidecar applies.
+    """
+    from claude_wayfinder.build_catalog import build
+
+    repo = tmp_path / "repo"
+    proj_agents = repo / ".claude" / "agents"
+    proj_agents.mkdir(parents=True)
+    (proj_agents / "dormant-proj.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            name: dormant-proj
+            description: Project agent starting non-routable.
+            routable: false
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+    (proj_agents / "dormant-proj.triggers.yml").write_text(
+        textwrap.dedent(
+            """\
+            triggers:
+              keywords:
+                - { term: "wake-proj", weight: 1.0 }
+            applicable_skills: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "cat.json"
+    log_path = tmp_path / "log"
+    rc = build(
+        skills_dir=tmp_path / "no-skills",
+        agents_dir=tmp_path / "no-agents",
+        corpus_path=tmp_path / "absent.jsonl",
+        out_path=out,
+        log_path=log_path,
+        project_root=repo,
+        now="2026-05-18T00:00:00Z",
+    )
+    assert rc == 0
+    catalog = json.loads(out.read_text(encoding="utf-8"))
+    entry = next(
+        (e for e in catalog["entries"] if e["name"] == "dormant-proj"),
+        None,
+    )
+    assert entry is not None, "dormant-proj must be present in catalog"
+    assert entry.get("routable") is True, (
+        "routable must be True after project sidecar applied; "
+        f"got {entry.get('routable')!r}"
+    )

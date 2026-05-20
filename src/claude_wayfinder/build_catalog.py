@@ -514,19 +514,35 @@ def _apply_colocated_sidecars(
                 )
             )
 
-        # Apply sidecar triggers and applicable_skills to the entry in place.
-        # We write directly to the existing entry dict rather than calling
-        # validate_entry here.  The downstream _resolve_applicable_references
-        # pass (after all passes complete) validates trigger field shapes and
-        # resolves applicable_skills references — the same pipeline that
-        # handles inline-frontmatter triggers.  This mirrors how Pass 3b wires
-        # plugin-agent sidecars: sidecar data is written onto the entry, and
-        # full validation happens downstream (spec §5 "Integration with
-        # existing entry validation").
+        # Validate sidecar trigger fields through the standard pipeline so
+        # weight clamping, keyword dedup, deprecated-field stripping, and
+        # whitespace stripping all apply — mirroring Pass 3b for plugin-agent
+        # sidecars (#142).
+        effective: dict[str, Any] = {"name": stem}
         if "triggers" in sidecar:
-            entry["triggers"] = sidecar["triggers"]
+            effective["triggers"] = sidecar["triggers"]
         if "applicable_skills" in sidecar:
-            entry["applicable_skills"] = sidecar["applicable_skills"]
+            effective["applicable_skills"] = sidecar["applicable_skills"]
+
+        vr = validate_entry(effective, kind="agent", source_stem=stem)
+        all_issues.extend(vr.issues)
+        if vr.entry is None:
+            # Validation rejected the sidecar outright — warn and skip.
+            _logger.warning(
+                "colocated agent sidecar '%s.triggers.yml' rejected by"
+                " validate_entry — sidecar dropped",
+                stem,
+            )
+            continue
+
+        if "triggers" in vr.entry:
+            entry["triggers"] = vr.entry["triggers"]
+        if "applicable_skills" in vr.entry:
+            entry["applicable_skills"] = vr.entry["applicable_skills"]
+
+        # #153: defensive write so a ``routable: false`` frontmatter doesn't
+        # silently keep the agent inert after a sidecar is applied.
+        entry["routable"] = True
 
 
 def _clamp_weight(w: float) -> float:
