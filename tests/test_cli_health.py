@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from claude_wayfinder import cli
 from claude_wayfinder._health import _parse_window  # noqa: PLC2701
 
