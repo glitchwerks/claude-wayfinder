@@ -6,6 +6,23 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-05-20
+
+Docs-only patch release. Fixes a Windows footgun in the `dispatch`
+SKILL.md where bare `python` resolved to a global interpreter that
+lacked `claude-wayfinder`, producing `No module named claude_wayfinder`
+at runtime. No matcher, schema, or behavioral changes.
+
+### Fixed
+
+- **`skills/dispatch/SKILL.md` now directs callers to the plugin venv's
+  interpreter explicitly** — `${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe`
+  (Windows) or `${CLAUDE_PLUGIN_DATA}/venv/bin/python` (POSIX) —
+  instead of bare `python`. Mirrors the pattern already used by
+  `skills/router-health/SKILL.md` since v0.7.0. Bare `python` remains
+  documented as a shorthand that only works when the venv is activated
+  or first on `$PATH`. (#174, PR #175)
+
 ## [0.7.0] — 2026-05-20
 
 Minor release. Ships the **`router-health`** skill (ported from
