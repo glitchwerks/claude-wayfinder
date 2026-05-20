@@ -1,0 +1,12 @@
+triggers:
+  command_prefixes:
+    - "/router-health"
+  keywords:
+    - { term: "router", weight: 1.0 }
+    - { term: "dispatch", weight: 0.5 }
+    - { term: "health", weight: 0.5 }
+    - { term: "drift", weight: 0.5 }
+    - { term: "telemetry", weight: 0.5 }
+    - { term: "metrics", weight: 0.25 }
+    - { term: "status", weight: 0.25 }
+applicable_agents: []  # router-only; health reporting is a maintenance operation
