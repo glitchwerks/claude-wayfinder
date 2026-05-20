@@ -6,6 +6,55 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-20
+
+Minor release. Ships the **`router-health`** skill (ported from
+`claude-configs` and refactored so its drill-down snippets are real
+`claude-wayfinder health` subcommands instead of inline Python
+heredocs), plus a bugfix for the colocated agent-sidecar code path
+that was bypassing validation and leaving `routable: false` agents
+silently inert. No breaking changes.
+
+### Added
+
+- **`router-health` skill** — `/router-health` runs
+  `claude-wayfinder health --report` and adds an Analysis section
+  (warning-zone drill-down on CI invariants and runtime telemetry)
+  plus an Extended Notable Findings section (top dispatched agents,
+  top invoked skills, catalog freshness). Env-var path overrides
+  for every script flag: `$ROUTER_DRIFT_LOG`, `$DISPATCH_LOG`,
+  `$DISPATCH_CATALOG_PATH`, `$ROUTER_SKILLS_DIR`,
+  `$ROUTER_AGENTS_DIR`, `$ROUTER_PLUGIN_OVERRIDES_DIR`. (#157, PR #169)
+
+- **`claude-wayfinder health` subcommands** — `drill` (event
+  filtering: `--metric {bypass,advisory-override,recent-drift}`),
+  `top` (aggregation: `--kind {agents,skills}`), and
+  `catalog-status` (catalog mtime age). Plain-text output by
+  default, `--json` opt-in for tests and programmatic consumers.
+  New `_parse_window("30d" | "Nh")` helper for window-range flags.
+  Replaces four inline Python heredocs and a dual-shell invocation
+  block previously embedded in `skills/router-health/SKILL.md`,
+  making the queries lintable, type-checkable, and unit-tested
+  instead of opaque markdown. 28 new unit tests. No behavioral
+  regression in `--ci` / `--report` modes. (#170, PR #171)
+
+### Fixed
+
+- **Colocated agent sidecars now validate trigger data through
+  `validate_entry`** before merging onto the existing entry —
+  mirroring the Pass 3b precedent for plugin-agent sidecars
+  (#142). Sidecars carrying out-of-ladder weights, duplicate
+  keyword terms, deprecated trigger fields, or whitespace in
+  terms are now corrected (with a warning) instead of silently
+  passing through. Walker docstring updated to reflect the new
+  inline-validation reality. (#151, PR #172)
+
+- **Colocated agent sidecars now write `routable: true`
+  defensively** on the matched entry, so an owned agent with
+  `routable: false` in its frontmatter plus a colocated
+  `*.triggers.yml` no longer stays silently inert to routing.
+  Mirrors the L2469 precedent in Pass 3b. (#153, PR #172)
+
 ## [0.6.0] — 2026-05-20
 
 Minor release. Ships two net-new user surfaces — the
