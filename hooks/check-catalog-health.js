@@ -24,6 +24,29 @@ const { readSetupState, getCurrentVersion, getVenvPython } = require("./lib/setu
 // If VALID, run a one-per-session import probe; if that fails, delete the flag
 // so the next session sees MISSING and prompts the user to re-run setup.
 
+/**
+ * Emit a SessionStart banner to both the model's context (stdout JSON
+ * envelope) and the user's terminal (stderr plain text).
+ *
+ * The additionalContext payload in the stdout envelope only reaches the
+ * model's context; the user sees nothing in the terminal (#185). Writing
+ * the same text to stderr surfaces the banner in the Claude Code terminal
+ * output alongside the session startup messages.
+ *
+ * @param {string} text - the banner text to emit
+ */
+function emitBoth(text) {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: text,
+      },
+    })
+  );
+  process.stderr.write(text + "\n");
+}
+
 (function checkSetupState() {
   const currentVersion = getCurrentVersion();
   const setupState = readSetupState(currentVersion);
@@ -38,14 +61,7 @@ const { readSetupState, getCurrentVersion, getVenvPython } = require("./lib/setu
     } else if (setupState.status === "BROKEN") {
       banner = `⚠ claude-wayfinder venv at ${setupState.flag.venv_path} is unreachable or corrupt. Run /setup-wayfinder.`;
     }
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "SessionStart",
-          additionalContext: banner,
-        },
-      })
-    );
+    emitBoth(banner);
     process.exit(0);
   }
 
@@ -65,14 +81,7 @@ const { readSetupState, getCurrentVersion, getVenvPython } = require("./lib/setu
     } catch (err) {
       // Malformed JSON in the test seam — fall through to the default probe path
       // rather than crashing, so the hook remains usable even with a bad override.
-      process.stdout.write(
-        JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: "SessionStart",
-            additionalContext: `⚠ claude-wayfinder internal error: CLAUDE_WAYFINDER_PROBE_CMD malformed JSON — ${err.message}. Falling back to default probe.`,
-          },
-        })
-      );
+      emitBoth(`⚠ claude-wayfinder internal error: CLAUDE_WAYFINDER_PROBE_CMD malformed JSON — ${err.message}. Falling back to default probe.`);
       probeProg = null; // sentinel: skip the CLAUDE_WAYFINDER_PROBE_CMD branch
     }
     if (probeProg !== null) {
@@ -98,14 +107,7 @@ const { readSetupState, getCurrentVersion, getVenvPython } = require("./lib/setu
       // best-effort cleanup; ignore
     }
     const banner = `⚠ claude-wayfinder venv at ${setupState.flag.venv_path} fails import probe (likely corrupt). Run /setup-wayfinder to rebuild.`;
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "SessionStart",
-          additionalContext: banner,
-        },
-      })
-    );
+    emitBoth(banner);
     process.exit(0);
   }
 
@@ -117,26 +119,12 @@ const DEFAULT_PATH = path.join(claudeHome, "state", "dispatch-catalog.json");
 
 function emitBanner(detail) {
   const text = `[CATALOG ERROR] Dispatch catalog is degraded: ${detail}. Until restored, routing falls back to LLM judgment per the legacy prose-policy.`;
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "SessionStart",
-        additionalContext: text,
-      },
-    })
-  );
+  emitBoth(text);
 }
 
 function emitStaleBanner(newerFile) {
   const text = `[CATALOG STALE] Dispatch catalog is out of date — at least one source file is newer: ${newerFile}. Re-run the catalog generator to refresh routing.`;
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "SessionStart",
-        additionalContext: text,
-      },
-    })
-  );
+  emitBoth(text);
 }
 
 // Walk a directory recursively, yielding file paths that match a predicate.

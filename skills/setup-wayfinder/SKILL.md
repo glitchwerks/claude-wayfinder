@@ -39,6 +39,20 @@ if [ -n "$CLAUDE_PLUGIN_DATA" ]; then
 else
   PLUGIN_DATA="$HOME/.claude/plugins/data/$EXPECTED_SLUG"
 fi
+
+# Normalize Git-Bash POSIX paths (/c/Users/...) to native Windows form (C:/Users/...)
+# so the venv_path stored in setup-state.json (Step 7) is readable by Node's
+# fs.existsSync on Windows. Git Bash expands $HOME to /c/Users/... rather than
+# C:/Users/..., which Node does not recognise as a valid Windows path (#186).
+# On non-Windows or paths that don't match the /X/... pattern, this is a no-op.
+case "$PLUGIN_DATA" in
+  /[a-zA-Z]/*)
+    drive=$(printf '%s' "$PLUGIN_DATA" | cut -c2 | tr '[:lower:]' '[:upper:]')
+    rest=$(printf '%s' "$PLUGIN_DATA" | cut -c3-)
+    PLUGIN_DATA="${drive}:${rest}"
+    ;;
+esac
+
 mkdir -p "$PLUGIN_DATA"
 echo "$PLUGIN_DATA"
 ```
