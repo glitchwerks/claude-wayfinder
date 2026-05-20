@@ -8,10 +8,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.7.1] — 2026-05-20
 
-Docs-only patch release. Fixes a Windows footgun in the `dispatch`
-SKILL.md where bare `python` resolved to a global interpreter that
-lacked `claude-wayfinder`, producing `No module named claude_wayfinder`
-at runtime. No matcher, schema, or behavioral changes.
+Docs-only patch release. Fixes a Windows footgun in the dispatch
+skill body, closes documentation gaps that obscured AND-group triggers
+from authoring-facing agents, and codifies the release process in a
+tracked runbook. No matcher, schema, or behavioral changes.
 
 ### Fixed
 
@@ -22,6 +22,25 @@ at runtime. No matcher, schema, or behavioral changes.
   `skills/router-health/SKILL.md` since v0.7.0. Bare `python` remains
   documented as a shorthand that only works when the venv is activated
   or first on `$PATH`. (#174, PR #175)
+
+### Documentation
+
+- **`skills/dispatch-authoring/SKILL.md` and `docs/schema.md` now
+  document `keyword_groups`** (AND-group conjunctive triggers, shipped
+  v0.6.0 per #135). Adds the trigger sub-field to the field tables in
+  both surfaces, plus a worked scoring-math example, two field-rule
+  entries (≥ 2 slots per group; weight ladder), and a footgun for the
+  "flat keywords over-fire when terms only make sense together"
+  pattern. `docs/design/trigger-schema.md` § 2i was already correct
+  and is unchanged. (#179, PR #180)
+
+- **`docs/release-process.md` codifies the release runbook** —
+  pre-release checklist, classification table, 12-step sequence,
+  7 footguns, rollback procedure, and quick reference card. Modeled
+  after `claude-prospector`'s equivalent doc, adapted for wayfinder's
+  6-job CI shape, `skill-smoke-ubuntu` runtime gate, the
+  currently-manual GH Release step (tracked in #131), and the
+  `/setup-wayfinder` re-run requirement. (#178, PR #181)
 
 ## [0.7.0] — 2026-05-20
 
