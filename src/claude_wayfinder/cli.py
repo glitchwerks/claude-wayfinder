@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import claude_wayfinder._health as _health_mod
 import claude_wayfinder.audit_catalog as _audit_mod
 import claude_wayfinder.build_catalog as _build_catalog_mod
 from claude_wayfinder._dispatch import run_dispatch
@@ -291,6 +292,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _audit_mod.add_audit_catalog_args(audit_parser)
 
+    # --- health subcommand ---
+    # ``_health.main()`` owns its own argparse surface (--ci, --report, and
+    # several path flags).  We register a stub subparser with add_help=False
+    # so the command appears in top-level --help, then pass all remaining
+    # argv through to ``_health.main()`` unchanged.
+    sub.add_parser(
+        "health",
+        add_help=False,
+        help="Router health report (CI invariants + runtime telemetry).",
+    )
+
     return parser
 
 
@@ -303,6 +315,14 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         Exit code: 0 on success, non-zero on error.
     """
+    # Short-circuit for the ``health`` subcommand before running the top-level
+    # parser.  ``_health.main()`` owns its own argparse surface and must
+    # receive all flags that follow "health" unmodified.  Letting the top-level
+    # parser see those flags would cause it to reject them as unknown options.
+    effective_argv: list[str] = sys.argv[1:] if argv is None else list(argv)
+    if effective_argv and effective_argv[0] == "health":
+        return _health_mod.main(effective_argv[1:])
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
