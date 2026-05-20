@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-wayfinder"
-version = "0.5.0"
+version = "0.6.0"
 description = "Helps Claude make deterministic, auditable choices about which agent and skills to use for a given task — replacing prose-scanning agent/skill selection with a typed scoring kernel."
 readme = "README.md"
 license = { text = "MIT" }

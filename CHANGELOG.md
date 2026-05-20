@@ -6,6 +6,95 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-20
+
+Minor release. Ships two net-new user surfaces — the
+**`audit-catalog`** static-analysis CLI subcommand and the bundled
+**`claude-wayfinder:dispatch-authoring`** knowledge skill — plus the
+**AND-group** conjunctive-triggers matcher feature, telemetry
+enrichment v2 (bypass-cause taxonomy + analyzer), and assorted
+hooks/tooling. No breaking changes.
+
+### Added
+
+- **`audit-catalog` CLI subcommand** — `python -m claude_wayfinder
+  audit-catalog` runs catalog-wide static analysis. 12 rules across
+  three severity tiers (3 BLOCKING: `weight-not-in-ladder`,
+  `whitespace-in-term`, `duplicate-keyword-term` — 7 CONCERN:
+  `path-glob-footgun`, `tool-name-case-error`,
+  `one-dimensional-triggers`, `unreachable-routable`,
+  `conflict-pair`, `excludes-overlap-own-keywords`,
+  `source-routable-mismatch` — 2 NIT: `empty-applicable-agents`,
+  `duplicate-trigger-set`). Flags: `--catalog`, `--json`,
+  `--severity {blocking|concern|nit}`, `--target <substring>`.
+  Exit-code contract: 0/1/2/3 = none/NIT/CONCERN/BLOCKING, computed
+  from the filtered finding set. `conflict-pair` uses the corrected
+  single-sided-asymmetric discriminator rule (disjoint non-empty
+  globs still tie on no-path prompts). Companion long-form guide at
+  `docs/dispatch-authoring-guide.md`. (#156, PR #164)
+
+- **`claude-wayfinder:dispatch-authoring` bundled skill** —
+  matcher-aware authoring and troubleshooting knowledge for trigger
+  frontmatter and sidecars, loaded by any agent on `/dispatch-authoring`
+  or authoring/troubleshooting keywords. 10 sections covering the
+  schema, seven-decision ladder, scoring math, weight ladder
+  `{0.25, 0.5, 1.0}`, field rules, footguns (including the clamping
+  ceiling and conflict-pair discriminator semantics), authoring +
+  tuning + troubleshooting workflows, and the audit-catalog CLI
+  pointer. (#156, PR #164; renamed from `frontmatter` in PR #166
+  closing #165 — original name was too narrow.)
+
+- **AND-group conjunctive triggers** — new matcher primitive that
+  scores only when *all* member terms match the input, not any.
+  Schema-additive (`keyword_groups: [{terms: [...], weight: ...}]`),
+  catalog builder + match scorer updated, replay test suite covers
+  scoring edges. Lets agents narrow their reach to specific
+  multi-token phrases without diluting the keyword pool. (#135)
+
+- **Telemetry enrichment v2 — bypass-cause taxonomy** — new
+  `hooks/lib/bypass-taxonomy.js` library and
+  `hooks/check-agent-dispatch-pairing.js` hook attribute each
+  router bypass to a structured cause (`missing_dispatch_pair`,
+  `advisory_override`, `self_handle_unaided`, etc.) recorded in
+  `~/.claude/state/dispatch-log.jsonl`. Companion analyzer
+  `scripts/analyze-drift-causes.py` computes attribution
+  histograms over a date range. Postmortem of the v1 attempt
+  documented in `docs/superpowers/postmortems/telemetry-enrichment-v1/`.
+  (#143, PRs #155, #163)
+
+- **`docs/design/trigger-schema.md`** — durable design-rationale doc
+  for the trigger field set, referenced from the dispatch-authoring
+  skill and the new audit-catalog guide. (#156)
+
+### Fixed
+
+- `load_catalog()` no longer raises `ValueError("Catalog contains
+  zero entries.")` on `{"entries": []}`. Empty catalogs are a valid
+  degraded state (fresh checkout pre-build, #506 all-entries-dropped
+  path); callers like `audit-catalog` now operate on them without a
+  load-time crash. (#156)
+
+- `audit-catalog` reconfigures stdout/stderr to UTF-8 with
+  replacement on entry. Windows default cp1252 stdout previously
+  crashed `UnicodeEncodeError` on the `↔` glyph in conflict-pair
+  entry labels. (#156, fix bundled in PR #164)
+
+### Maintenance
+
+- Plan files for `#135` and `#156` deleted after their parent issues
+  closed, per the CLAUDE.md plan-file lifecycle rule. Design
+  rationale preserved in PR bodies and commit messages. (#162, #166)
+
+### Known follow-ups (non-blocking)
+
+- `empty-applicable-agents` rule fires on every skill without an
+  explicit `applicable_agents: ["*"]`. Rule is correct per spec but
+  noisy in practice; candidate for either a rule refinement (require
+  the field only on plugin skills) or a catalog-wide convention
+  shift toward explicit `["*"]`.
+- Slash command `/dispatch-authoring` is long; `/da` or similar may
+  be worth picking in a follow-up. No issue yet.
+
 ## [0.5.0] — 2026-05-19
 
 Minor release. Adds **sidecar trigger overrides** for all three agent
