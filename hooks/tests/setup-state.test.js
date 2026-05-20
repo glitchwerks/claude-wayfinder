@@ -7,7 +7,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
 
-const { readSetupState, getVenvPython, getCurrentVersion, _computePluginDataDir } =
+const { readSetupState, getVenvPython, getCurrentVersion, _computePluginDataDir, normalizeVenvPath } =
   require("../lib/setup-state.js");
 
 /**
@@ -247,3 +247,93 @@ test("_computePluginDataDir computes deterministic path from plugin ID", () => {
     if (restore !== undefined) process.env.CLAUDE_PLUGIN_DATA = restore;
   }
 });
+
+// ─── normalizeVenvPath ───────────────────────────────────────────────────────
+
+test(
+  "normalizeVenvPath converts /c/foo to C:/foo on Windows",
+  { skip: process.platform !== "win32" },
+  () => {
+    assert.equal(normalizeVenvPath("/c/foo"), "C:/foo");
+  }
+);
+
+test(
+  "normalizeVenvPath converts /c/Users/chris/.claude/... to C:/Users/... on Windows",
+  { skip: process.platform !== "win32" },
+  () => {
+    assert.equal(
+      normalizeVenvPath("/c/Users/chris/.claude/plugins/data/claude-wayfinder-glitchwerks/venv"),
+      "C:/Users/chris/.claude/plugins/data/claude-wayfinder-glitchwerks/venv"
+    );
+  }
+);
+
+test(
+  "normalizeVenvPath is idempotent for already-native Windows paths",
+  { skip: process.platform !== "win32" },
+  () => {
+    assert.equal(normalizeVenvPath("C:/Users/chris/venv"), "C:/Users/chris/venv");
+  }
+);
+
+test(
+  "normalizeVenvPath does not rewrite single-component /foo path (no drive letter pattern)",
+  { skip: process.platform !== "win32" },
+  () => {
+    // /foo has no second slash immediately after a single letter → not a POSIX drive path
+    assert.equal(normalizeVenvPath("/foo"), "/foo");
+  }
+);
+
+test(
+  "normalizeVenvPath returns non-string input unchanged",
+  { skip: process.platform !== "win32" },
+  () => {
+    assert.equal(normalizeVenvPath(null), null);
+    assert.equal(normalizeVenvPath(undefined), undefined);
+    assert.equal(normalizeVenvPath(42), 42);
+  }
+);
+
+test(
+  "normalizeVenvPath is a no-op on POSIX",
+  { skip: process.platform === "win32" },
+  () => {
+    assert.equal(normalizeVenvPath("/c/foo"), "/c/foo");
+  }
+);
+
+// ─── readSetupState with legacy POSIX /c/ venv_path (regression #186) ───────
+
+test(
+  "readSetupState classifies legacy POSIX /c/ venv_path as VALID on Windows",
+  { skip: process.platform !== "win32" },
+  () => {
+    // Simulate a flag written by Git Bash where $HOME was /c/Users/...
+    // The venv_path stored is in POSIX form; the actual venv lives at C:/...
+    withTempPluginData((dir) => {
+      const venvDir = path.join(dir, "venv");
+      plantVenvPython(venvDir);
+
+      // venvDir is a real Windows path; construct its POSIX-style /X/... equivalent.
+      // e.g. "C:\Users\...\venv" → "/c/Users/.../venv"
+      const driveLetter = venvDir[0].toLowerCase(); // e.g. "c"
+      const rest = venvDir.slice(2).replace(/\\/g, "/"); // strip "C:" and normalize slashes
+      const posixVenvPath = `/${driveLetter}${rest}`;
+
+      fs.writeFileSync(
+        path.join(dir, "setup-state.json"),
+        JSON.stringify({
+          version: "0.4.0",
+          venv_path: posixVenvPath, // <-- POSIX form, as Git Bash would write
+          interpreter: "python",
+          installed_at: "2026-05-20T00:00:00Z",
+        })
+      );
+
+      const result = readSetupState("0.4.0");
+      assert.equal(result.status, "VALID", `Expected VALID, got ${result.status}`);
+    });
+  }
+);

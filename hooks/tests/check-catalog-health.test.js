@@ -71,7 +71,7 @@ function runHook(catalogPath, claudeHome) {
   }
   const r = spawnSync(process.execPath, [HOOK], { env, input: "{}", encoding: "utf8" });
   fs.rmSync(pluginDataDir, { recursive: true, force: true });
-  return { stdout: r.stdout, status: r.status };
+  return { stdout: r.stdout, stderr: r.stderr, status: r.status };
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +328,67 @@ test("check-catalog-health deletes flag and emits BROKEN banner when import prob
     assert.match(result.stdout, /fails import probe.*\/setup-wayfinder/s);
     // Flag should have been deleted on probe failure.
     assert.ok(!fs.existsSync(flagPath), "flag file should have been deleted on probe failure");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Issue #185 — banners must also surface to stderr
+// ---------------------------------------------------------------------------
+
+test("emits banner to stderr when catalog file is missing", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cat-"));
+  const out = runHook(path.join(tmp, "absent.json"));
+  assert.ok(out.stderr && out.stderr.length > 0, "stderr should be non-empty for missing catalog");
+  assert.match(out.stderr, /\[CATALOG ERROR\]/);
+});
+
+test("emits banner to stderr when catalog has zero entries", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cat-"));
+  const f = path.join(tmp, "empty.json");
+  fs.writeFileSync(f, JSON.stringify({ schema_version: 1, entries: [] }));
+  const out = runHook(f);
+  assert.match(out.stderr, /\[CATALOG ERROR\]/);
+});
+
+test("emits [CATALOG STALE] banner to stderr when source newer than catalog", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cat-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "claude-home-"));
+  makeFakeClaudeHome(home);
+
+  const catalogFile = path.join(tmp, "catalog.json");
+  fs.writeFileSync(
+    catalogFile,
+    JSON.stringify({ schema_version: 1, entries: [{ name: "x", kind: "skill" }] })
+  );
+
+  const pastTime = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(catalogFile, pastTime, pastTime);
+
+  const skillFile = path.join(home, "skills", "example", "SKILL.md");
+  fs.writeFileSync(skillFile, "# newer skill");
+
+  const out = runHook(catalogFile, home);
+  assert.ok(out.stderr && out.stderr.length > 0, "stderr should be non-empty for stale catalog");
+  assert.match(out.stderr, /\[CATALOG STALE\]/);
+});
+
+test("stderr matches additionalContext for catalog-missing banner", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cat-"));
+  const out = runHook(path.join(tmp, "absent.json"));
+  const parsed = JSON.parse(out.stdout);
+  const bannerText = parsed.hookSpecificOutput.additionalContext;
+  // stderr should contain the same text that's in additionalContext
+  assert.ok(out.stderr.includes(bannerText), "stderr should contain the full banner text");
+});
+
+test("setup-state MISSING banner surfaces to stderr", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wayfinder-hooktest-"));
+  try {
+    const result = runHookWithPluginData({ pluginData: tmp });
+    assert.ok(result.stderr && result.stderr.length > 0, "stderr should be non-empty for MISSING");
+    assert.match(result.stderr, /requires setup/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

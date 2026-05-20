@@ -8,6 +8,28 @@ const path = require("node:path");
 const os = require("node:os");
 
 /**
+ * Normalize a Git-Bash POSIX venv path to its native Windows form.
+ *
+ * Git Bash on Windows expands $HOME to /c/Users/... instead of
+ * C:/Users/..., so setup-state.json flags written during a Git-Bash
+ * session store venv_path in POSIX form. Node's fs.existsSync does not
+ * recognize the /c/ prefix on Windows and returns false, causing
+ * readSetupState to misclassify a valid venv as BROKEN (#186).
+ *
+ * This function rewrites "/c/..." → "C:/..." on Windows only. It is
+ * a no-op on POSIX systems and on paths that don't match the pattern.
+ *
+ * @param {unknown} p - the raw venv_path value from the flag file
+ * @returns {unknown} normalized path string, or the original value unchanged
+ */
+function normalizeVenvPath(p) {
+  if (process.platform !== "win32" || typeof p !== "string") return p;
+  const m = p.match(/^\/([a-zA-Z])\/(.*)$/);
+  if (!m) return p;
+  return `${m[1].toUpperCase()}:/${m[2]}`;
+}
+
+/**
  * Read and classify the setup-state flag.
  * @param {string} currentVersion - the plugin version from pyproject.toml
  * @returns {{status: "VALID"|"MISSING"|"STALE"|"BROKEN", flag?: object}}
@@ -47,7 +69,11 @@ function readSetupState(currentVersion) {
   if (flag.version !== currentVersion) {
     return { status: "STALE", flag };
   }
-  const venvPython = getVenvPython(flag.venv_path);
+  // Normalize POSIX-style /c/... paths written by Git Bash on Windows (#186).
+  // Pass the normalized form only into getVenvPython — do not mutate flag.venv_path
+  // so downstream callers and re-runs of /setup-wayfinder remain unaffected.
+  const normalizedVenvPath = normalizeVenvPath(flag.venv_path);
+  const venvPython = getVenvPython(normalizedVenvPath);
   if (!fs.existsSync(venvPython)) {
     return { status: "BROKEN", flag };
   }
@@ -125,4 +151,4 @@ function getPluginRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
-module.exports = { readSetupState, getVenvPython, getCurrentVersion, _computePluginDataDir };
+module.exports = { readSetupState, getVenvPython, getCurrentVersion, _computePluginDataDir, normalizeVenvPath };
