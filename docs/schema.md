@@ -59,7 +59,7 @@ The `triggers` field is an object whose sub-fields are all optional and default 
 | `agent_mentions` | `array[string]` | Agent names whose explicit mention short-circuits to score `1.0`. |
 | `path_globs` | `array[string]` | `fnmatch`-style globs matched against `file_paths`. Each matched glob contributes `0.4` to the score. |
 | `keywords` | `array[{term: string, weight: number}]` | Weighted keyword terms. Valid weights: `0.25`, `0.5`, `1.0`. Each matched term contributes `0.5 × weight`. |
-| `keyword_groups` | `array[{slots: array[{name: string, terms: array[string]}], weight: number}]` | **AND-group conjunctive triggers** (added v0.6.0 per #135). A group fires only when all of its slots match — each slot must have ≥ 1 of its `terms` present in the input keywords. On match the group contributes `0.5 × weight` (same multiplier as flat `keywords`). Requires ≥ 2 slots per group. See [trigger-schema.md § 2i](design/trigger-schema.md). |
+| `keyword_groups` | `array[{slots: array[{name: string, terms: array[string]}], weight: number}]` | **AND-group conjunctive triggers** (added v0.6.0 per #135). A group fires only when all of its slots match — each slot must have ≥ 1 of its `terms` present in the input keywords. On match the group contributes `1.0 × weight` (via `_GROUP_MULTIPLIER`, deliberately distinct from the `0.5` `_KEYWORD_MULTIPLIER` so a satisfied weight-1.0 group can solo-decide `delegate`). Requires ≥ 2 slots per group. See [trigger-schema.md § 2i](design/trigger-schema.md). |
 | `tool_mentions` | `array[string]` | Tool names. Each match contributes `0.5` to the score. |
 | `excludes` | `array[string]` | Terms that hard-zero the entry's score when present in the task keywords. Matches `features.keywords` only. |
 
