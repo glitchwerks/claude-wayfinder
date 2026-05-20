@@ -58,8 +58,6 @@ substitute the absolute interpreter path:
 `${CLAUDE_PLUGIN_DATA}/venv/bin/python` (POSIX) or
 `${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe` (Windows).
 
-Bash invocation:
-
 ```bash
 python -m claude_wayfinder health --report \
   --drift-log    "${ROUTER_DRIFT_LOG:-$HOME/.claude/state/router-drift.jsonl}" \
@@ -72,16 +70,10 @@ python -m claude_wayfinder health --report \
 `--catalog-path` is omitted intentionally — the script falls back to
 `$DISPATCH_CATALOG_PATH` when no flag is passed.
 
-PowerShell invocation:
-
-```powershell
-python -m claude_wayfinder health --report `
-  --drift-log    "$(if ($env:ROUTER_DRIFT_LOG) { $env:ROUTER_DRIFT_LOG } else { "$env:USERPROFILE\.claude\state\router-drift.jsonl" })" `
-  --dispatch-log "$(if ($env:DISPATCH_LOG) { $env:DISPATCH_LOG } else { "$env:USERPROFILE\.claude\state\dispatch-log.jsonl" })" `
-  --skills-dir   "$(if ($env:ROUTER_SKILLS_DIR) { $env:ROUTER_SKILLS_DIR } else { "$env:USERPROFILE\.claude\skills" })" `
-  --agents-dir   "$(if ($env:ROUTER_AGENTS_DIR) { $env:ROUTER_AGENTS_DIR } else { "$env:USERPROFILE\.claude\agents" })" `
-  --plugin-overrides-dir "$(if ($env:ROUTER_PLUGIN_OVERRIDES_DIR) { $env:ROUTER_PLUGIN_OVERRIDES_DIR } else { "$env:USERPROFILE\.claude\triggers" })"
-```
+This single command works in both Bash and PowerShell when the env-var
+defaults shown are pre-resolved by the calling shell. PowerShell users who
+need inline defaults should expand each variable before calling:
+`$env:ROUTER_DRIFT_LOG ?? "$env:USERPROFILE\.claude\state\router-drift.jsonl"`.
 
 If `--brief` was passed by the user, capture the output but do not print it
 verbatim — only use it as input to Step 2.
@@ -129,59 +121,30 @@ crash on type-tagged events.
 
 ### Drill-down playbook per FAIL'ing metric
 
-For **Bypass rate** FAIL or warning, count bypass events grouped by ISO
-date (last 30 days):
+For **Bypass rate** FAIL or warning, use the `drill` subcommand:
 
 ```bash
-python -c "
-import json, os, collections, datetime as dt
-path = os.environ.get('ROUTER_DRIFT_LOG') or os.path.expanduser('~/.claude/state/router-drift.jsonl')
-cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
-by_day = collections.Counter()
-by_session = collections.Counter()
-try:
-    with open(path) as f:
-        for line in f:
-            e = json.loads(line)
-            kind = e.get('category') or e.get('type')
-            if kind != 'bypass': continue
-            ts = dt.datetime.fromisoformat(e['ts'].replace('Z','+00:00'))
-            if ts < cutoff: continue
-            by_day[ts.date().isoformat()] += 1
-            by_session[e['session_id']] += 1
-except FileNotFoundError:
-    print(f'No drift log at {path}'); raise SystemExit
-print('Bypass events last 30d:')
-for d, c in sorted(by_day.items())[-10:]: print(f'  {d}: {c}')
-print('Top bypassing sessions:')
-for s, c in by_session.most_common(5): print(f'  {s[:8]}...: {c}')
-"
+python -m claude_wayfinder health drill --metric bypass \
+  --drift-log "${ROUTER_DRIFT_LOG:-$HOME/.claude/state/router-drift.jsonl}" \
+  --window 30d
 ```
 
-Report the daily distribution + top-bypassing sessions. If 5+ events come
-from the same session, that session is the likely outlier — flag it.
-Drift events do NOT carry `subagent_type`; to identify which agent was
-bypassed, correlate by `session_id` with `dispatch-log.jsonl`.
+Report the daily distribution and top-bypassing sessions from the output.
+If 5+ events come from the same session, that session is the likely outlier —
+flag it. Drift events do NOT carry `subagent_type`; to identify which agent
+was bypassed, correlate by `session_id` with `dispatch-log.jsonl`.
 
-For **Advisory override rate** FAIL or warning, filter by `category ==
-"advisory_override"`, count by `session_id`, and report the top 3.
-Correlate with `dispatch-log.jsonl` to see which agent the router chose
-instead of the matcher's advice.
+For **Advisory override rate** FAIL or warning, use the `drill` subcommand:
 
 ```bash
-python -c "
-import json, os, collections
-path = os.environ.get('ROUTER_DRIFT_LOG') or os.path.expanduser('~/.claude/state/router-drift.jsonl')
-cnt = collections.Counter()
-with open(path) as f:
-    for line in f:
-        e = json.loads(line)
-        kind = e.get('category') or e.get('type')
-        if kind == 'advisory_override':
-            cnt[e['session_id']] += 1
-for s, c in cnt.most_common(5): print(f'{s[:8]}...: {c}')
-"
+python -m claude_wayfinder health drill --metric advisory-override \
+  --drift-log "${ROUTER_DRIFT_LOG:-$HOME/.claude/state/router-drift.jsonl}" \
+  --window 30d
 ```
+
+Report the top-3 overriding sessions from the output. Correlate with
+`dispatch-log.jsonl` to see which agent the router chose instead of the
+matcher's advice.
 
 For **Dispatch invocation rate** FAIL or warning, this is the rate at
 which the router invoked the dispatch skill before delegating. Low rate
@@ -203,23 +166,12 @@ embedding, unsorted set serialization.
 
 ### Recent drift events list
 
-After the per-metric drill-down, surface the **5 most recent drift
-events** with timestamp, category, and session-id-prefix:
+After the per-metric drill-down, surface the **5 most recent drift events**:
 
 ```bash
-python -c "
-import json, os
-path = os.environ.get('ROUTER_DRIFT_LOG') or os.path.expanduser('~/.claude/state/router-drift.jsonl')
-try:
-    with open(path) as f:
-        lines = f.readlines()[-5:]
-except FileNotFoundError:
-    print('No drift log — hook may not be firing.'); raise SystemExit
-for line in lines:
-    e = json.loads(line)
-    kind = e.get('category') or e.get('type')
-    print(f\"  {e['ts']}  {kind:30s}  {e['session_id'][:8]}...\")
-"
+python -m claude_wayfinder health drill --metric recent-drift \
+  --drift-log "${ROUTER_DRIFT_LOG:-$HOME/.claude/state/router-drift.jsonl}" \
+  --limit 5
 ```
 
 If there are **zero** recent events, say so explicitly — that is a
@@ -233,39 +185,25 @@ counts. Extend it with:
 ### Top 3 dispatched agents (last 30 days)
 
 ```bash
-python -c "
-import json, os, collections, datetime as dt
-path = os.environ.get('DISPATCH_LOG') or os.path.expanduser('~/.claude/state/dispatch-log.jsonl')
-cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
-total = 0
-cnt = collections.Counter()
-try:
-    with open(path) as f:
-        for line in f:
-            e = json.loads(line)
-            if e.get('type') != 'agent_dispatch': continue
-            ts = dt.datetime.fromisoformat(e['ts'].replace('Z','+00:00'))
-            if ts < cutoff: continue
-            cnt[e['agent']] += 1
-            total += 1
-except FileNotFoundError:
-    print(f'No dispatch log at {path}'); raise SystemExit
-for a, c in cnt.most_common(3):
-    pct = 100.0 * c / total if total else 0.0
-    print(f'  {a:24s} {c:4d}  ({pct:.1f}%)')
-print(f'  total dispatches: {total}')
-"
+python -m claude_wayfinder health top --kind agents \
+  --dispatch-log "${DISPATCH_LOG:-$HOME/.claude/state/dispatch-log.jsonl}" \
+  --window 30d --limit 3
 ```
 
-Report as a small table or bulleted list. Flag if any one agent dominates
-above 60% — that may indicate the router is over-delegating to a single
-specialist, or that the user's workload is genuinely concentrated.
+Flag if any one agent dominates above 60% — that may indicate the router
+is over-delegating to a single specialist, or that the user's workload is
+genuinely concentrated.
 
 ### Top 3 most-invoked skills (last 30 days)
 
-Same shape as agents but counting `skill_invocation` events grouped by
-`skill`. The top skill being `dispatch` itself is expected; if any other
-skill dominates dispatch's count, that is notable.
+```bash
+python -m claude_wayfinder health top --kind skills \
+  --dispatch-log "${DISPATCH_LOG:-$HOME/.claude/state/dispatch-log.jsonl}" \
+  --window 30d --limit 3
+```
+
+The top skill being `dispatch` itself is expected; if any other skill
+dominates dispatch's count, that is notable.
 
 ### `self_handle_unaided` rate (catalog coverage signal)
 
@@ -278,6 +216,16 @@ For now, since `dispatch-log.jsonl` does not directly tag
 `agent_dispatch` events with `agent == "general-purpose"` and an empty
 `skills_in_prompt` array — those are the closest live proxy. Caveat the
 metric explicitly when reporting it.
+
+### Catalog entry counts
+
+```bash
+python -m claude_wayfinder health catalog-status
+```
+
+This reports plugin skill / agent entry counts and routable-agent count.
+Flag any unexpected zeros (e.g. zero routable agents when plugin-override
+entries are expected in the catalog).
 
 ### Catalog freshness
 
@@ -326,6 +274,10 @@ The final response should look like this (markdown):
 ### `self_handle_unaided` rate (catalog coverage)
 
 <count + caveat>
+
+### Catalog entry counts
+
+<skills/agents/routable counts>
 
 ### Catalog freshness
 
