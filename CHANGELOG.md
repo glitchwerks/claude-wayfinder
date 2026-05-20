@@ -6,6 +6,29 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-05-20
+
+Docs-only patch release. Corrects the `keyword_groups` score multiplier
+in the authoring-facing docs added in v0.7.1 — they said `0.5 × weight`
+when the matcher actually uses `_GROUP_MULTIPLIER = 1.0`, deliberately
+distinct from `_KEYWORD_MULTIPLIER = 0.5` so a satisfied weight-1.0
+group can solo-decide `delegate`. No matcher, schema, or behavioral
+changes.
+
+### Fixed
+
+- **`keyword_groups` scoring multiplier corrected in
+  `skills/dispatch-authoring/SKILL.md` and `docs/schema.md`** — the
+  schema-fields tables, the § 3 scoring-math bullet, and the worked
+  example all now state `1.0 × weight` (matching `_GROUP_MULTIPLIER`
+  in `match.py:92`) instead of the `0.5 × weight` shipped in v0.7.1.
+  The "(same multiplier as flat keywords)" parenthetical is removed
+  everywhere — `_GROUP_MULTIPLIER` is deliberately distinct from
+  `_KEYWORD_MULTIPLIER`. The worked example's score column updates
+  from `+0.5` to `+1.0` per group fire, with a new paragraph
+  explaining the design intent. `docs/design/trigger-schema.md` § 2i
+  already had the correct multiplier and is unchanged. (#182)
+
 ## [0.7.1] — 2026-05-20
 
 Docs-only patch release. Fixes a Windows footgun in the dispatch

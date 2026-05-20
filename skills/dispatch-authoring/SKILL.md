@@ -67,7 +67,7 @@ discussion behind the sidecar approach see `docs/design/trigger-schema.md`.
 | `agent_mentions` | `triggers:` block | Agent names whose explicit mention in the prompt immediately short-circuits to score `1.0`. |
 | `path_globs` | `triggers:` block | `fnmatch`-style globs matched against the `file_paths` dimension of the input. Each matched glob adds `0.4` to the score. |
 | `keywords` | `triggers:` block | List of `{term, weight}` mappings. Each term found in the input keywords adds `0.5 × weight` to the score. |
-| `keyword_groups` | `triggers:` block | **AND-group conjunctive triggers** (added v0.6.0, #135). List of `{slots: [{name, terms: [...]}, ...], weight}` groups. A group fires only when **all** of its slots match — each slot must have ≥ 1 of its terms present in the input keywords. On match, the group adds `0.5 × weight` (same multiplier as flat keywords). Use when a routing decision should require co-occurrence of two or more terms (e.g. verb + noun) rather than either alone. |
+| `keyword_groups` | `triggers:` block | **AND-group conjunctive triggers** (added v0.6.0, #135). List of `{slots: [{name, terms: [...]}, ...], weight}` groups. A group fires only when **all** of its slots match — each slot must have ≥ 1 of its terms present in the input keywords. On match, the group adds `1.0 × weight` (via `_GROUP_MULTIPLIER`, distinct from the `0.5` `_KEYWORD_MULTIPLIER` so a satisfied weight-1.0 group can solo-decide `delegate`). Use when a routing decision should require co-occurrence of two or more terms (e.g. verb + noun) rather than either alone. |
 | `tool_mentions` | `triggers:` block | Tool names matched against the input `tool_mentions` dimension. Each match adds `0.5`. |
 | `excludes` | `triggers:` block | Terms that hard-zero the entry's score when found in the input keywords. |
 | `applicable_agents` | skill sidecar top-level | Hard allowlist of agent names that may receive this skill. `["*"]` means any agent. `[]` means no agent — the skill is dormant. |
@@ -167,9 +167,11 @@ calculated.
 - Per `keywords` match: `+0.5 × weight` (verified at
   `src/claude_wayfinder/match.py:84` — `_KEYWORD_MULTIPLIER = 0.5`;
   raised from 0.3 to fix single-keyword skills never attaching)
-- Per `keyword_groups` match: `+0.5 × weight` per group that fires
-  (a group fires only when **all** of its slots are satisfied; same
-  multiplier as flat keywords; #135 / v0.6.0)
+- Per `keyword_groups` match: `+1.0 × weight` per group that fires
+  (a group fires only when **all** of its slots are satisfied;
+  `_GROUP_MULTIPLIER = 1.0` is deliberately distinct from
+  `_KEYWORD_MULTIPLIER = 0.5` so a satisfied weight-1.0 group can
+  solo-decide `delegate`; #135 / v0.6.0)
 - Per `tool_mentions` match: `+0.5`
 
 The final additive score is **clamped to `1.0`** before being returned.
@@ -189,16 +191,25 @@ keyword_groups:
 
 | Prompt                              | verbs slot | nouns slot | Group fires? | Score from this group |
 | ----------------------------------- | :---------: | :---------: | :-----------: | --------------------: |
-| "open the issue tracker"            |     ✓       |     ✓       |     yes       |  `+0.5 × 1.0 = +0.5`  |
-| "create the issue body"             |     ✓       |     ✓       |     yes       |  `+0.5`               |
+| "open the issue tracker"            |     ✓       |     ✓       |     yes       |  `+1.0 × 1.0 = +1.0`  |
+| "create the issue body"             |     ✓       |     ✓       |     yes       |  `+1.0`               |
 | "open the file"                     |     ✓       |     ✗       |     no        |  `+0.0`               |
 | "tell me about issues"              |     ✗       |     ✓       |     no        |  `+0.0`               |
 
-The flat-`keywords` equivalent would score on either side firing alone —
-scoring `+0.5` on "open the file" and "tell me about issues" too, since
-each individual term contributes independently. The AND-group structurally
-requires co-occurrence, which is the right shape when the trigger only
-makes sense for the combined intent.
+A satisfied weight-`1.0` group contributes `1.0` to the entry — enough to
+clamp at the ceiling on its own and solo-decide `delegate` if the gap to
+the runner-up is ≥ `0.2`. That is the design intent of
+`_GROUP_MULTIPLIER = 1.0`: a group is a stronger signal than any single
+flat keyword (which maxes at `+0.5`) because the group already encodes
+co-occurrence — the matcher has more evidence that the prompt intends
+this entry, so the score reflects that.
+
+The flat-`keywords` equivalent of the same term lists would score on
+either side firing alone — scoring `+0.5 × weight` on "open the file" and
+"tell me about issues" too, since each individual term contributes
+independently. The AND-group structurally requires co-occurrence, which
+is the right shape when the trigger only makes sense for the combined
+intent.
 
 ### Worked example
 
