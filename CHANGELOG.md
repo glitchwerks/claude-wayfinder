@@ -6,6 +6,46 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-05-20
+
+Patch release fixing two SessionStart-hook bugs that affected every
+Git-Bash-on-Windows user installing the plugin. No matcher, catalog,
+or schema changes.
+
+### Fixed
+
+- **`/c/...` POSIX `venv_path` misclassified as BROKEN on Windows.** Git
+  Bash on Windows expands `$HOME` to `/c/Users/...`, which `setup-wayfinder`
+  was writing verbatim into `setup-state.json`'s `venv_path`. Node's
+  `fs.existsSync` does not recognise the `/c/` prefix on Windows, so the
+  SessionStart hook (`check-catalog-health.js`) classified every healthy
+  venv as BROKEN and emitted a misleading "venv unreachable or corrupt"
+  banner on every session. Fixed at both write time (Step 1 of
+  `skills/setup-wayfinder/SKILL.md` normalizes via a POSIX `case` block)
+  and read time (new `normalizeVenvPath` helper in `hooks/lib/setup-state.js`
+  rescues legacy flags without forcing `/setup-wayfinder` re-run). The
+  normalization is non-destructive on the in-memory flag, so re-running
+  `/setup-wayfinder` remains the canonical fix and downstream callers
+  continue to see the original `venv_path` value. (#186, #187)
+
+- **SessionStart banner never reached the user.** All 5 banner sites in
+  `hooks/check-catalog-health.js` emitted only via `hookSpecificOutput.additionalContext`,
+  which is injected into the model's context — not the terminal. New
+  `emitBoth(text)` helper centralizes the dual emit: stdout JSON envelope
+  (model) plus stderr line (user). Degraded venv / catalog state now
+  surfaces in the terminal at the same fidelity the model sees. (#185, #187)
+
+### Tests
+
+- `node --test hooks/tests/*.test.js` count rises from 27 to 39: 6 new
+  units for `normalizeVenvPath`, 1 regression for `readSetupState`
+  classifying a legacy `/c/` flag as VALID on Windows, and 5 stderr
+  surfacing assertions on degraded states. `runHook` helper extended to
+  return stderr.
+- Python test counts unchanged (479 pass, no integration-suite changes
+  needed — `tests/integration/setup_pipeline.py` uses `pathlib.Path`
+  which produces native Windows paths already).
+
 ## [0.7.2] — 2026-05-20
 
 Docs-only patch release. Corrects the `keyword_groups` score multiplier
