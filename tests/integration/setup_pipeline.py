@@ -200,9 +200,17 @@ def pip_install(venv_dir: Path, version: str) -> None:
         "CLAUDE_WAYFINDER_PIP_SPEC",
         f"claude-wayfinder=={version}",
     )
-    # shlex.split handles both plain package specs and path/editable forms
-    # (e.g. "/path/to/repo" or "-e /path/to/repo").
-    args = [str(venv_python), "-m", "pip", "install", *shlex.split(pip_spec)]
+    # shlex.split defaults to POSIX mode, which treats backslash as an escape
+    # character — so a Windows path like D:\a\repo gets mangled to D:arepo
+    # before pip sees it. posix=False preserves backslashes on Windows.
+    # The branch is on os.name (not sys.platform) per Python convention.
+    args = [
+        str(venv_python),
+        "-m",
+        "pip",
+        "install",
+        *shlex.split(pip_spec, posix=(os.name != "nt")),
+    ]
     try:
         result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=180)
     except subprocess.TimeoutExpired as e:

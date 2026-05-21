@@ -99,11 +99,15 @@ jobs:
         run: node --test hooks/tests/*.test.js
 
   # ---------------------------------------------------------------------------
-  # Skill smoke (Ubuntu)
+  # Skill smoke (ubuntu-latest + windows-latest matrix)
   # ---------------------------------------------------------------------------
-  skill-smoke-ubuntu:
-    name: Skill smoke (Ubuntu)
-    runs-on: ubuntu-latest
+  skill-smoke:
+    name: Skill smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     permissions:
       contents: read
     steps:
@@ -122,6 +126,23 @@ jobs:
         env:
           CLAUDE_WAYFINDER_PIP_SPEC: ${{ github.workspace }}
         run: uv run --no-sync pytest tests/integration/test_setup_skill.py -v
+
+  # ---------------------------------------------------------------------------
+  # Actionlint — validate workflow YAML
+  # ---------------------------------------------------------------------------
+  actionlint:
+    name: Actionlint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run actionlint
+        # verified 2026-05-21 via gh api repos/raven-actions/actionlint/git/refs/tags/v2.1.2
+        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8  # v2.1.2
+        with:
+          files: ".github/workflows/*.yml"
 
   # ---------------------------------------------------------------------------
   # Validate plugin manifest
