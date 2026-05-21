@@ -99,11 +99,15 @@ jobs:
         run: node --test hooks/tests/*.test.js
 
   # ---------------------------------------------------------------------------
-  # Skill smoke (Ubuntu)
+  # Skill smoke (ubuntu-latest + windows-latest matrix)
   # ---------------------------------------------------------------------------
-  skill-smoke-ubuntu:
-    name: Skill smoke (Ubuntu)
-    runs-on: ubuntu-latest
+  skill-smoke:
+    name: Skill smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     permissions:
       contents: read
     steps:
