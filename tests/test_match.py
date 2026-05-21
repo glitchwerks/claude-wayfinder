@@ -30,7 +30,10 @@ import claude_wayfinder.match as _match_mod
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MATCH_SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "match.py"
+
+# match.py is now a package (match/__init__.py); invoke via -m rather than
+# as a script path so tests continue to work after the package split.
+_MATCH_MODULE = ["claude_wayfinder.match"]
 
 PYTHON = sys.executable
 
@@ -128,7 +131,7 @@ def _run(
         env.update(extra_env)
 
     return subprocess.run(
-        [PYTHON, str(MATCH_SCRIPT)],
+        [PYTHON, "-m", *_MATCH_MODULE],
         input=json.dumps(stdin_obj),
         capture_output=True,
         text=True,
@@ -680,7 +683,7 @@ class TestCatalogDegradation:
         """Non-existent catalog file → exit code 2, banner on stderr."""
         missing = tmp_path / "nonexistent.json"
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps({"task_description": "implement something"}),
             capture_output=True,
             text=True,
@@ -695,7 +698,7 @@ class TestCatalogDegradation:
         bad_catalog = tmp_path / "bad.json"
         bad_catalog.write_text("{not valid json", encoding="utf-8")
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps({"task_description": "implement something"}),
             capture_output=True,
             text=True,
@@ -710,7 +713,7 @@ class TestCatalogDegradation:
         empty_catalog = tmp_path / "empty.json"
         empty_catalog.write_text(json.dumps({"schema_version": 1, "entries": []}), encoding="utf-8")
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps({"task_description": "implement something"}),
             capture_output=True,
             text=True,
@@ -724,7 +727,7 @@ class TestCatalogDegradation:
         """Banner must appear on stderr only, not on stdout."""
         missing = tmp_path / "nonexistent.json"
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps({"task_description": "implement something"}),
             capture_output=True,
             text=True,
@@ -802,7 +805,7 @@ class TestEnvVarOverrides:
         custom_path.write_text(json.dumps(catalog), encoding="utf-8")
 
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps(
                 {
                     "task_description": "implement the feature here",
@@ -851,7 +854,7 @@ class TestEnvVarOverrides:
         result = subprocess.run(
             [
                 PYTHON,
-                str(MATCH_SCRIPT),
+                "-m", *_MATCH_MODULE,
                 "--catalog-path",
                 str(flag_catalog_path),
             ],
@@ -1147,7 +1150,7 @@ class TestWorktreeCatalogParity:
         env = {**os.environ, "DISPATCH_CATALOG_PATH": str(catalog_file)}
 
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps(
                 {
                     "task_description": "implement the new feature",
@@ -1217,7 +1220,7 @@ class TestWorktreeCatalogParity:
         }
 
         result_main = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps(stdin_obj),
             capture_output=True,
             text=True,
@@ -1225,7 +1228,7 @@ class TestWorktreeCatalogParity:
             check=False,
         )
         result_wt = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps(stdin_obj),
             capture_output=True,
             text=True,
@@ -2218,7 +2221,7 @@ class TestIssue10FailLoudCatalogPath:
             if k not in {"DISPATCH_CATALOG_PATH", "CLAUDE_HOME"}
         }
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps({"task_description": "implement a feature"}),
             capture_output=True,
             text=True,
@@ -2245,7 +2248,7 @@ class TestIssue10FailLoudCatalogPath:
             if k not in {"DISPATCH_CATALOG_PATH", "CLAUDE_HOME"}
         }
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps({"task_description": "implement a feature"}),
             capture_output=True,
             text=True,
@@ -2291,7 +2294,7 @@ class TestIssue10FailLoudCatalogPath:
         clean_env["CLAUDE_HOME"] = str(tmp_path)
 
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps({"task_description": "implement a feature"}),
             capture_output=True,
             text=True,
@@ -2334,7 +2337,7 @@ class TestIssue10FailLoudCatalogPath:
         result = subprocess.run(
             [
                 PYTHON,
-                str(MATCH_SCRIPT),
+                "-m", *_MATCH_MODULE,
                 "--catalog-path",
                 str(catalog_file),
             ],
@@ -2387,7 +2390,7 @@ class TestIssue10FailLoudCatalogPath:
         clean_env["DISPATCH_CATALOG_PATH"] = str(catalog_file)
 
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps(
                 {
                     "task_description": "implement the feature",
@@ -2436,7 +2439,7 @@ class TestIssue10FailLoudCatalogPath:
         clean_env["DISPATCH_CATALOG_PATH"] = str(catalog_file)
 
         result = subprocess.run(
-            [PYTHON, str(MATCH_SCRIPT)],
+            [PYTHON, "-m", *_MATCH_MODULE],
             input=json.dumps({"task_description": "implement a feature"}),
             capture_output=True,
             text=True,
