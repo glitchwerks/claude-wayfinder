@@ -25,6 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from claude_wayfinder._trigger_validators import (
+    count_trigger_dimensions,
+    has_whitespace,
+    is_weight_in_ladder,
+)
 from claude_wayfinder.match import CatalogEntry, load_catalog
 
 # ---------------------------------------------------------------------------
@@ -354,16 +359,13 @@ def run_audit_cli(args: argparse.Namespace) -> int:
 # Rule: weight not in ladder (BLOCKING)
 # ---------------------------------------------------------------------------
 
-_LADDER: frozenset[float] = frozenset({0.25, 0.5, 1.0})
-
-
 @register
 def rule_weight_not_in_ladder(catalog: list[CatalogEntry]) -> list[Finding]:
     """Flag any keyword whose weight is not in {0.25, 0.5, 1.0}."""
     out: list[Finding] = []
     for e in catalog:
         for kw in e.triggers.keywords:
-            if kw.weight not in _LADDER:
+            if not is_weight_in_ladder(kw.weight):
                 out.append(
                     Finding(
                         severity=Severity.BLOCKING,
@@ -384,7 +386,7 @@ def rule_whitespace_in_term(catalog: list[CatalogEntry]) -> list[Finding]:
     out: list[Finding] = []
     for e in catalog:
         for kw in e.triggers.keywords:
-            if any(c.isspace() for c in kw.term):
+            if has_whitespace(kw.term):
                 out.append(
                     Finding(
                         severity=Severity.BLOCKING,
@@ -519,21 +521,6 @@ def rule_tool_name_case_error(catalog: list[CatalogEntry]) -> list[Finding]:
 # ---------------------------------------------------------------------------
 
 
-def _trigger_dimensions(t) -> int:
-    """Count the number of populated positive dimensions on a Triggers."""
-    return sum(
-        1
-        for present in (
-            bool(t.command_prefixes),
-            bool(t.agent_mentions),
-            bool(t.path_globs),
-            bool(t.keywords),
-            bool(t.tool_mentions),
-        )
-        if present
-    )
-
-
 @register
 def rule_one_dimensional_triggers(
     catalog: list[CatalogEntry],
@@ -543,7 +530,7 @@ def rule_one_dimensional_triggers(
     for e in catalog:
         if e.kind != "agent" or not e.routable:
             continue
-        dims = _trigger_dimensions(e.triggers)
+        dims = count_trigger_dimensions(e.triggers)
         if dims == 1:
             out.append(
                 Finding(
@@ -572,7 +559,7 @@ def rule_unreachable_routable(catalog: list[CatalogEntry]) -> list[Finding]:
     for e in catalog:
         if e.kind != "agent" or not e.routable:
             continue
-        if _trigger_dimensions(e.triggers) == 0:
+        if count_trigger_dimensions(e.triggers) == 0:
             out.append(
                 Finding(
                     severity=Severity.CONCERN,
