@@ -22,7 +22,9 @@ Log file inputs:
 
 Internal submodules (private — do not import directly):
   _metrics  — MetricResult, compute_metrics, threshold constants
-  (remaining submodules extracted in subsequent commits)
+  _checks   — check_ci_invariants and CI sub-checks
+  _report   — I/O helpers and report formatting
+  _drill    — window helpers and drill/top/catalog-status subcommands
 """
 
 from __future__ import annotations
