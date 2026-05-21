@@ -31,7 +31,8 @@ from claude_wayfinder._health import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "_health.py"
+# _health is now a package; invoke via -m rather than as a script path.
+_HEALTH_MODULE = ["claude_wayfinder._health"]
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +378,8 @@ def run_ci(
     skills, agents, triggers = _empty_dirs(tmp_path)
     cmd = [
         sys.executable,
-        str(SCRIPT),
+        "-m",
+        *_HEALTH_MODULE,
         "--ci",
         "--drift-log",
         str(drift_path),
@@ -430,7 +432,8 @@ def run_report(
     skills, agents, triggers = _empty_dirs(tmp_path)
     cmd = [
         sys.executable,
-        str(SCRIPT),
+        "-m",
+        *_HEALTH_MODULE,
         "--report",
         "--drift-log",
         str(drift_path),
@@ -555,7 +558,8 @@ def test_ci_mode_catalog_stability_uses_real_dirs(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
-            str(SCRIPT),
+            "-m",
+            *_HEALTH_MODULE,
             "--ci",
             "--drift-log",
             str(drift_path),
@@ -660,7 +664,8 @@ def test_trigger_firing_accuracy_does_not_read_user_catalog(tmp_path: Path) -> N
     result = _sp.run(
         [
             sys.executable,
-            str(SCRIPT),
+            "-m",
+            *_HEALTH_MODULE,
             "--ci",
             "--drift-log",
             str(drift_path),
@@ -813,7 +818,8 @@ def test_ci_mode_does_not_crash_on_mixed_corpus(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
-            str(SCRIPT),
+            "-m",
+            *_HEALTH_MODULE,
             "--ci",
             "--dispatch-log",
             str(dispatch_path_ci),
@@ -913,7 +919,8 @@ def run_report_with_catalog(
     env = {**os.environ, "DISPATCH_CATALOG_PATH": str(catalog_path)}
     cmd = [
         sys.executable,
-        str(SCRIPT),
+        "-m",
+        *_HEALTH_MODULE,
         "--report",
         "--drift-log",
         str(drift_path),
@@ -977,14 +984,19 @@ def test_router_health_report_plugin_entries_zero_when_no_plugin_entries(
 
 
 def test_router_health_report_uses_shared_predicate(tmp_path: Path) -> None:
-    """router_health.py imports is_agent_routable from scripts.router_lib.match_filters.
+    """_health/_metrics.py imports is_agent_routable from match_filters.
 
     Verified via AST inspection of the source file — ensures the single source
     of truth for routability is used rather than an inline duplicate.
+    After the Phase 2B split, the import lives in _health/_metrics.py.
     """
     import ast
 
-    source = SCRIPT.read_text(encoding="utf-8")
+    # The import now lives in _metrics.py (extracted in Phase 2B commit 1)
+    metrics_source = (
+        REPO_ROOT / "src" / "claude_wayfinder" / "_health" / "_metrics.py"
+    )
+    source = metrics_source.read_text(encoding="utf-8")
     tree = ast.parse(source)
 
     found = False
@@ -1295,7 +1307,8 @@ def test_health_cli_catalog_path_flag_used_for_report(
     result = subprocess.run(
         [
             sys.executable,
-            str(SCRIPT),
+            "-m",
+            *_HEALTH_MODULE,
             "--report",
             "--catalog-path",
             str(catalog_file),
