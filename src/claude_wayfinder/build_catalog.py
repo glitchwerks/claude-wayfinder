@@ -36,6 +36,12 @@ from typing import Any, Literal, cast
 
 import yaml
 
+from claude_wayfinder._trigger_validators import (
+    clamp_weight_to_ladder,
+    has_whitespace,
+    is_weight_in_ladder,
+)
+
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 
 _logger = logging.getLogger(__name__)
@@ -548,6 +554,8 @@ def _apply_colocated_sidecars(
 def _clamp_weight(w: float) -> float:
     """Return the allowed weight value nearest to ``w``.
 
+    Delegates to
+    :func:`claude_wayfinder._trigger_validators.clamp_weight_to_ladder`.
     Ties (equidistant values) resolve to the higher allowed weight,
     so 0.75 → 1.0 rather than 0.5.
 
@@ -558,7 +566,7 @@ def _clamp_weight(w: float) -> float:
         The closest value in ``ALLOWED_WEIGHTS``, with ties broken
         in favour of the larger value.
     """
-    return min(ALLOWED_WEIGHTS, key=lambda v: (abs(v - w), -v))
+    return clamp_weight_to_ladder(w)
 
 
 def _blank_entry(
@@ -648,7 +656,7 @@ def _validate_keywords(
         # cannot match anything (the matcher works on individual tokens).
         # Warn and skip the entry rather than fatally excluding it — the
         # remaining keywords may still be valid.
-        if any(c.isspace() for c in term):
+        if has_whitespace(term):
             issues.append(
                 ValidationIssue(
                     "warning",
@@ -681,7 +689,7 @@ def _validate_keywords(
                 )
             )
             return [], issues
-        if weight_f not in ALLOWED_WEIGHTS:
+        if not is_weight_in_ladder(weight_f):
             clamped = _clamp_weight(weight_f)
             issues.append(
                 ValidationIssue(
@@ -942,7 +950,7 @@ def _validate_keyword_groups(
                 )
             )
             continue
-        if weight_f not in ALLOWED_WEIGHTS:
+        if not is_weight_in_ladder(weight_f):
             clamped = _clamp_weight(weight_f)
             issues.append(
                 ValidationIssue(
