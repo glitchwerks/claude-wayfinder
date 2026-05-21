@@ -10,7 +10,7 @@ The **Quick reference card** at the end is the section to keep open during a rel
 
 - [ ] All implementing PRs for this release are merged to `main`
 - [ ] CI is green on the latest `main` commit (all six jobs: lint, test-py311, test-py312, test-node, skill-smoke-ubuntu, validate-manifest)
-- [ ] `CHANGELOG.md` has a draft `## [X.Y.Z] - <date>` section ready
+- [ ] `CHANGELOG.md` has a draft `## [X.Y.Z] - YYYY-MM-DD` section ready — the heading must use this **exact format**: `## [X.Y.Z] - YYYY-MM-DD`. The `github-release` job's awk extractor strips the leading `v` from the tag and matches on `## [X.Y.Z]`; a non-standard heading produces empty release notes.
 - [ ] `pyproject.toml` `version` = target version
 - [ ] `.claude-plugin/plugin.json` `version` = target version
 - [ ] Release PR body lists `Closes #N` for every issue being closed (one keyword per issue, plain text, not in commit message scope)
@@ -34,7 +34,7 @@ The cache wipe applies **only to repo moves**. Pure version bumps — including 
 
 **1. Open the release PR**
 
-Branch from `main`. Bump `pyproject.toml` `version`, `.claude-plugin/plugin.json` `version`, and `CHANGELOG.md` (move the draft entry to `## [X.Y.Z] - YYYY-MM-DD`). Include `Closes #N` for every issue. For minor/major: also update `README.md` if skill names, command names, or environment variables changed.
+Branch from `main`. Bump `pyproject.toml` `version`, `.claude-plugin/plugin.json` `version`, and `CHANGELOG.md` (move the draft entry to `## [X.Y.Z] - YYYY-MM-DD`). (`src/claude_wayfinder/__init__.py` does **not** need a manual bump — `__version__` self-derives from dist metadata via `importlib.metadata`; see #176.) Include `Closes #N` for every issue. For minor/major: also update `README.md` if skill names, command names, or environment variables changed.
 
 **2. Wait for CI and merge**
 
@@ -54,9 +54,7 @@ git -C <repo> tag -a vX.Y.Z <merge-sha> -m "vX.Y.Z"
 git -C <repo> push origin vX.Y.Z
 ```
 
-This triggers `release.yml`: build → publish-pypi. Pre-release tags (`-rc`, `-alpha`, `-beta`) publish to TestPyPI instead.
-
-> **Note:** GH Release creation is currently manual (step 6). Automation is tracked in [issue #131](https://github.com/glitchwerks/claude-wayfinder/issues/131).
+This triggers `release.yml`: `build` → `publish-pypi` + `github-release` (the latter two run in parallel after `build`). Pre-release tags (`-rc`, `-alpha`, `-beta`) publish to TestPyPI instead and are flagged `prerelease: true` on the GH Release. (GH Release auto-creation was automated by PR #189, closing [issue #131](https://github.com/glitchwerks/claude-wayfinder/issues/131).)
 
 **5. Wait for the release workflow**
 
@@ -65,18 +63,19 @@ gh run list --repo glitchwerks/claude-wayfinder
 gh run view <run-id> --repo glitchwerks/claude-wayfinder
 ```
 
-All jobs must be green. Do not proceed until publish-pypi is confirmed green.
+All jobs must be green. Do not proceed until both `publish-pypi` and `github-release` are confirmed green.
 
-**6. Manually create the GitHub Release**
+**6. Verify the GitHub Release**
+
+The `github-release` job in `release.yml` creates the GH Release automatically on tag push (PR #189, closing [#131](https://github.com/glitchwerks/claude-wayfinder/issues/131)). Verify:
 
 ```bash
-gh release create vX.Y.Z \
-  --title "vX.Y.Z" \
-  --notes-file <path-to-notes-file> \
-  --repo glitchwerks/claude-wayfinder
+gh release view vX.Y.Z --repo glitchwerks/claude-wayfinder
 ```
 
-> **TODO:** Once [issue #131](https://github.com/glitchwerks/claude-wayfinder/issues/131) ships, `release.yml` will create the GH Release automatically on tag push. Until then, this step is manual.
+Confirm the release exists, the body matches the `## [X.Y.Z]` section of `CHANGELOG.md`, and sdist + wheel are attached as assets. Pre-release tags (`-rc`/`-alpha`/`-beta`) should be flagged `prerelease: true`.
+
+**If the release is missing or the notes look wrong**, inspect the `github-release` job logs — the most likely cause is a mismatch between the tag (`vX.Y.Z`) and the CHANGELOG heading (`## [X.Y.Z]`). The awk extractor strips the leading `v` from the tag; if you used a non-standard tag format the section will be empty.
 
 **7. Dereference the annotated tag**
 
@@ -206,8 +205,8 @@ Then open a new Claude Code session and run `/reload-plugins`.
 ```
 Pre-flight
   [ ] Implementing PRs merged, CI green on main (all 6 jobs)
-  [ ] CHANGELOG.md draft section ready
-  [ ] pyproject.toml + plugin.json versions bumped
+  [ ] CHANGELOG.md draft section ready (heading must be exactly ## [X.Y.Z] - YYYY-MM-DD)
+  [ ] pyproject.toml + plugin.json versions bumped (__init__.py is auto-derived, no manual bump)
 
  1. Open release PR (version bumps + CHANGELOG entry + Closes #N)
  2. CI green (lint, test-py311, test-py312, test-node,
@@ -215,13 +214,12 @@ Pre-flight
  3. git -C <repo> pull origin main
     git -C <repo> rev-parse HEAD           # note merge SHA
     git -C <repo> tag -a vX.Y.Z <sha> -m "vX.Y.Z"
- 4. git -C <repo> push origin vX.Y.Z      # triggers release.yml → PyPI
+ 4. git -C <repo> push origin vX.Y.Z      # triggers release.yml: build → publish-pypi + github-release
  5. gh run list --repo glitchwerks/claude-wayfinder
     gh run view <run-id> --repo glitchwerks/claude-wayfinder
-    # wait for all jobs green (including publish-pypi)
- 6. gh release create vX.Y.Z --title "vX.Y.Z" --notes-file <file> \
-      --repo glitchwerks/claude-wayfinder
-    # TODO: auto-creation ships in #131
+    # wait for all jobs green (including publish-pypi and github-release)
+ 6. gh release view vX.Y.Z --repo glitchwerks/claude-wayfinder
+    # auto-created by release.yml on tag push (closed #131)
  7. git -C <repo> rev-parse 'vX.Y.Z^{commit}'   # commit SHA (not tag-obj)
  8. Open PR on glitchwerks/plugins: bump sha + version for claude-wayfinder
  9. Merge marketplace PR

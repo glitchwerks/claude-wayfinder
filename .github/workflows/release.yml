@@ -83,3 +83,38 @@ jobs:
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
         with:
           repository-url: https://test.pypi.org/legacy/
+
+  # ---------------------------------------------------------------------------
+  # Create GitHub Release (all tags — stable and pre-release)
+  # ---------------------------------------------------------------------------
+  github-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required to create GitHub Releases
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Extract CHANGELOG section for this release
+        run: |
+          # Strip the leading 'v' from the tag to match CHANGELOG headings
+          # CHANGELOG uses "## [0.7.3]" while tags are "v0.7.3"
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk '/^## \[/{if(flag)exit} /^## \['"$VERSION"'\]/{flag=1; next} flag' \
+            CHANGELOG.md > release-notes.md
+          echo "Extracted release notes for $VERSION:"
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        # verified 2026-05-21 via gh api repos/softprops/action-gh-release/git/refs/tags/v2.3.2
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8  # v2.3.2
+        with:
+          body_path: release-notes.md
+          files: dist/*
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-alpha') || contains(github.ref, '-beta') }}

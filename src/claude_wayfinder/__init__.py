@@ -9,6 +9,9 @@ the algorithm specification, and ``docs/design.md`` for the design rationale.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
 from claude_wayfinder.match import (
     VALID_DECISIONS,
     CatalogEntry,
@@ -25,7 +28,10 @@ from claude_wayfinder.match import (
     score,
 )
 
-__version__ = "0.1.0"
+try:
+    __version__ = _pkg_version("claude-wayfinder")
+except PackageNotFoundError:  # editable install in source tree without dist-info
+    __version__ = "0.0.0+source"
 
 # ``build_catalog.build_catalog`` is public but cannot be re-exported here
 # because the name ``build_catalog`` at the package level refers to the
