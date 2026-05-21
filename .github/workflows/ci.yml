@@ -128,6 +128,23 @@ jobs:
         run: uv run --no-sync pytest tests/integration/test_setup_skill.py -v
 
   # ---------------------------------------------------------------------------
+  # Actionlint — validate workflow YAML
+  # ---------------------------------------------------------------------------
+  actionlint:
+    name: Actionlint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run actionlint
+        # verified 2026-05-21 via gh api repos/raven-actions/actionlint/git/refs/tags/v2.1.2
+        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8  # v2.1.2
+        with:
+          files: ".github/workflows/*.yml"
+
+  # ---------------------------------------------------------------------------
   # Validate plugin manifest
   # ---------------------------------------------------------------------------
   validate-manifest:
