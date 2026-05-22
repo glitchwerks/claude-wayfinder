@@ -706,6 +706,31 @@ class TestEmptyApplicableAgents:
         assert findings[0].severity == Severity.NIT
         assert findings[0].entry == "bare"
 
+    def test_intentional_empty_agents_suppresses_nit(self) -> None:
+        """NIT is suppressed when applicable_agents_intentional is set."""
+        e = _entry(
+            "router-only",
+            kind="skill",
+            routable=False,
+            applicable_agents=tuple(),
+            applicable_agents_intentional="router-only interactive skill",
+        )
+        assert rule_empty_applicable_agents([e]) == []
+
+    def test_empty_intentional_string_still_fires(self) -> None:
+        """NIT still fires when applicable_agents_intentional is empty string."""
+        e = _entry(
+            "forgot",
+            kind="skill",
+            routable=False,
+            applicable_agents=tuple(),
+            applicable_agents_intentional="",
+        )
+        findings = rule_empty_applicable_agents([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.NIT
+        assert findings[0].entry == "forgot"
+
 
 # ---------------------------------------------------------------------------
 # Task 15 — rule_duplicate_trigger_set (NIT)

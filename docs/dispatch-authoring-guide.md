@@ -307,6 +307,19 @@ The implementation source is `src/claude_wayfinder/audit_catalog.py`.
 
 **Fix:** Set `applicable_agents: ["*"]` if the skill should be available to any agent, or list the specific agent names that should receive it.
 
+**Opting out for intentional empty lists:** Some skills are router-only interactive skills (called by the router via the `Skill` tool, never delegated to sub-agents). For these, `applicable_agents: []` is the _correct_ value — setting `["*"]` would be wrong. Suppress the NIT by adding `applicable_agents_intentional` with a rationale string to the skill's `triggers.yml` sidecar (for owned skills) or the plugin-override sidecar at `~/.claude/triggers/<plugin>/<skill>.yml`:
+
+```yaml
+# triggers.yml
+applicable_agents: []
+applicable_agents_intentional: "router-only interactive skill — never delegated to sub-agents"
+triggers:
+  command_prefixes:
+    - /my-skill
+```
+
+The field value must be a non-empty string; an empty string does not suppress the NIT. The string serves as documentation for why the empty list is deliberate.
+
 ---
 
 ### duplicate-trigger-set

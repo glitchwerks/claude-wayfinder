@@ -544,6 +544,9 @@ def _process_skill_file(
     if result.entry is not None:
         result.entry["source"] = source
         result.entry["content_hash"] = content_hash
+        intentional = effective.get("applicable_agents_intentional", "")
+        if intentional:
+            result.entry["applicable_agents_intentional"] = str(intentional)
     return result.entry
 
 
@@ -611,6 +614,9 @@ def _process_plugin_override(
     issues_sink.extend(result.issues)
     if result.entry is not None:
         result.entry["source"] = "plugin-override"
+        intentional = effective.get("applicable_agents_intentional", "")
+        if intentional:
+            result.entry["applicable_agents_intentional"] = str(intentional)
     return result.entry
 
 

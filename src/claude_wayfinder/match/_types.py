@@ -119,6 +119,11 @@ class CatalogEntry:
             agents/skills and ``"plugin"`` for third-party plugins.
             Defaults to ``"owned"`` so existing catalog JSON without
             the field continues to load without modification.
+        applicable_agents_intentional: Non-empty string documents why
+            ``applicable_agents`` is deliberately empty on this skill
+            (e.g. ``"router-only interactive skill"``).  When set, the
+            ``empty-applicable-agents`` audit NIT is suppressed.
+            Defaults to ``""`` so existing entries load without change.
     """
 
     name: str
@@ -128,6 +133,7 @@ class CatalogEntry:
     applicable_skills: tuple[str, ...]
     source: str = "owned"
     routable: bool = True
+    applicable_agents_intentional: str = ""
 
 
 @dataclass
