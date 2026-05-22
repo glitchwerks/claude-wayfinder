@@ -247,7 +247,7 @@ class TestCatalogBuildDefaults:
         from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
 
         fake_home = tmp_path / "fake_home"
-        with patch("claude_wayfinder.build_catalog.Path.home", return_value=fake_home):
+        with patch("claude_wayfinder.build_catalog._discover.Path.home", return_value=fake_home):
             env_without_claude_home = {
                 k: v for k, v in os.environ.items() if k != "CLAUDE_HOME"
             }
@@ -412,7 +412,7 @@ class TestCatalogBuildPluginDiscoveryDefaults:
         from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
 
         fake_home = tmp_path / "fake_home"
-        with patch("claude_wayfinder.build_catalog.Path.home", return_value=fake_home):
+        with patch("claude_wayfinder.build_catalog._discover.Path.home", return_value=fake_home):
             env_without_claude_home = {
                 k: v for k, v in os.environ.items() if k != "CLAUDE_HOME"
             }

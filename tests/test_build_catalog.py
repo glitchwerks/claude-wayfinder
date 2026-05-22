@@ -2311,7 +2311,7 @@ def test_invalid_kind_emits_fatal_issue(tmp_path: Path, monkeypatch: pytest.Monk
     through to ``_process_plugin_file`` (which expects a
     ``Literal["skill", "agent"]``).
     """
-    import claude_wayfinder.build_catalog as bdc
+    import claude_wayfinder.build_catalog._main as bdc_main
     from claude_wayfinder.build_catalog import build
 
     # Minimal plugins_dir with a valid installed_plugins.json so that
@@ -2322,10 +2322,11 @@ def test_invalid_kind_emits_fatal_issue(tmp_path: Path, monkeypatch: pytest.Monk
 
     # Monkeypatch discover_plugin_entries to return one entry with an
     # invalid kind value that would normally be unreachable at runtime.
+    # Patch in _main where build() actually calls it.
     bad_path = tmp_path / "some.md"
     bad_path.write_text("---\ndescription: test\n---\n", encoding="utf-8")
     monkeypatch.setattr(
-        bdc,
+        bdc_main,
         "discover_plugin_entries",
         lambda _installs: [("unknown-kind", "testplugin@vendor", bad_path)],
     )
