@@ -28,6 +28,17 @@ For canonical field definitions — types, defaults, and schema stability guaran
 
 **`excludes`** — Terms that hard-zero this entry's score when found in the input keywords. Applied before additive scoring. Matched against `features.keywords` only — not against `file_paths`, `tool_mentions`, or `agent_mentions`.
 
+**`path_globs_excluded`** — Path globs that drop this entry from the scored pool when any glob matches any candidate file path. Exclusion wins over `path_globs` inclusion — an entry matching both is dropped. Use for "applies everywhere except X" patterns (e.g. an agent with `**/*.md` that must not win on `agents/**/*.md`). Same `fnmatch` semantics as `path_globs`; include both `agents/**/*.md` and `agents/*.md` forms (the `**` footgun applies here too). Example:
+
+```yaml
+triggers:
+  path_globs:
+    - "**/*.md"
+  path_globs_excluded:
+    - "agents/**/*.md"
+    - "agents/*.md"
+```
+
 **`applicable_agents`** — Top-level field in a skill sidecar (not under `triggers:`). Hard allowlist of agent names that may receive this skill when the matcher routes a task. `["*"]` means any agent. `[]` means no agent — the skill is dormant and will never attach.
 
 **`applicable_skills`** — Top-level field in an agent sidecar. Hard allowlist of skill names to attach when routing to this agent. `["*"]` means any applicable skill. `[]` means no skills — the agent will never have a skill automatically attached.
