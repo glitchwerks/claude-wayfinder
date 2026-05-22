@@ -232,6 +232,15 @@ def score(entry: CatalogEntry, features: Features) -> float:
     if any(x in features.keywords for x in t.excludes):
         return 0.0
 
+    # Hard zero: any feature path matches a path_globs_excluded pattern.
+    # Exclusion wins over inclusion — checked before path_globs scoring.
+    if t.path_globs_excluded and features.paths:
+        for excl_glob in t.path_globs_excluded:
+            for path in features.paths:
+                normalised = path.replace("\\", "/")
+                if fnmatch.fnmatch(normalised, excl_glob):
+                    return 0.0
+
     s = 0.0
     # Path glob contributions: 0.4 per matched glob (each counted once).
     s += 0.4 * _matched_glob_count(entry, features)

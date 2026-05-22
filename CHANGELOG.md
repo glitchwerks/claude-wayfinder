@@ -6,6 +6,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add `path_globs_excluded` trigger field: path-glob exclusion that drops an entry from the scored pool before additive scoring. Exclusion wins over `path_globs` inclusion. Migrate `doc-writer` fixture from scope-by-omission to explicit `path_globs_excluded`. (#24)
 - Add `applicable_agents_intentional` schema field to `CatalogEntry` and sidecar YAML; when set to a non-empty rationale string on a skill with `applicable_agents: []`, suppresses the `empty-applicable-agents` audit NIT. (#194)
 
 ## [0.7.3] — 2026-05-20

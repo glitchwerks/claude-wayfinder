@@ -137,4 +137,7 @@ def _parse_triggers(raw: dict[str, Any]) -> Triggers:
             str(x).lower() for x in raw.get("excludes", [])
         ),
         keyword_groups=tuple(keyword_groups),
+        path_globs_excluded=tuple(
+            str(x) for x in raw.get("path_globs_excluded", [])
+        ),
     )

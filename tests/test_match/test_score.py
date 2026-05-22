@@ -3,6 +3,7 @@
 Covers:
 - Per-entry scoring rules (command_prefix, agent_mention, excludes,
   path_glob, keyword_weight, tool_mention, score_cap)
+- path_globs_excluded: path-glob-based exclusion (issue #24)
 - General-purpose / routable=False exclusion from agent pool
 - Feature density gate (needs_more_detail threshold)
 - Issue #425 keyword-multiplier regression (multiplier raised 0.3→0.5)
@@ -427,4 +428,165 @@ class TestIssue425KeywordMultiplier:
             "Ensure keyword multiplier is 0.5 in score() and "
             "refactoring-discipline/triggers.yml has 'refactor' weight=1.0 "
             "and 'extract' weight=0.25."
+        )
+
+
+# ===========================================================================
+# Issue #24: path_globs_excluded — path-glob-based exclusion
+# ===========================================================================
+
+
+class TestPathGlobsExcluded:
+    """path_globs_excluded drops an entry from scoring when any glob matches.
+
+    Exclusion takes precedence over path_globs inclusion — an entry
+    that matches both path_globs AND path_globs_excluded is dropped.
+    Issue #24.
+    """
+
+    def test_excluded_path_drops_entry(self) -> None:
+        """Entry with matching path_globs_excluded pattern is dropped.
+
+        An agent that matches ``agents/**/*.py`` via path_globs but has
+        ``agents/*.py`` in path_globs_excluded must score 0.0 when the
+        candidate path is ``agents/foo.py``.
+
+        Uses the raw ``score()`` function to isolate matcher logic from
+        the decision layer.
+        """
+        mod = _match_mod
+
+        entry = mod.CatalogEntry(
+            name="test-agent",
+            kind="agent",
+            triggers=mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("**/*.py",),
+                keywords=(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                path_globs_excluded=("agents/**/*.py", "agents/*.py"),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = mod.build_features(
+            {
+                "task_description": "update the agent",
+                "file_paths": ["agents/foo.py"],
+            }
+        )
+        raw_score = mod.score(entry, features)
+        assert raw_score == 0.0, (
+            f"score() returned {raw_score!r} for an excluded path — "
+            "path_globs_excluded must drop the entry to 0.0 (#24)"
+        )
+
+    def test_non_excluded_path_is_scored_normally(self) -> None:
+        """A path that does NOT match path_globs_excluded is scored normally.
+
+        Same entry as above but candidate path is ``src/foo.py``,
+        which does not match ``agents/**/*.py`` or ``agents/*.py``.
+        The path_globs ``**/*.py`` should match, giving +0.4.
+        """
+        mod = _match_mod
+
+        entry = mod.CatalogEntry(
+            name="test-agent",
+            kind="agent",
+            triggers=mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("**/*.py",),
+                keywords=(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                path_globs_excluded=("agents/**/*.py", "agents/*.py"),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = mod.build_features(
+            {
+                "task_description": "update the module",
+                "file_paths": ["src/foo.py"],
+            }
+        )
+        raw_score = mod.score(entry, features)
+        assert raw_score == pytest.approx(0.4, abs=1e-6), (
+            f"score() returned {raw_score!r} for a non-excluded path — "
+            "expected 0.4 (one path_globs match) when path_globs_excluded "
+            "does NOT match the candidate path (#24)"
+        )
+
+    def test_exclusion_wins_over_inclusion(self) -> None:
+        """Exclusion wins even when path_globs would fully match.
+
+        An entry with ``path_globs: ['**/*']`` (match everything) and
+        ``path_globs_excluded: ['secret.py']`` must be dropped when the
+        candidate is ``secret.py``, despite the broad inclusion glob.
+        """
+        mod = _match_mod
+
+        entry = mod.CatalogEntry(
+            name="broad-agent",
+            kind="agent",
+            triggers=mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("**/*",),
+                keywords=(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                path_globs_excluded=("secret.py",),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = mod.build_features(
+            {
+                "task_description": "handle secret file",
+                "file_paths": ["secret.py"],
+            }
+        )
+        raw_score = mod.score(entry, features)
+        assert raw_score == 0.0, (
+            f"score() returned {raw_score!r} for an excluded path — "
+            "exclusion must win over broad path_globs inclusion (#24)"
+        )
+
+    def test_empty_path_globs_excluded_has_no_effect(self) -> None:
+        """Default empty path_globs_excluded does not affect scoring.
+
+        An entry with no path_globs_excluded (default ``()``) must
+        score normally — 0.4 for one matched path glob.
+        """
+        mod = _match_mod
+
+        entry = mod.CatalogEntry(
+            name="normal-agent",
+            kind="agent",
+            triggers=mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("**/*.py",),
+                keywords=(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                # path_globs_excluded not specified — should default to ()
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = mod.build_features(
+            {
+                "task_description": "update the module",
+                "file_paths": ["src/foo.py"],
+            }
+        )
+        raw_score = mod.score(entry, features)
+        assert raw_score == pytest.approx(0.4, abs=1e-6), (
+            f"score() returned {raw_score!r} — "
+            "empty path_globs_excluded must not affect scoring (#24)"
         )

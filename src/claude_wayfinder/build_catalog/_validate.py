@@ -41,6 +41,7 @@ TRIGGER_FIELDS: tuple[str, ...] = (
     "keywords",
     "tool_mentions",
     "excludes",
+    "path_globs_excluded",
 )
 
 # ``file_extensions`` was removed from TRIGGER_FIELDS.

@@ -171,11 +171,12 @@ def test_validate_entry_malformed_inverse_list_is_fatal() -> None:
     )
 
 
-def test_validate_entry_empty_triggers_block_yields_all_six_fields() -> None:
-    """An entry with `triggers: {}` materializes all 6 trigger fields as [].
+def test_validate_entry_empty_triggers_block_yields_all_fields() -> None:
+    """An entry with `triggers: {}` materializes all trigger fields as [].
 
     ``file_extensions`` was deprecated in Issue #249 and removed from
     TRIGGER_FIELDS; it must NOT appear in catalog entries.
+    ``path_globs_excluded`` was added in issue #24 and must appear.
     """
     fm = {
         "name": "empty-triggers",
@@ -191,6 +192,7 @@ def test_validate_entry_empty_triggers_block_yields_all_six_fields() -> None:
         "keywords",
         "tool_mentions",
         "excludes",
+        "path_globs_excluded",
     }
     assert set(result.entry["triggers"].keys()) == expected_fields
     assert "file_extensions" not in result.entry["triggers"]
@@ -633,4 +635,68 @@ class TestValidateKeywordGroups:
         warns = [i.message for i in issues if i.severity == "warning"]
         assert any("name" in m and ("whitespace" in m or "identifier" in m) for m in warns)
 
+
+# ---------------------------------------------------------------------------
+# Issue #24 — path_globs_excluded validator tests
+# ---------------------------------------------------------------------------
+
+
+class TestValidatePathGlobsExcluded:
+    """validate_entry correctly handles the path_globs_excluded trigger field.
+
+    Issue #24: new field that mirrors path_globs but for exclusion.
+    """
+
+    def test_path_globs_excluded_parsed_into_list(self) -> None:
+        """path_globs_excluded list of strings passes through sanitizer."""
+        fm = {
+            "name": "my-agent",
+            "triggers": {
+                "path_globs": ["**/*.py"],
+                "path_globs_excluded": ["agents/**/*.py", "agents/*.py"],
+            },
+            "applicable_skills": ["*"],
+        }
+        result = validate_entry(fm, kind="agent", source_stem="my-agent")
+        assert result.entry is not None, (
+            f"Expected valid entry; got issues: {result.issues}"
+        )
+        excluded = result.entry["triggers"].get("path_globs_excluded", [])
+        assert excluded == ["agents/**/*.py", "agents/*.py"], (
+            f"path_globs_excluded not preserved in catalog entry: {excluded!r}"
+        )
+
+    def test_path_globs_excluded_default_empty(self) -> None:
+        """path_globs_excluded is optional; absent means empty list."""
+        fm = {
+            "name": "my-agent",
+            "triggers": {
+                "path_globs": ["**/*.py"],
+            },
+            "applicable_skills": ["*"],
+        }
+        result = validate_entry(fm, kind="agent", source_stem="my-agent")
+        assert result.entry is not None
+        # Either absent or empty is acceptable — check it is not non-empty.
+        excluded = result.entry["triggers"].get("path_globs_excluded", [])
+        assert excluded == [], (
+            f"Missing path_globs_excluded should default to []; got {excluded!r}"
+        )
+
+    def test_path_globs_excluded_non_list_is_fatal(self) -> None:
+        """A non-list path_globs_excluded produces a fatal issue."""
+        fm = {
+            "name": "my-agent",
+            "triggers": {
+                "path_globs_excluded": "agents/**/*.py",  # string, not list
+            },
+            "applicable_skills": ["*"],
+        }
+        result = validate_entry(fm, kind="agent", source_stem="my-agent")
+        assert result.entry is None, (
+            "Non-list path_globs_excluded must produce a fatal issue and "
+            "exclude the entry"
+        )
+        fatals = [i for i in result.issues if i.severity == "fatal"]
+        assert fatals, "Expected at least one fatal issue for non-list field"
 

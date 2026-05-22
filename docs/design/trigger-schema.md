@@ -224,6 +224,7 @@ sort order); the flag on each entry is authoritative for that entry.
 | `triggers.command_prefixes`         | `list[str]`            | no       | `features.command_prefix` (single value, exact, case-insensitive)                | `[]`               |
 | `triggers.agent_mentions`           | `list[str]`            | no       | `features.agent_mentions` (set, exact, case-insensitive)                         | `[]`               |
 | `triggers.path_globs`               | `list[str]`            | no       | each glob matched via `fnmatch.fnmatch` against any element of `features.paths`  | `[]`               |
+| `triggers.path_globs_excluded`      | `list[str]`            | no       | each glob matched via `fnmatch.fnmatch` against any element of `features.paths`; if any matches, the entry is dropped from the scored pool before additive scoring. Exclusion wins over `path_globs`. | `[]` |
 | `triggers.keywords`                 | `list[{term, weight}]` | no       | `features.keywords` (set, case-insensitive exact token)                          | `[]`               |
 | `triggers.tool_mentions`            | `list[str]`            | no       | `features.tool_mentions` (set, exact, case-insensitive)                          | `[]`               |
 | `triggers.excludes`                 | `list[str]`            | no       | `features.keywords` (same matching as `keywords`)                                | `[]`               |
@@ -517,6 +518,7 @@ If you declare only `"**/*.toml"`, a bare `pyproject.toml` at the repo root may 
 - **`agent_mentions`** — short-circuit to `1.0` when the prompt explicitly names an agent. Use sparingly; this is for skills tightly coupled to a single named agent.
 - **`excludes`** — short-circuit to `0.0`. Hard zero-out. Used to disambiguate skills with overlapping keywords (e.g. `claude-api` excludes `openai`). Matches `keywords` only — see above.
 - **`path_globs`** — `0.4` per matched glob (each glob counted at most once even if it matches multiple paths). Uses `fnmatch` syntax — see footgun above.
+- **`path_globs_excluded`** — path-level exclusion gate. If **any** glob in this list matches **any** candidate file path, the entire entry is dropped from the scored pool before any additive scoring. Exclusion wins over inclusion: an entry that matches both `path_globs` and `path_globs_excluded` is dropped. Uses the same `fnmatch.fnmatch` semantics as `path_globs`. See §4a.
 - **`keywords`** — `0.3 × weight` per matched term, accumulated. Weight ladder: `0.25` (weak), `0.5` (normal), `1.0` (strong). Terms must be single tokens (no whitespace).
 - **`tool_mentions`** — `0.5` per matched tool name. Highest per-element coefficient because tool mentions are unambiguous high-precision signals.
 
@@ -546,6 +548,60 @@ When unsatisfied: zero contribution, no suppression. Singletons score normally.
 Multiple satisfied groups on the same entry **sum independently** — each adds its weight. The final `min(s, 1.0)` clamp absorbs any overflow.
 
 Authoritative pseudocode: `docs/superpowers/specs/2026-05-18-and-groups-design.md` § 5.
+
+---
+
+## 4a. `path_globs_excluded` — path-glob exclusion
+
+`path_globs_excluded` is the path-level analog of `excludes`. Where `excludes` operates on
+keyword tokens, `path_globs_excluded` operates on file paths. If **any** glob in the list
+matches **any** candidate file path, the entire entry is **dropped from the scored pool
+before additive scoring begins** — not scored to `0.0` and left in, but removed entirely.
+This means an entry excluded by `path_globs_excluded` contributes nothing to an
+`ambiguous` decision, score ties, or alternative lists.
+
+**Exclusion wins over inclusion.** An entry with both `path_globs: ["**/*.md"]` and
+`path_globs_excluded: ["agents/**/*.md"]` will be dropped for `agents/foo.md` even
+though the broad `**/*.md` glob would otherwise match it.
+
+**Use case: "applies everywhere except X" patterns.** The canonical use-case is an
+agent with broad path coverage that must not activate for a specific sub-tree. Instead
+of omitting that sub-tree from `path_globs` (fragile; must be re-verified when globs
+change), authors can add the sub-tree to `path_globs_excluded` and get explicit,
+auditable, self-documenting exclusion.
+
+```yaml
+# doc-writer: catches broad **/*.md but excludes harness files
+triggers:
+  path_globs:
+    - "docs/**/*.md"
+    - "docs/*.md"
+    - "README.md"
+    - "**/*.md"
+  path_globs_excluded:
+    - "agents/**/*.md"
+    - "agents/*.md"     # bare form needed — see fnmatch footgun below
+    - "skills/**/*.md"
+    - "skills/*.md"
+```
+
+### fnmatch footgun: include both `**/` and bare forms
+
+The same footgun that applies to `path_globs` applies to `path_globs_excluded`. Python's
+`fnmatch.fnmatch` does not treat `**` as a recursive wildcard across directory separators.
+The pattern `agents/**/*.md` does **not** match a path reported as just `agents/foo.md` in
+all contexts.
+
+**Rule: always include both the nested and bare forms:**
+
+```yaml
+path_globs_excluded:
+  - "agents/**/*.md"   # matches agents/subdir/foo.md
+  - "agents/*.md"      # matches agents/foo.md (bare, one level deep)
+```
+
+This mirrors the guidance for `path_globs` in the fnmatch footgun section above (see also
+`agent-memory/general-purpose/feedback_fnmatch_path_globs_need_both_forms.md`).
 
 ---
 

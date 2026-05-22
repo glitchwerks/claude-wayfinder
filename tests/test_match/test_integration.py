@@ -613,9 +613,12 @@ class TestIssue364DocWriterAgent:
     def test_agent_md_does_not_route_to_doc_writer(self, tmp_path: Path) -> None:
         """agents/**/*.md path must NOT route to doc-writer.
 
-        agents/code-writer.md is explicitly excluded from doc-writer's
-        path_globs (harness files are router self-handled).  The matcher
-        must not award doc-writer the path-glob bonus for this file.
+        Enforced via path_globs_excluded (issue #24): ``agents/**/*.md``
+        and ``agents/*.md`` are in doc-writer's ``path_globs_excluded``,
+        dropping it from the scored pool before threshold gating.
+        Before #24 this was scope-by-omission (``agents/**`` not in
+        ``path_globs``); now it is explicit exclusion that survives
+        future path_globs broadening.
 
         What decision is returned depends on other agents and harness
         carve-out behaviour, but doc-writer must not win here.
@@ -674,6 +677,76 @@ class TestIssue364DocWriterAgent:
         assert out.get("agent") == "code-writer", (
             f"Expected agent 'code-writer', got '{out.get('agent')}' — "
             "adding doc-writer must not regress #361 code-writer routing"
+        )
+
+
+# ===========================================================================
+# Issue #24 regression tests: path_globs_excluded explicit exclusion
+# ===========================================================================
+
+
+class TestIssue24PathGlobsExcluded:
+    """Regression tests for issue #24: path_globs_excluded field.
+
+    The doc-writer fixture now uses ``path_globs_excluded`` to explicitly
+    reject harness files (``agents/**/*.md``, ``skills/**/*.md``) instead
+    of relying on scope-by-omission.  These tests verify the exclusion
+    mechanism works end-to-end through the full dispatch pipeline.
+    """
+
+    def test_doc_writer_excluded_for_agents_md_via_path_globs_excluded(
+        self, tmp_path: Path
+    ) -> None:
+        """doc-writer is excluded for agents/*.md via path_globs_excluded.
+
+        The doc-writer fixture has ``path_globs: ['**/*.md']`` (broad)
+        combined with ``path_globs_excluded: ['agents/**/*.md', 'agents/*.md']``
+        (issue #24).  An ``agents/code-writer.md`` path should drop doc-writer
+        from the scored pool despite the broad ``**/*.md`` inclusion glob.
+        """
+        catalog_path = _build_synthetic_catalog(tmp_path)
+        stdin_obj = {
+            "task_description": "update the agent docs",
+            "file_paths": ["agents/code-writer.md"],
+        }
+        result = _run(
+            stdin_obj,
+            {},
+            catalog_path=catalog_path,
+            tmp_path=tmp_path,
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out.get("agent") != "doc-writer", (
+            "doc-writer must NOT win for agents/**/*.md even with broad "
+            "path_globs — path_globs_excluded must drop it (#24); "
+            f"got agent='{out.get('agent')}', decision='{out['decision']}'"
+        )
+
+    def test_doc_writer_included_for_docs_md_not_excluded(
+        self, tmp_path: Path
+    ) -> None:
+        """doc-writer is NOT excluded for docs/foo.md.
+
+        A docs/foo.md path is in doc-writer's path_globs and NOT in
+        path_globs_excluded.  The entry must still score and win here.
+        """
+        catalog_path = _build_synthetic_catalog(tmp_path)
+        stdin_obj = {
+            "task_description": "update the docs",
+            "file_paths": ["docs/foo.md"],
+        }
+        result = _run(
+            stdin_obj,
+            {},
+            catalog_path=catalog_path,
+            tmp_path=tmp_path,
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out.get("agent") == "doc-writer", (
+            f"Expected agent 'doc-writer', got '{out.get('agent')}' — "
+            "docs/foo.md is not excluded and must still route to doc-writer"
         )
 
 

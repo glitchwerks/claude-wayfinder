@@ -94,6 +94,12 @@ class Triggers:
             docs/superpowers/specs/2026-05-18-and-groups-design.md.
         tool_mentions: Tool names matched against features.tool_mentions.
         excludes: Terms that hard-zero the entry's score when present.
+        path_globs_excluded: Path globs that, if any match the candidate
+            file path, drop this entry from the scored pool. Exclusion
+            wins over inclusion (``path_globs``). fnmatch semantics —
+            include both bare and ``**/``-prefixed forms when matching
+            root-level files (fnmatch does not expand ``**`` recursively
+            across directory separators for bare filenames).
     """
 
     command_prefixes: frozenset[str]
@@ -103,6 +109,7 @@ class Triggers:
     tool_mentions: frozenset[str]
     excludes: frozenset[str]
     keyword_groups: tuple[KeywordGroup, ...] = ()
+    path_globs_excluded: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
