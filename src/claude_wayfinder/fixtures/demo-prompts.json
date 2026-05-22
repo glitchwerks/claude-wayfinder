@@ -24,14 +24,14 @@
     "file_paths": ["docs/notes.md"]
   },
   {
-    "_branch": "ambiguous",
-    "_note": "both agents score 0.5 (keyword 'review'); gap 0.0 < 0.2; ambiguous fires",
+    "_branch": "advisory (tie)",
+    "_note": "both agents score 0.5 (keyword 'review'); gap 0.0 < 0.2; advisory fires with gap rationale (#202)",
     "task_description": "review the module changes",
     "file_paths": ["Makefile"]
   },
   {
     "_branch": "ask_user",
-    "_note": "RESERVED — the matcher does not produce ask_user in v0.1; it is part of the 7-decision contract and reserved for future use (e.g. clarification flows)",
+    "_note": "RESERVED — the matcher does not produce ask_user in v0.1; it is part of the 6-decision contract and reserved for future use (e.g. clarification flows)",
     "task_description": null,
     "file_paths": []
   },

@@ -384,7 +384,6 @@ class TestIssue10FailLoudCatalogPath:
             "delegate",
             "self_handle",
             "advisory",
-            "ambiguous",
         }, f"Expected a routing decision, got: {out['decision']!r}"
 
     def test_dispatch_catalog_path_env_still_works(self, tmp_path: Path) -> None:

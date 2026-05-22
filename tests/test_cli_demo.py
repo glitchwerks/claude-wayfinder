@@ -1,13 +1,16 @@
 """Tests for the ``python -m claude_wayfinder demo`` CLI command.
 
 Verifies that the demo sub-command runs against bundled fixtures and
-prints output containing all 7 decision branches.  The test runs the
+prints output containing all 6 decision branches.  The test runs the
 demo via ``subprocess.run`` so it exercises the real entry point on
 the real bundled fixtures — no mocking of the matcher internals.
 
-All 7 decision branches must be present in the demo output:
+All 6 decision branches must be present in the demo output:
     delegate, self_handle, self_handle_unaided, advisory,
-    ambiguous, ask_user, needs_more_detail
+    ask_user, needs_more_detail
+
+Note: 'ambiguous' was removed in v0.9.0 (#202); tie scenarios now emit
+'advisory'.
 """
 
 from __future__ import annotations
@@ -62,26 +65,28 @@ class TestDemoInvocation:
 
 
 # ---------------------------------------------------------------------------
-# All 7 decision branches must appear in output
+# All 6 decision branches must appear in output
 # ---------------------------------------------------------------------------
 
-_SEVEN_BRANCHES = [
+_SIX_BRANCHES = [
     "delegate",
     "self_handle",
     "self_handle_unaided",
     "advisory",
-    "ambiguous",
     "ask_user",
     "needs_more_detail",
 ]
 
 
-class TestAllSevenBranches:
-    """Each of the 7 decision branches must appear in the demo output.
+class TestAllSixBranches:
+    """Each of the 6 decision branches must appear in the demo output.
 
     The demo iterates the bundled demo-prompts.json and annotates each
     output line with the decision branch name.  These tests assert that
-    the full set of 7 branches is exercised.
+    the full set of 6 branches is exercised.
+
+    'ambiguous' was removed in v0.9.0 (#202); tie scenarios now emit
+    'advisory' instead.
     """
 
     @pytest.fixture(scope="class")
@@ -98,17 +103,29 @@ class TestAllSevenBranches:
         )
         return result.stdout
 
-    @pytest.mark.parametrize("branch", _SEVEN_BRANCHES)
+    @pytest.mark.parametrize("branch", _SIX_BRANCHES)
     def test_branch_appears_in_output(
         self, branch: str, demo_output: str
     ) -> None:
         """Verify that decision branch ``branch`` appears in demo stdout.
 
         Args:
-            branch: One of the 7 decision branch names.
+            branch: One of the 6 decision branch names.
             demo_output: Captured stdout from the demo (class fixture).
         """
         assert branch in demo_output, (
             f"Decision branch '{branch}' was not found in demo output.\n"
             f"Full output:\n{demo_output}"
+        )
+
+    def test_ambiguous_not_in_output(self, demo_output: str) -> None:
+        """Demo output must not contain 'ambiguous' as a decision branch.
+
+        'ambiguous' was removed in v0.9.0 (#202).  If it appears, a demo
+        fixture or catalog was not updated.
+        """
+        # Check for the decision JSON field value, not just the word
+        assert '"decision": "ambiguous"' not in demo_output, (
+            "Found 'ambiguous' decision in demo output — "
+            "remove the ambiguous demo fixture entry (#202)."
         )

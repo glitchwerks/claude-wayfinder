@@ -135,8 +135,12 @@ def test_valid_decisions_is_frozenset() -> None:
     assert all(isinstance(d, str) for d in VALID_DECISIONS)
 
 
-def test_valid_decisions_contains_seven_values() -> None:
-    """``VALID_DECISIONS`` must enumerate exactly the 7 v5 routing decisions."""
+def test_valid_decisions_contains_six_values() -> None:
+    """``VALID_DECISIONS`` must enumerate exactly the 6 v0.9.0 routing decisions.
+
+    'ambiguous' was removed in v0.9.0 (#202): tie scenarios now emit
+    'advisory' with the top-scored agent named and alternatives populated.
+    """
     from claude_wayfinder import VALID_DECISIONS
 
     expected = {
@@ -144,11 +148,13 @@ def test_valid_decisions_contains_seven_values() -> None:
         "self_handle",
         "self_handle_unaided",
         "advisory",
-        "ambiguous",
         "ask_user",
         "needs_more_detail",
     }
     assert VALID_DECISIONS == expected
+    assert "ambiguous" not in VALID_DECISIONS, (
+        "'ambiguous' was removed in v0.9.0 — it must not reappear in VALID_DECISIONS"
+    )
 
 
 def test_dataclasses_are_classes() -> None:

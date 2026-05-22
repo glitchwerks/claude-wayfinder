@@ -1,4 +1,4 @@
-"""Decision composition for the 7-step routing ladder (v5).
+"""Decision composition for the routing ladder (v5, 6-step surface).
 
 Implements ``decide()``, ``_rationale_for()``, and ``_top_alternatives()``
 plus the threshold constants that drive each step.  The scoring helpers
@@ -32,7 +32,6 @@ _MIN_FEATURE_DENSITY = 2
 # Score thresholds from the decision ladder (v5 §3.1.3 / §3.1.4).
 _DELEGATE_THRESHOLD = 0.85
 _DELEGATE_GAP = 0.2
-_AMBIGUOUS_MIN = 0.5
 _ADVISORY_MIN = 0.5
 
 
@@ -49,18 +48,18 @@ def decide(
 ) -> dict[str, Any]:
     """Compose the routing decision from scored agents and skills.
 
-    Implements the decision ladder from v5 §3.1.3 / §3.1.4 exactly.
+    Implements the decision ladder from v5 §3.1.3 / §3.1.4.
     ``general-purpose`` must be excluded from ``scored_agents`` before
     calling this function.
 
-    Decision order:
+    Decision order (6-branch surface, v0.9.0+):
     1. ``needs_more_detail`` — feature density < 2.
     2. ``delegate`` — best agent >= 0.85, gap >= 0.2.
-    3. ``ambiguous`` — best agent >= 0.5, gap < 0.2.
-    4. ``self_handle`` — skill >= 0.5.
-    5. ``advisory`` — best agent >= 0.5 (gap >= 0.2 implied by not
-       hitting ambiguous above).
-    6. ``self_handle_unaided`` — fallback.
+    3. ``self_handle`` — skill >= 0.5.
+    4. ``advisory`` — best agent >= 0.5 (covers both tie scenarios with
+       gap < 0.2 and marginal scenarios with gap >= 0.2 but score < 0.85).
+       The tie-vs-marginal distinction is preserved in the rationale string.
+    5. ``self_handle_unaided`` — fallback.
 
     Args:
         scored_agents: Agents sorted by score descending, excluding
@@ -106,19 +105,7 @@ def decide(
             "alternatives": _top_alternatives(scored_agents[1:], n=3),
         }
 
-    # Step 3: ambiguous — two or more agents tie above 0.5.
-    if best_agent and best_agent.score >= _AMBIGUOUS_MIN and gap < _DELEGATE_GAP:
-        return {
-            "decision": "ambiguous",
-            "confidence": round(best_agent.score, 6),
-            "rationale": (
-                f"Multiple agents score similarly "
-                f"(gap={gap:.2f}); user input needed to disambiguate."
-            ),
-            "alternatives": _top_alternatives(scored_agents, n=3),
-        }
-
-    # Step 4: self_handle — at least one strong skill, no dominant agent.
+    # Step 3: self_handle — at least one strong skill, no dominant agent.
     if best_skills:
         return {
             "decision": "self_handle",
@@ -131,22 +118,35 @@ def decide(
             "alternatives": [],
         }
 
-    # Step 5: advisory — agent exists but not dominant.
+    # Step 4: advisory — agent exists but not dominant.  Covers both the
+    # former 'ambiguous' case (gap < 0.2, multiple agents close) and the
+    # marginal case (gap >= 0.2 but score < 0.85).  The rationale string
+    # distinguishes the two scenarios so consumers can detect a close cluster.
     if best_agent and best_agent.score >= _ADVISORY_MIN:
+        name = best_agent.entry.name
+        score = best_agent.score
         skills = _skills_for_agent(best_agent.entry, scored_skills, features)
+        if gap < _DELEGATE_GAP:
+            rationale = (
+                f"Best agent '{name}' scores {score:.2f} "
+                f"(gap={gap:.2f} from next); "
+                "top pick recommended, alternatives close behind."
+            )
+        else:
+            rationale = (
+                f"Best agent '{name}' scores {score:.2f} "
+                "but match is not conclusive."
+            )
         return {
             "decision": "advisory",
-            "agent": best_agent.entry.name,
+            "agent": name,
             "skills": skills,
-            "confidence": round(best_agent.score, 6),
-            "rationale": (
-                f"Best agent '{best_agent.entry.name}' scores "
-                f"{best_agent.score:.2f} but match is not conclusive."
-            ),
-            "alternatives": _top_alternatives(scored_agents[1:], n=2),
+            "confidence": round(score, 6),
+            "rationale": rationale,
+            "alternatives": _top_alternatives(scored_agents[1:], n=3),
         }
 
-    # Step 6: self_handle_unaided — no useful signal.
+    # Step 5: self_handle_unaided — no useful signal.
     return {
         "decision": "self_handle_unaided",
         "confidence": 0.0,

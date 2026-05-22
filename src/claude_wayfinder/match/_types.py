@@ -1,4 +1,4 @@
-"""Data-model types for the 7-decision dispatch matcher (v5).
+"""Data-model types for the 6-decision dispatch matcher (v5).
 
 Defines the dataclasses and constants that represent the dispatch
 catalog schema and the computed feature / score state.  All types are
@@ -14,14 +14,15 @@ from dataclasses import dataclass, field
 # Constants
 # ---------------------------------------------------------------------------
 
-# The seven valid routing decisions (v5 §3.1.4).
+# The six valid routing decisions (v5 §3.1.4, updated v0.9.0).
+# 'ambiguous' was removed in v0.9.0 (#202): tie scenarios now emit
+# 'advisory' with the top-scored agent named and alternatives populated.
 VALID_DECISIONS = frozenset(
     {
         "delegate",
         "self_handle",
         "self_handle_unaided",
         "advisory",
-        "ambiguous",
         "ask_user",
         "needs_more_detail",
     }
