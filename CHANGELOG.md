@@ -8,6 +8,26 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 (empty placeholder for the next cycle's entries)
 
+## [0.9.0] — 2026-05-22
+
+Minor release removing the `ambiguous` decision branch and reducing the
+routing decision surface from 7 to 6 branches. No breaking changes for
+consumers that handle `advisory` — which the router already treats as
+"pick the top agent" — and no new schema fields.
+
+### Changed
+
+- **Matcher decision surface reduced from 7 branches to 6: `ambiguous` removed
+  (#202).** Tie scenarios (multiple agents ≥ 0.5 with gap < 0.2) now emit
+  `advisory` with the top-scored agent named and close-scored alternatives
+  populated. The tie-vs-marginal distinction is preserved in the `rationale`
+  string: the tie case includes `gap=<value>` while the marginal case says
+  "match is not conclusive". The `alternatives` list for `advisory` is now
+  capped at `n=3` (was `n=2`) to give the tie case room for the full close
+  cluster. The `_AMBIGUOUS_MIN` constant and the `"ambiguous"` entry in
+  `VALID_DECISIONS` are both removed. Enables the router-side drift-scanner
+  counterpart in `glitchwerks/claude-configs#568`.
+
 ## [0.8.0] — 2026-05-22
 
 Minor release adding two new schema fields to the trigger and catalog surfaces. `path_globs_excluded` brings explicit path-based exclusion to trigger scoring; `applicable_agents_intentional` gives skill authors a way to document deliberate empty-agent lists without triggering an audit NIT. No breaking changes — existing triggers continue to work without modification.
