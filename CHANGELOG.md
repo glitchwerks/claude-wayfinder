@@ -6,8 +6,66 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Add `path_globs_excluded` trigger field: path-glob exclusion that drops an entry from the scored pool before additive scoring. Exclusion wins over `path_globs` inclusion. Migrate `doc-writer` fixture from scope-by-omission to explicit `path_globs_excluded`. (#24)
-- Add `applicable_agents_intentional` schema field to `CatalogEntry` and sidecar YAML; when set to a non-empty rationale string on a skill with `applicable_agents: []`, suppresses the `empty-applicable-agents` audit NIT. (#194)
+(empty placeholder for the next cycle's entries)
+
+## [0.8.0] — 2026-05-22
+
+Minor release adding two new schema fields to the trigger and catalog surfaces. `path_globs_excluded` brings explicit path-based exclusion to trigger scoring; `applicable_agents_intentional` gives skill authors a way to document deliberate empty-agent lists without triggering an audit NIT. No breaking changes — existing triggers continue to work without modification.
+
+### Added
+
+- **`path_globs_excluded` — explicit path exclusion in trigger scoring (#24).** The new
+  `path_globs_excluded` field accepts a list of fnmatch-style glob patterns. Any catalog
+  entry whose active file path matches one of these patterns is dropped from the scored
+  pool before additive scoring begins — exclusion wins unconditionally over `path_globs`
+  inclusion. Prior to this change, authors achieving path-scoped triggers had to rely on
+  scope-by-omission: leave `path_globs` empty and let other fields carry the scoring
+  weight, accepting that the entry would float in the pool for every prompt regardless of
+  context. Explicit exclusion is more predictable — you can now say "this trigger is
+  active everywhere *except* agent definitions" rather than hoping keyword scores do the
+  right thing. Both single-star (`agents/*.md`) and double-star (`agents/**/*.md`) forms
+  are supported and are additive; include both when you need to exclude files at the root
+  of a directory tree as well as in subdirectories. Example — `doc-writer` trigger sidecar
+  after migrating from scope-by-omission:
+
+  ```yaml
+  path_globs:
+    - "docs/**"
+    - "**/README.md"
+    - "**/CHANGELOG.md"
+    - "**/*.rst"
+    - "**/*.adoc"
+  path_globs_excluded:
+    - "agents/**/*.md"
+    - "agents/*.md"
+  ```
+
+- **`applicable_agents_intentional` — suppress audit NIT for documented-intentional empty
+  agent lists (#194).** The catalog audit emits an `empty-applicable-agents` NIT for any
+  skill whose `applicable_agents` list is empty, because that configuration means no
+  sub-agent will be offered the skill during dispatch. Most of the time the NIT correctly
+  flags an authoring gap. For skills that are intentionally router-only or
+  interactive-only — prompt skills, setup skills, skills that operate on the router's own
+  context — `applicable_agents: []` is correct by design. The new
+  `applicable_agents_intentional` field accepts a non-empty rationale string; when present,
+  the audit rule is suppressed. The field is accepted in both `CatalogEntry` (compiled
+  catalog) and sidecar YAML files, including `~/.claude/triggers/<plugin>/<skill>.yml`
+  plugin-override sidecars. If the string is empty or the field is absent, the audit NIT
+  fires as before. Example:
+
+  ```yaml
+  applicable_agents: []
+  applicable_agents_intentional: "Router-only: this skill drives an interactive session and has no sub-agent delegation use case."
+  ```
+
+### Internal
+
+- **`build_catalog.py` split into a five-module package** — `build_catalog.py` has been
+  refactored into a `build_catalog/` package as Phase 3 of the Python module-size audit
+  (#193, tracked in #199, shipped in #204). The public surface is preserved via
+  re-exports: `python -m claude_wayfinder build-catalog` and
+  `from claude_wayfinder.build_catalog import ...` continue to work without change. This
+  is a behavior-preserving refactor with no user-visible effect.
 
 ## [0.7.3] — 2026-05-20
 
