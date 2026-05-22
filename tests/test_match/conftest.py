@@ -275,13 +275,13 @@ _LOG_TEST_INPUT = {
 #: ISO 8601 UTC timestamp regex (e.g. 2026-05-03T12:34:56.789012Z).
 _ISO8601_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$")
 
-#: Valid matcher decision strings (v5 §3.1.4).
+#: Valid matcher decision strings (v0.9.0, 6-branch surface).
+#: 'ambiguous' was removed in v0.9.0 (#202).
 _VALID_DECISIONS = {
     "delegate",
     "self_handle",
     "self_handle_unaided",
     "advisory",
-    "ambiguous",
     "ask_user",
     "needs_more_detail",
 }

@@ -991,7 +991,6 @@ class TestPluginAgentExcluded:
             "advisory",
             "self_handle",
             "self_handle_unaided",
-            "ambiguous",
             "needs_more_detail",
         )
 

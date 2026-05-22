@@ -1,12 +1,12 @@
 ---
 name: dispatch
 description: >
-  Mode-aware dispatch skill for the claude-wayfinder deterministic 7-decision
+  Mode-aware dispatch skill for the claude-wayfinder deterministic 6-decision
   matcher. Operates in one of two modes depending on whether
   $DISPATCH_CATALOG_PATH is set in the environment:
 
     - Demo mode (env var absent): runs the matcher against bundled demo
-      fixtures and returns decision output for all 7 routing branches.
+      fixtures and returns decision output for all 6 routing branches.
       Use this to evaluate the matcher before integrating into your router.
 
     - Real-catalog mode (env var set to a valid catalog): reads a dispatch
@@ -23,7 +23,7 @@ triggers:
 # Dispatch Skill
 
 The `/dispatch` skill is a mode-aware wrapper around the
-**claude-wayfinder** deterministic 7-decision matcher.  The active mode is
+**claude-wayfinder** deterministic 6-decision matcher.  The active mode is
 determined by the environment — not by any flag the caller supplies.
 
 ## Modes
@@ -160,14 +160,13 @@ degraded-quality signal, not an error.  Run
 `"$PY" -m claude_wayfinder catalog build` (using the same explicit
 interpreter path resolved in the **Running** section above) to refresh.
 
-## The 7 decision branches
+## The 6 decision branches
 
 | Branch              | When it fires                                                   |
 |---------------------|-----------------------------------------------------------------|
+| `needs_more_detail` | Feature density < 2; provide more context to route accurately. |
 | `delegate`          | One agent scores ≥ 0.85 with a gap ≥ 0.2 above the next.      |
 | `self_handle`       | At least one skill scores ≥ 0.5; no dominant agent.            |
-| `self_handle_unaided` | Nothing scores above threshold; proceed without delegation. |
-| `advisory`          | Best agent ≥ 0.5 but not conclusive; suggested, not required.  |
-| `ambiguous`         | Multiple agents score ≥ 0.5 with gap < 0.2; needs tiebreak.   |
+| `advisory`          | Best agent ≥ 0.5. Covers both tie (gap < 0.2, rationale includes `gap=`) and marginal (gap ≥ 0.2 but score < 0.85) cases. Top agent named; alternatives populated. |
 | `ask_user`          | Reserved — not produced by the v0.1 matcher.                   |
-| `needs_more_detail` | Feature density < 2; provide more context to route accurately. |
+| `self_handle_unaided` | Nothing scores above threshold; proceed without delegation. |

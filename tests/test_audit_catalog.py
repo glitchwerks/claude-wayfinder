@@ -569,8 +569,8 @@ class TestConflictPairs:
         # empty, so neither agent is the "unscoped fallback" the matcher
         # can demote on path-bearing prompts. On the typical no-path
         # prompt, both score identically on the keyword overlap and the
-        # matcher emits ambiguous. That is the failure mode this rule
-        # must catch.
+        # matcher emits advisory (tie) with gap=0.0. That is the failure
+        # mode this rule must catch.
         a = self._e("a", ["one", "two", "three"], pg=["**/*.py"])
         b = self._e("b", ["one", "two", "three"], pg=["**/*.ts"])
         findings = rule_conflict_pairs([a, b])

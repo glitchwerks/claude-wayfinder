@@ -1,11 +1,10 @@
-"""Tests for the 7-step decision ladder implemented in match/_decide.py.
+"""Tests for the 6-step decision ladder implemented in match/_decide.py.
 
 Covers all six decision outcomes:
 - delegate (best agent >= 0.85, gap >= 0.2)
 - self_handle (no dominant agent, skill >= 0.5)
 - self_handle_unaided (no useful signal)
-- advisory (agent >= 0.5, no strong skill, gap >= 0.2)
-- ambiguous (agents tie above 0.5, gap < 0.2)
+- advisory (agent >= 0.5 — covers both tie and marginal cases)
 - needs_more_detail (feature density < 2)
 - ask_user (reserved; never produced in current impl)
 """
@@ -167,11 +166,17 @@ class TestDecisionAdvisory:
         assert "agent" in out
 
 
-class TestDecisionAmbiguous:
-    """Two agents tie above 0.5 with gap < 0.2 → 'ambiguous'."""
+class TestDecisionTieEmitsAdvisory:
+    """Two agents tie above 0.5 with gap < 0.2 → 'advisory' (not 'ambiguous').
 
-    def test_tied_agents_return_ambiguous(self, tmp_path: Path) -> None:
-        """Two agents with identical keyword + glob match → 'ambiguous'.
+    The ambiguous branch was removed in v0.9.0 (#202).  Tie scenarios now
+    emit advisory with the top-scored agent named and close alternatives
+    populated.  The tie-vs-marginal distinction is preserved in the
+    rationale string only.
+    """
+
+    def _tie_catalog(self) -> dict[str, object]:
+        """Catalog where two agents score identically at 0.8 each.
 
         Score breakdown for each agent:
           0.4 (glob **/*.py matches src/broken.py)
@@ -179,9 +184,9 @@ class TestDecisionAmbiguous:
           + 0.5*0.5 (fix keyword, weight=0.5)
           = 0.4 + 0.5 + 0.25 = 1.15 → clamped to 1.0
 
-        Both agents score identically → gap = 0 < 0.2 → ambiguous.
+        Both agents score identically → gap = 0 < 0.2.
         """
-        catalog = _catalog(
+        return _catalog(
             [
                 _make_agent(
                     "code-writer",
@@ -201,17 +206,101 @@ class TestDecisionAmbiguous:
                 ),
             ]
         )
-        # Both agents match identically → gap = 0 < 0.2 → ambiguous
+
+    def test_tie_emits_advisory_not_ambiguous(self, tmp_path: Path) -> None:
+        """Two tied agents produce 'advisory' with the top agent named.
+
+        Verifies the ambiguous branch is gone: tie conditions (gap < 0.2,
+        both agents >= 0.5) now surface as advisory rather than ambiguous.
+        The top-scored agent must be named, and alternatives must include
+        the second agent.
+        """
         stdin_obj = {
             "task_description": "write a fix for the broken function",
             "file_paths": ["src/broken.py"],
         }
+        result = _run(stdin_obj, self._tie_catalog(), tmp_path=tmp_path)
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+
+        assert out["decision"] == "advisory", (
+            f"Expected 'advisory' for a tie, got {out['decision']!r}. "
+            "The 'ambiguous' branch was removed in v0.9.0 (#202)."
+        )
+        assert "agent" in out, "advisory decision must name the top agent"
+        assert out["agent"] == "code-writer"
+        assert "alternatives" in out
+        alt_names = [a["agent"] for a in out["alternatives"]]
+        assert "debugger" in alt_names, (
+            f"Second tied agent 'debugger' missing from alternatives: {alt_names}"
+        )
+
+    def test_tie_rationale_mentions_gap(self, tmp_path: Path) -> None:
+        """Tie-flavoured advisory rationale must contain 'gap='.
+
+        The tie case and the marginal case both produce 'advisory', but the
+        rationale distinguishes them: a tie includes 'gap=' so consumers can
+        detect the close-cluster scenario from the rationale string alone.
+        """
+        stdin_obj = {
+            "task_description": "write a fix for the broken function",
+            "file_paths": ["src/broken.py"],
+        }
+        result = _run(stdin_obj, self._tie_catalog(), tmp_path=tmp_path)
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+
+        assert out["decision"] == "advisory"
+        assert "gap=" in out.get("rationale", ""), (
+            f"Tie rationale should contain 'gap=' but got: {out.get('rationale')!r}"
+        )
+
+
+class TestDecisionMarginalAdvisoryRationale:
+    """Marginal advisory (single agent, gap >= 0.2) uses 'not conclusive' rationale."""
+
+    def test_marginal_rationale_not_conclusive(self, tmp_path: Path) -> None:
+        """Single agent scores in advisory range → rationale contains 'not conclusive'.
+
+        Score breakdown for ops agent:
+          0.5*0.5 (check keyword, weight=0.5)
+          = 0.25 → below delegate threshold (0.85), above advisory min (0.5)?
+
+        We need a score >= 0.5 but < 0.85.  Use a keyword weight=1.0 to get
+        0.5*1.0 = 0.5 (the _ADVISORY_MIN floor), which, with a single agent
+        (gap = score = 0.5 < 0.85), lands in the advisory branch not delegate.
+
+        Keyword contribution: 0.5 * weight.  With weight=1.0 we get exactly
+        0.5, which is == _ADVISORY_MIN.  With a single agent the gap is the
+        agent score itself (0.5), which is < _DELEGATE_THRESHOLD (0.85), so
+        delegate does not fire.  advisory fires instead.
+        """
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "ops",
+                    keywords=[{"term": "statuscheck", "weight": 1.0}],
+                ),
+            ]
+        )
+        # "statuscheck" keyword hits ops → score = 0.5*1.0 = 0.5
+        # Single agent: gap = 0.5 < 0.85 → not delegate → advisory
+        stdin_obj = {
+            "task_description": "run a statuscheck on the service",
+            "tool_mentions": ["curl"],  # ensures feature_count >= 2
+        }
         result = _run(stdin_obj, catalog, tmp_path=tmp_path)
         assert result.returncode == 0, result.stderr
         out = json.loads(result.stdout)
-        assert out["decision"] == "ambiguous"
-        assert "alternatives" in out
-        assert len(out["alternatives"]) >= 2
+
+        assert out["decision"] == "advisory", (
+            f"Expected 'advisory' for marginal single-agent match, "
+            f"got {out['decision']!r}"
+        )
+        assert "not conclusive" in out.get("rationale", ""), (
+            f"Marginal rationale should contain 'not conclusive' but got: "
+            f"{out.get('rationale')!r}"
+        )
 
 
 class TestDecisionNeedsMoreDetail:
