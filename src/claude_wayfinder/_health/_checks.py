@@ -54,11 +54,11 @@ def _run_generator(
             ``~/.claude/triggers/builtin/`` — which would add entries
             to what should be an empty CI-isolated catalog.
     """
-    # __file__ is _health/_checks.py; go up two levels to claude_wayfinder/
-    script = Path(__file__).parent.parent / "build_catalog.py"
+    # build_catalog is now a package; invoke via -m rather than file path.
     cmd = [
         sys.executable,
-        str(script),
+        "-m",
+        "claude_wayfinder.build_catalog",
         "--skills-dir",
         str(skills_dir),
         "--agents-dir",

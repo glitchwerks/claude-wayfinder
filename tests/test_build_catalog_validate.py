@@ -22,8 +22,8 @@ from claude_wayfinder.build_catalog import (
     validate_entry,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "build_catalog.py"
+# build_catalog is now a package; invoke via -m rather than as a file path.
+_BUILD_MODULE = ["claude_wayfinder.build_catalog"]
 
 
 # Task 3 — validate_entry tests
@@ -460,7 +460,8 @@ class TestIssue10BuildCatalogPathDefaults:
         result = subprocess.run(
             [
                 sys.executable,
-                str(SCRIPT),
+                "-m",
+                *_BUILD_MODULE,
                 "--skills-dir",
                 str(skills_dir),
                 "--agents-dir",

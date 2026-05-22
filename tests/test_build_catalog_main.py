@@ -31,7 +31,8 @@ from claude_wayfinder.build_catalog import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "build_catalog.py"
+# build_catalog is now a package; invoke via -m rather than as a file path.
+_BUILD_MODULE = ["claude_wayfinder.build_catalog"]
 FIXTURES = Path(__file__).parent / "fixtures"
 
 # ---------------------------------------------------------------------------
@@ -520,7 +521,8 @@ class TestProjectLocalScanning:
         result = subprocess.run(
             [
                 sys.executable,
-                str(SCRIPT),
+                "-m",
+                *_BUILD_MODULE,
                 "--skills-dir",
                 str(tmp_path / "no-skills"),
                 "--agents-dir",
@@ -643,7 +645,8 @@ class TestProjectLocalScanning:
         subprocess.run(
             [
                 sys.executable,
-                str(SCRIPT),
+                "-m",
+                *_BUILD_MODULE,
                 "--skills-dir",
                 str(tmp_path / "no-skills"),
                 "--agents-dir",

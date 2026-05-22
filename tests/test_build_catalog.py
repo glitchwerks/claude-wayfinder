@@ -1,33 +1,25 @@
-"""Legacy tests for claude_wayfinder.build_catalog (pre-package refactor).
+"""Smoke test for the claude_wayfinder.build_catalog CLI entry point.
 
-.. deprecated::
-   This file contains tests that reference the old monolith
-   ``src/claude_wayfinder/build_catalog.py`` path.  They are superseded by
-   the per-submodule test files:
+build_catalog is now a package (``src/claude_wayfinder/build_catalog/``);
+it must be invoked via ``python -m claude_wayfinder.build_catalog``, not as
+a file path.  The per-submodule tests live in:
 
    - ``test_build_catalog_validate.py``
    - ``test_build_catalog_discover.py``
    - ``test_build_catalog_process.py``
    - ``test_build_catalog_main.py``
-
-The remaining test is retained so CI continues to exercise the known-failing
-case (build_catalog.py no longer exists as a file — it is now a package).
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "build_catalog.py"
 
 
 def test_cli_help_returns_zero() -> None:
-    """The script must respond to --help with exit code 0."""
+    """The package entry point must respond to --help with exit code 0."""
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--help"],
+        [sys.executable, "-m", "claude_wayfinder.build_catalog", "--help"],
         capture_output=True,
         text=True,
         check=False,

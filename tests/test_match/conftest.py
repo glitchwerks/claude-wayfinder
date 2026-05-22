@@ -39,7 +39,8 @@ _TRIGGERS_DIR = REPO_ROOT / "triggers"
 _FIXTURE_AGENTS_DIR = REPO_ROOT / "tests" / "fixtures" / "agents"
 _FIXTURE_SKILLS_DIR = REPO_ROOT / "tests" / "fixtures" / "skills"
 
-_BUILD_SCRIPT = REPO_ROOT / "src" / "claude_wayfinder" / "build_catalog.py"
+# build_catalog is now a package; invoke via -m rather than as a file path.
+_BUILD_MODULE = ["claude_wayfinder.build_catalog"]
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +174,8 @@ def _build_live_catalog(tmp_path: Path) -> Path:
     result = subprocess.run(
         [
             PYTHON,
-            str(_BUILD_SCRIPT),
+            "-m",
+            *_BUILD_MODULE,
             "--agents-dir",
             str(_AGENTS_DIR),
             "--skills-dir",
@@ -222,7 +224,8 @@ def _build_synthetic_catalog(tmp_path: Path) -> Path:
     result = subprocess.run(
         [
             PYTHON,
-            str(_BUILD_SCRIPT),
+            "-m",
+            *_BUILD_MODULE,
             "--agents-dir",
             str(_FIXTURE_AGENTS_DIR),
             "--skills-dir",
@@ -283,7 +286,7 @@ __all__ = [
     "PYTHON",
     "REPO_ROOT",
     "_AGENTS_DIR",
-    "_BUILD_SCRIPT",
+    "_BUILD_MODULE",
     "_FIXTURE_AGENTS_DIR",
     "_FIXTURE_SKILLS_DIR",
     "_ISO8601_RE",
