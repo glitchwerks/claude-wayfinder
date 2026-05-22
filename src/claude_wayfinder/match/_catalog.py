@@ -233,6 +233,9 @@ def load_catalog(path: Path) -> list[CatalogEntry]:
                 applicable_skills=tuple(raw.get("applicable_skills", [])),
                 source=str(raw.get("source", "owned")),
                 routable=bool(raw.get("routable", True)),
+                applicable_agents_intentional=str(
+                    raw.get("applicable_agents_intentional", "")
+                ),
             )
         )
     return entries

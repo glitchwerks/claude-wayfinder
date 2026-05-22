@@ -733,10 +733,17 @@ def rule_source_routable_mismatch(
 def rule_empty_applicable_agents(
     catalog: list[CatalogEntry],
 ) -> list[Finding]:
-    """Flag skills with empty applicable_agents."""
+    """Flag skills with empty applicable_agents.
+
+    Suppressed when ``applicable_agents_intentional`` is a non-empty
+    string documenting why the empty list is deliberate (e.g. for
+    router-only interactive skills where ``["*"]`` would be wrong).
+    """
     out: list[Finding] = []
     for e in catalog:
         if e.kind == "skill" and e.applicable_agents == tuple():
+            if e.applicable_agents_intentional:
+                continue
             out.append(
                 Finding(
                     severity=Severity.NIT,

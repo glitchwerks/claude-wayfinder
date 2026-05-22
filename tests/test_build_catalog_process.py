@@ -786,6 +786,70 @@ def test_plugin_override_disabled_returns_sentinel(tmp_path: Path) -> None:
     assert "permanently broken" in result[2]
 
 
+# --- applicable_agents_intentional field threading ---
+
+
+def test_plugin_override_applicable_agents_intentional_threaded(
+    tmp_path: Path,
+) -> None:
+    """applicable_agents_intentional in sidecar is threaded into the entry dict.
+
+    A plugin-override sidecar carrying ``applicable_agents_intentional``
+    must have the field copied into the returned entry dict so the audit
+    rule can suppress the ``empty-applicable-agents`` NIT.
+    """
+    from claude_wayfinder.build_catalog import _process_plugin_override
+
+    sidecar = {
+        "triggers": {
+            "keywords": [{"term": "brainstorm", "weight": 1.0}],
+        },
+        "applicable_agents": [],
+        "applicable_agents_intentional": "router-only interactive skill",
+    }
+    issues: list = []
+    result = _process_plugin_override("superpowers:brainstorming", sidecar, issues_sink=issues)
+    assert result is not None, "expected an entry dict, got None"
+    assert isinstance(result, dict), f"expected dict, got {type(result).__name__}"
+    assert result.get("applicable_agents_intentional") == "router-only interactive skill", (
+        f"expected applicable_agents_intentional in entry, got: {result}"
+    )
+
+
+def test_skill_file_applicable_agents_intentional_threaded(
+    tmp_path: Path,
+) -> None:
+    """applicable_agents_intentional in triggers.yml is threaded into the entry dict.
+
+    A skill sidecar (triggers.yml) carrying ``applicable_agents_intentional``
+    must have the field copied into the returned entry dict so the audit
+    rule can suppress the ``empty-applicable-agents`` NIT.
+    """
+    from claude_wayfinder.build_catalog import _process_skill_file
+    from claude_wayfinder.build_catalog._validate import ValidationIssue
+
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: my-skill\ndescription: A router-only skill.\n---\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "triggers.yml").write_text(
+        "triggers:\n"
+        "  keywords:\n"
+        "    - {term: route, weight: 1.0}\n"
+        "applicable_agents: []\n"
+        "applicable_agents_intentional: router-only interactive skill\n",
+        encoding="utf-8",
+    )
+    issues: list[ValidationIssue] = []
+    result = _process_skill_file(skill_dir / "SKILL.md", issues_sink=issues)
+    assert result is not None, "expected an entry dict, got None"
+    assert result.get("applicable_agents_intentional") == "router-only interactive skill", (
+        f"expected applicable_agents_intentional in entry, got: {result}"
+    )
+
+
 # --- Pass-3 collision-merge: owned-name protection ---
 
 

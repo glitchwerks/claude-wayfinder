@@ -6,6 +6,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add `applicable_agents_intentional` schema field to `CatalogEntry` and sidecar YAML; when set to a non-empty rationale string on a skill with `applicable_agents: []`, suppresses the `empty-applicable-agents` audit NIT. (#194)
+
 ## [0.7.3] — 2026-05-20
 
 Patch release fixing two SessionStart-hook bugs that affected every
