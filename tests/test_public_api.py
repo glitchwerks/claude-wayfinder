@@ -135,11 +135,13 @@ def test_valid_decisions_is_frozenset() -> None:
     assert all(isinstance(d, str) for d in VALID_DECISIONS)
 
 
-def test_valid_decisions_contains_six_values() -> None:
-    """``VALID_DECISIONS`` must enumerate exactly the 6 v0.9.0 routing decisions.
+def test_valid_decisions_contains_seven_values() -> None:
+    """``VALID_DECISIONS`` must enumerate exactly the 7 v0.10.0 routing decisions.
 
     'ambiguous' was removed in v0.9.0 (#202): tie scenarios now emit
     'advisory' with the top-scored agent named and alternatives populated.
+    'mixed_content' was added in v0.10.0 (#210): structural two-handed tasks
+    where >= 2 agents clamp at 1.0 on path-disjoint lanes.
     """
     from claude_wayfinder import VALID_DECISIONS
 
@@ -150,10 +152,15 @@ def test_valid_decisions_contains_six_values() -> None:
         "advisory",
         "ask_user",
         "needs_more_detail",
+        "mixed_content",
     }
     assert VALID_DECISIONS == expected
     assert "ambiguous" not in VALID_DECISIONS, (
-        "'ambiguous' was removed in v0.9.0 — it must not reappear in VALID_DECISIONS"
+        "'ambiguous' was removed in v0.9.0 — it must not reappear in "
+        "VALID_DECISIONS"
+    )
+    assert "mixed_content" in VALID_DECISIONS, (
+        "'mixed_content' was added in v0.10.0 (#210)"
     )
 
 
