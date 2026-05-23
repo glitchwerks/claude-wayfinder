@@ -1,4 +1,4 @@
-"""Deterministic 7-decision dispatch matcher for the router (v5).
+"""Deterministic 7-decision dispatch matcher for the router (v5, #210).
 
 Reads a JSON dispatch context from stdin and writes a JSON routing
 decision to stdout.  The catalog path must be supplied via one of:
@@ -32,13 +32,15 @@ The names below are importable directly from ``claude_wayfinder.match``
 and form the stable public API used by ``_dispatch.py`` and tests.
 
 Dataclasses:
-    CatalogEntry, Features, Keyword, KeywordGroup, ScoredEntry, Slot, Triggers
+    CatalogEntry, Features, Keyword, KeywordGroup, LaneInfo, ScoredEntry,
+    Slot, Triggers
 
 Functions:
-    build_features, decide, group_satisfied, load_catalog, score
+    build_features, decide, group_satisfied, load_catalog, matched_paths_for,
+    score
 
 Constants:
-    VALID_DECISIONS
+    VALID_DECISIONS, _MIXED_CONTENT_SCORE_EPSILON
 
 Entry point:
     main — invoked by ``_dispatch.py`` via dynamic import.
@@ -56,6 +58,9 @@ from claude_wayfinder.match._catalog import (
 )
 from claude_wayfinder.match._catalog import (
     load_catalog as load_catalog,
+)
+from claude_wayfinder.match._decide import (
+    _MIXED_CONTENT_SCORE_EPSILON as _MIXED_CONTENT_SCORE_EPSILON,  # re-export
 )
 from claude_wayfinder.match._decide import (
     _rationale_for as _rationale_for,  # re-export for test compat
@@ -80,6 +85,9 @@ from claude_wayfinder.match._match import (
     group_satisfied as group_satisfied,
 )
 from claude_wayfinder.match._match import (
+    matched_paths_for as matched_paths_for,
+)
+from claude_wayfinder.match._match import (
     score as score,
 )
 from claude_wayfinder.match._parse import _parse_triggers as _parse_triggers  # re-export
@@ -99,6 +107,9 @@ from claude_wayfinder.match._types import (
     KeywordGroup as KeywordGroup,
 )
 from claude_wayfinder.match._types import (
+    LaneInfo as LaneInfo,
+)
+from claude_wayfinder.match._types import (
     ScoredEntry as ScoredEntry,
 )
 from claude_wayfinder.match._types import (
@@ -114,6 +125,7 @@ __all__ = [
     "Features",
     "Keyword",
     "KeywordGroup",
+    "LaneInfo",
     "ScoredEntry",
     "Slot",
     "Triggers",
@@ -122,5 +134,6 @@ __all__ = [
     "group_satisfied",
     "load_catalog",
     "main",
+    "matched_paths_for",
     "score",
 ]
