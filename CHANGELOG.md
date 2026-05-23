@@ -6,6 +6,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-05-23
+
+Minor release adding a new `mixed_content` decision type to the matcher's
+decision ladder. This is the C half of the C-then-B plan from `#138`:
+the matcher now emits structured per-agent lane breakdowns for
+structurally two-handed tasks. The router-side consumer
+(`glitchwerks/claude-configs#704`) will fan out across the lanes in a
+follow-up; until then, downstream routers can either present the lanes
+to the user or fall back to treating the decision like `advisory` (pick
+the first lane's agent).
+
 ### Added
 
 - **New `mixed_content` decision type emitted when ≥2 agents clamp at 1.0
