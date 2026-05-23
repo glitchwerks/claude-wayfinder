@@ -169,6 +169,45 @@ def _matched_glob_count(entry: CatalogEntry, features: Features) -> int:
     return count
 
 
+def matched_paths_for(
+    entry: CatalogEntry, features: Features
+) -> list[str]:
+    """Return the subset of feature paths claimed by an entry's path globs.
+
+    A path is claimed when at least one of the entry's ``path_globs``
+    matches it (after normalising separators to ``/``).  The function
+    respects ``path_globs_excluded``: paths excluded by the entry's
+    exclusion globs are never returned, even if an inclusion glob also
+    matches them.
+
+    This is the path-level counterpart to ``_matched_glob_count``, which
+    counts matched *globs*; this function returns matched *paths*.  The
+    distinction matters for lane partitioning in ``mixed_content``
+    detection: two agents may share globs (e.g. ``**/*.md``) but still
+    partition cleanly across disjoint input paths.
+
+    Args:
+        entry: The catalog entry whose globs are tested.
+        features: The extracted feature set.
+
+    Returns:
+        List of input paths (original form, not normalised) that at least
+        one of the entry's ``path_globs`` matches and no
+        ``path_globs_excluded`` pattern matches.
+    """
+    t = entry.triggers
+    claimed: list[str] = []
+    for path in features.paths:
+        normalised = path.replace("\\", "/")
+        # Exclusion wins: skip if any exclusion glob matches.
+        if any(fnmatch.fnmatch(normalised, excl) for excl in t.path_globs_excluded):
+            continue
+        # Claim if any inclusion glob matches.
+        if any(fnmatch.fnmatch(normalised, g) for g in t.path_globs):
+            claimed.append(path)
+    return claimed
+
+
 def group_satisfied(group: KeywordGroup, features: Features) -> bool:
     """Return True iff every slot has at least one term in features.keywords.
 
