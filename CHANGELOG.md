@@ -6,7 +6,26 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(empty placeholder for the next cycle's entries)
+### Added
+
+- **New `mixed_content` decision type emitted when ≥2 agents clamp at 1.0
+  on path-disjoint lanes (#210).** Structural mixed-content tasks — where the
+  workload is genuinely split between agents (e.g. code-writer for source files,
+  doc-writer for docs) — now produce `mixed_content` instead of `advisory`.
+  The decision includes a `lanes[]` list (each with `agent`, `score`,
+  `matched_paths`, and `skills`) and an `unassigned_paths[]` field for paths
+  not claimed by any top-tier agent.  Falls through to `advisory` when
+  conditions are not met (paths overlap, only one agent at threshold, or
+  tie is keyword-only with no path-glob contribution).  The detection
+  epsilon is `_MIXED_CONTENT_SCORE_EPSILON = 0.05`.
+
+### Internal
+
+- Added `scripts/replay_mixed_content.py` — acceptance evidence replay script
+  for #210.  Loads the live catalog and ambig-cases fixture and reports which
+  cases flip from `ambiguous`/`advisory` to `mixed_content`.  Not a pytest
+  test (depends on user-local state); run with `AMBIG_CASES_PATH` pointing
+  to the parent checkout's `.tmp/ambig-cases.json`.
 
 ## [0.9.0] — 2026-05-22
 
