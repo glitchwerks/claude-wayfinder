@@ -21,7 +21,7 @@ touches:
   - tests/test_match/test_integration.py
   - tests/test_audit_catalog.py
   - tests/test_cli_dispatch.py
-  - docs/superpowers/specs/2026-05-24-dispatch-overrides.md
+  - docs/dispatch-overrides.md
   - README.md
 skills_relevant:
   - python

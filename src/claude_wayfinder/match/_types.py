@@ -211,7 +211,7 @@ class LaneInfo:
 class OverrideRule:
     """A deterministic override rule.
 
-    See docs/superpowers/specs/2026-05-24-dispatch-overrides.md.
+    See docs/dispatch-overrides.md.
 
     A rule matches when ALL of its non-empty predicates are satisfied.
     A rule with zero predicates is invalid (caught by audit-catalog).

@@ -79,7 +79,7 @@ Per `CLAUDE.md § Document Files` ("delete plan files when done; extract durable
 | `specs/2026-05-18-owned-project-agent-sidecars.md` | #148 | closed | **Extract then delete** | D1–D6 sidecar/source-tag conventions → `docs/schema.md` + `docs/design/trigger-schema.md` |
 | `specs/2026-05-18-plugin-agent-sidecar-overrides.md` | #140 | closed | **Extract then delete** | D1–D7 plugin-agent override conventions → `docs/schema.md` + `docs/design/trigger-schema.md` |
 | `specs/2026-05-19-telemetry-bypass-taxonomy-design.md` | #143 | closed | **Keep** | Live schema reference for bypass-cause enum; cited by `bypass-taxonomy.js` + `analyze-drift-causes.py` |
-| `specs/2026-05-24-dispatch-overrides.md` | #213 | closed | **Keep** | Live design for v0.11.0 overrides feature; referenced by CHANGELOG + README |
+| `docs/dispatch-overrides.md` | #213 | closed | **Keep** | Live design for v0.11.0 overrides feature; referenced by CHANGELOG + README (relocated from `specs/` by #246) |
 | `plans/2026-05-16-v0.4-bundled-venv.md` | #81 | closed/not_planned | **Delete** | Superseded by #99 setup-skill design; carries deferred banner |
 | `plans/2026-05-16-v0.4-bundled-venv.inquisitor-pass-1.md` | #81 | closed/not_planned | **Delete** | Critique of deferred plan; dissolved by architecture pivot |
 | `plans/2026-05-17-v0.4-bundled-venv-revision.md` | #81 | closed/not_planned | **Delete** | Revision pass; carries superseded banner |
