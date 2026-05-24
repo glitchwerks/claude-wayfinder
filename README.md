@@ -227,7 +227,7 @@ The plugin ships two skills usable inside Claude Code:
 
 ## Dispatch overrides
 
-Override rules let you short-circuit the scorer for known-good routing decisions. When an override rule's predicates match the dispatch context, the matcher returns the rule's pre-declared decision verbatim — no scoring, no decision ladder.
+Dispatch overrides are hard-coded routing decisions that bypass the scoring pipeline entirely: when an override rule's predicates match the dispatch context, the matcher returns the rule's pre-declared `(decision, agent, skills, confidence, rationale)` verbatim and skips all scoring. Use them for routes you want pinned unconditionally — a `/deploy` command that must never be delegated, or all Python files that should always reach `code-writer` — and not as a substitute for a well-tuned catalog. Overrides take precedence over scored decisions; they fire first, and a matched override short-circuits the rest of the pipeline.
 
 Set the env var to point at your rule file:
 
@@ -263,7 +263,7 @@ A minimal two-rule file covering the two most common predicates (substitute your
 }
 ```
 
-When `$DISPATCH_OVERRIDES_PATH` is unset, scored matching runs unchanged. On load failure, `[OVERRIDES ERROR]` is emitted to stderr and the matcher falls back to scoring. For the full predicate vocabulary, audit rules, telemetry schema, and design rationale, see [`docs/superpowers/specs/2026-05-24-dispatch-overrides.md`](docs/superpowers/specs/2026-05-24-dispatch-overrides.md).
+When `$DISPATCH_OVERRIDES_PATH` is unset, scored matching runs unchanged. On load failure, `[OVERRIDES ERROR]` is emitted to stderr and the matcher falls back to scoring. For the full predicate vocabulary, audit rules, telemetry schema, and design rationale, see [`docs/dispatch-overrides.md`](docs/dispatch-overrides.md).
 
 ## What's next
 

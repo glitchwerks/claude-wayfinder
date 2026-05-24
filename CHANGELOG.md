@@ -59,7 +59,7 @@ follow-up migration is tracked in `glitchwerks/claude-configs#732`.
   (3 rules, one per predicate) + a matching demo prompt in
   `demo-prompts.json`. End-to-end pipeline test runs through `_main.py:main()`.
 - **Reviewer-facing spec** at
-  `docs/superpowers/specs/2026-05-24-dispatch-overrides.md` — schema,
+  `docs/dispatch-overrides.md` — schema,
   predicate vocabulary, resolution order, public/private boundary,
   telemetry shape, audit-rule table, out-of-scope list.
 
