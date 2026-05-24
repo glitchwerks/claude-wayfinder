@@ -206,6 +206,6 @@ Quoted from issue #213:
 ## Related
 
 - Issue [#213](https://github.com/glitchwerks/claude-wayfinder/issues/213) — implementation tracking and acceptance criteria.
-- Plan file: `docs/superpowers/plans/2026-05-24-issue-213-dispatch-overrides.md` — design decisions D1–D7, Rev 1 review resolution, task breakdown.
+- PR [#214](https://github.com/glitchwerks/claude-wayfinder/pull/214) — implementation; design decisions D1–D7, Rev 1 review resolution, and task breakdown were tracked in the plan file (deleted per #224 after shipment).
 - Issue [#54](https://github.com/glitchwerks/claude-wayfinder/issues/54) — public/private split precedent.
 - `glitchwerks/claude-configs` — consumer migration of existing prose-policy routing onto override rules (AC #7, separate follow-up PR).
