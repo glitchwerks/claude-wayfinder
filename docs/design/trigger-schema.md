@@ -106,6 +106,8 @@ A tombstone targeting an entry that does not exist (e.g. the plugin was uninstal
 
 ### 2c. Agent files
 
+<!-- D2/D3/D5 extracted from #148 owned-project-agent-sidecars spec (audit #216 → fix #221): sidecar wins over inline triggers (warn when both present); strict orphan handling (no matching .md → warn and drop); inline triggers coexist indefinitely, no forced migration -->
+<!-- D3/D5 extracted from #140 plugin-agent-sidecar-overrides spec (audit #216 → fix #221): strict Mode 2a semantics apply to colocated sidecars too; unmatched sidecars emit warnings and are dropped -->
 Agents support two equivalent trigger sources. Inline frontmatter is the original form; the **colocated sidecar** (Issue #148) is the recommended path for new authoring because it separates dispatch configuration from agent prose.
 
 #### Inline frontmatter (supported indefinitely)
@@ -308,6 +310,7 @@ The replaced entry inherits `source="plugin-override"`. If no plugin-discovered 
 
 ### 2g. Plugin agents and `is_agent_routable`
 
+<!-- D3/D4/D6 extracted from #140 plugin-agent-sidecar-overrides spec (audit #216 → fix #221): strict Mode 2a (ghost sidecars warn and drop, not append); no min_claude_version in agent sidecars (plugin versioning via manifest); watcher coverage verified — hooks/refresh-catalog-on-stale.js walks triggers/<plugin>/agents/*.yml (lines 208-223) -->
 Plugin-discovered agents (`kind="agent"`, `source="plugin"`) are **inert by default**: `is_agent_routable` in `src/claude_wayfinder/match_filters.py` filters them out of the scoring pool at dispatch time. They appear in the catalog but never drive a routing decision.
 
 **Activating a plugin agent via an agent sidecar (Issue #140):** create an agent plugin-override sidecar at `triggers/<plugin>/agents/<name>.yml` with a non-empty `triggers:` block. The catalog builder walks this subdirectory during Pass 3b and replaces the matching dormant plugin entry with `source="plugin-override"` and `routable: true`. The sidecar must match an installed plugin agent — unmatched sidecars (ghost sidecars) emit a warning and are dropped (strict Mode 2a semantics). `is_agent_routable` treats `source="plugin-override"` as routable.
@@ -1009,4 +1012,4 @@ Prefer the `agents/` subdirectory form for new overrides — it enforces match-r
 - **EXCLUDE_DEAD_ZONE validation:** runs against a captured routing corpus when one is available. See §7.
 - **Expanded keyword matching modes.** Evaluate stemming/substring after corpus data accumulates.
 - **Schema versioning.** Add `schema_version: 1` to sidecar files when a breaking schema change ships.
-- **Agent sidecar support.** Agents currently use inline frontmatter. A future version may add `agents/<name>.triggers.yml` sidecar support.
+- **Agent sidecar support.** Shipped in Issue #148. Agents may use a colocated `<name>.triggers.yml` sidecar next to their `.md` file; see §2c for the full reference.
