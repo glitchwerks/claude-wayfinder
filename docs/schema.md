@@ -241,14 +241,16 @@ def score(entry, features):
 
     s = 0.0
     s += 0.4 * matched_glob_count(entry, features)
-    s += sum(0.3 * k.weight for k in entry.triggers.keywords if k.term in features.keywords)
+    s += sum(0.5 * k.weight for k in entry.triggers.keywords if k.term in features.keywords)
     s += 0.5 * len([t for t in entry.triggers.tool_mentions if t in features.tool_mentions])
     return min(s, 1.0)
 ```
 
 Short-circuits fire before additive scoring. `command_prefixes` and `agent_mentions` short-circuit to `1.0`; `excludes` short-circuits to `0.0`. All three match against `features.keywords` only — `excludes` does not check `tool_mentions` or `agent_mentions`.
 
-Coefficient summary: path glob match = `0.4` per glob; keyword match = `0.3 × weight` per term; tool mention match = `0.5` per tool. Score is clamped to `1.0`.
+Coefficient summary: path glob match = `0.4` per glob; keyword match = `0.5 × weight` per term; tool mention match = `0.5` per tool. Score is clamped to `1.0`.
+
+Satisfied keyword **groups** (`triggers.keyword_groups`, AND-conjunction) contribute `1.0 × weight` per group — a distinct multiplier from the per-keyword `0.5` (see `src/claude_wayfinder/match/_match.py:L38,L46`).
 
 ### Decision composition
 
