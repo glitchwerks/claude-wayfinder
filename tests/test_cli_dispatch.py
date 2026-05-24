@@ -390,3 +390,85 @@ class TestStaleMtimeWarning:
             f"'decision' key missing from stale-catalog output.\n"
             f"output: {decision}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Demo-mode override short-circuit
+# ---------------------------------------------------------------------------
+
+
+class TestDemoModeOverride:
+    """When ``$DISPATCH_OVERRIDES_PATH`` is set and a rule matches a demo
+    prompt, ``run_demo()`` must short-circuit scoring and emit the override
+    decision with ``disposition_source: override`` in the formatted output."""
+
+    @pytest.fixture
+    def override_file(self, tmp_path: Path) -> Path:
+        """Write an overrides file whose rule matches the first demo prompt.
+
+        The first demo prompt has ``file_paths: ["src/auth.py"]``, so a
+        ``path_globs: ["src/*.py"]`` predicate will fire on it.
+
+        Args:
+            tmp_path: pytest temporary directory.
+
+        Returns:
+            Path to the written overrides JSON file.
+        """
+        rules = {
+            "rules": [
+                {
+                    "id": "demo-override-fires",
+                    "decision": "self_handle_unaided",
+                    "confidence": 0.99,
+                    "rationale": "override rule matched src/*.py",
+                    "predicates": {
+                        "path_globs": ["src/*.py"],
+                    },
+                }
+            ]
+        }
+        p = tmp_path / "overrides.json"
+        p.write_text(json.dumps(rules), encoding="utf-8")
+        return p
+
+    def test_demo_override_emits_disposition_source(
+        self, override_file: Path, tmp_path: Path
+    ) -> None:
+        """run_demo() with a matching override must show 'override' in output.
+
+        The output is human-readable formatted text.  When an override rule
+        fires, the formatted block for that prompt must contain the string
+        ``disposition_source : override`` and ``override_id``.
+        """
+        import io
+
+        from claude_wayfinder.cli import run_demo
+
+        env_backup = os.environ.get("DISPATCH_OVERRIDES_PATH")
+        try:
+            os.environ["DISPATCH_OVERRIDES_PATH"] = str(override_file)
+            buf = io.StringIO()
+            exit_code = run_demo(out=buf)
+        finally:
+            if env_backup is None:
+                os.environ.pop("DISPATCH_OVERRIDES_PATH", None)
+            else:
+                os.environ["DISPATCH_OVERRIDES_PATH"] = env_backup
+
+        assert exit_code == 0, (
+            f"run_demo() exited {exit_code} with override set"
+        )
+        output = buf.getvalue()
+        assert "disposition_source : override" in output, (
+            f"Expected 'disposition_source : override' in demo output.\n"
+            f"output:\n{output}"
+        )
+        assert "override_id" in output, (
+            f"Expected 'override_id' in demo output.\n"
+            f"output:\n{output}"
+        )
+        assert "demo-override-fires" in output, (
+            f"Expected rule id 'demo-override-fires' in demo output.\n"
+            f"output:\n{output}"
+        )

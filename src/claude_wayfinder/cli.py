@@ -30,6 +30,12 @@ from claude_wayfinder.match import (
     load_catalog,
     score,
 )
+from claude_wayfinder.match._catalog import _resolve_overrides_path
+from claude_wayfinder.match._overrides import (
+    OverridesError,
+    load_overrides,
+    resolve_override,
+)
 from claude_wayfinder.match_filters import is_agent_routable
 
 # ---------------------------------------------------------------------------
@@ -126,6 +132,12 @@ def _format_decision(result: dict[str, Any]) -> str:
             f"{a['agent']}({a['score']:.2f})" for a in alts
         )
         lines.append(f"  alternatives: {alt_str}")
+    if "disposition_source" in result:
+        lines.append(
+            f"  disposition_source : {result['disposition_source']}"
+        )
+    if "override_id" in result:
+        lines.append(f"  override_id : {result['override_id']}")
     return "\n".join(lines)
 
 
@@ -179,6 +191,19 @@ def run_demo(out: Any = None) -> int:
     )
     print("", file=out)
 
+    # --- Load overrides (if $DISPATCH_OVERRIDES_PATH is set) ---
+    overrides_path = _resolve_overrides_path()
+    override_rules: list[Any] = []
+    if overrides_path is not None:
+        try:
+            override_rules = load_overrides(overrides_path)
+        except OverridesError as exc:
+            print(
+                f"[OVERRIDES ERROR] {exc}; demo proceeding with "
+                "scored matching.",
+                file=sys.stderr,
+            )
+
     # --- Iterate prompts ---
     for idx, prompt in enumerate(prompts, start=1):
         branch = prompt.get("_branch", f"prompt-{idx}")
@@ -213,6 +238,33 @@ def run_demo(out: Any = None) -> int:
             context["task_description"] = ""
 
         features = build_features(context)
+
+        # Override short-circuit: if a rule matches, emit its decision and
+        # skip scoring entirely for this prompt.
+        override_match = resolve_override(override_rules, features)
+        if override_match is not None:
+            rule = override_match.rule
+            result: dict[str, Any] = {
+                "decision": rule.decision,
+                "confidence": rule.confidence,
+                "rationale": rule.rationale,
+                "alternatives": [],
+                "disposition_source": "override",
+                "override_id": rule.id,
+            }
+            if rule.agent is not None:
+                result["agent"] = rule.agent
+            if rule.skills:
+                result["skills"] = list(rule.skills)
+            task_desc = context.get("task_description", "")
+            paths = context.get("file_paths", [])
+            print(f"  input       : {task_desc!r}", file=out)
+            if paths:
+                print(f"  file_paths  : {paths}", file=out)
+            print(_format_decision(result), file=out)
+            print("", file=out)
+            continue
+
         scored_agents, scored_skills = _score_catalog(entries, features)
         result = decide(scored_agents, scored_skills, features, entries)
 
