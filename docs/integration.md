@@ -318,13 +318,15 @@ When the matcher returns a decision that does not match your expectation for a g
 
 **Level 2 — Inspect the catalog entry.** Open your catalog JSON at `$DISPATCH_CATALOG_PATH` and locate the entry for the agent or skill in question. The `triggers` block contains the keywords, path globs, tool names, and command prefixes that are scored against the dispatch context. Compare against the features you sent.
 
-To inspect how features are extracted from your dispatch context, run the matcher directly against `claude-wayfinder-match` (the lower-level entry point) and examine the output:
+To inspect how the matcher evaluates a dispatch context, pipe a JSON object to `claude-wayfinder-match`. This command is a direct alias for `claude-wayfinder dispatch` — both read dispatch-context JSON from stdin and write decision JSON to stdout — and is convenient in shell pipelines where a shorter command is preferred:
 
 ```bash
-echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
+echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"]}' \
   | DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json \
-    claude-wayfinder dispatch
+    claude-wayfinder-match
 ```
+
+The `--catalog-path` flag can replace the env var: `claude-wayfinder-match --catalog-path /path/to/catalog.json`. Both entry points are documented in [`docs/api.md` — CLI entry points](api.md#cli-entry-points).
 
 This returns the same decision JSON the router would receive. Adjust the dispatch context fields until the output matches the decision you expect, then verify that your router's composition step is producing equivalent context.
 

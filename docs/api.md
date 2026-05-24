@@ -4,6 +4,27 @@
 
 For the matcher's design rationale, see [`docs/design.md`](design.md). For the seven-decision contract and the scoring algorithm, see [`docs/schema.md`](schema.md).
 
+## CLI entry points
+
+The plugin installs two console scripts on package install (declared in `pyproject.toml` under `[project.scripts]`):
+
+| Command | Underlying module | Use when |
+| --- | --- | --- |
+| `claude-wayfinder` | `claude_wayfinder.cli:main` | You want the full CLI surface — subcommands like `dispatch`, `catalog build`, `health`. |
+| `claude-wayfinder-match` | `claude_wayfinder.match:main` | You want a direct shortcut to the matcher in shell pipelines. Equivalent to `claude-wayfinder dispatch`; reads dispatch-context JSON from stdin and writes decision JSON to stdout. |
+
+Both honor `$DISPATCH_CATALOG_PATH` for catalog resolution. `claude-wayfinder-match` also accepts a `--catalog-path <path>` flag that overrides the env var (resolution order: `--catalog-path` > `DISPATCH_CATALOG_PATH` > error).
+
+### Example: `claude-wayfinder-match`
+
+```bash
+echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"]}' \
+  | DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json \
+    claude-wayfinder-match
+```
+
+The stdin JSON shape: `task_description` is required; `file_paths`, `agent_mentions`, `tool_mentions`, and `command_prefix` are optional and default to empty/null when omitted.
+
 ## Public surface
 
 Every name listed here can be imported directly from the package:
