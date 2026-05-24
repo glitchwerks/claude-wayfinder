@@ -58,6 +58,48 @@ Open a new session. Hooks read the setup-state flag at session start; an in-prog
 
 There are two distinct paths depending on your goal.
 
+### What is a dispatch context?
+
+Before using either path, it helps to understand what the matcher actually reads. When the router agent invokes `/dispatch`, it passes a **dispatch context** — a small JSON object with up to five fields:
+
+| Field | Type | What it carries |
+|---|---|---|
+| `task_description` | string | The task sentence. Tokenized into keywords for matching. Required. |
+| `file_paths` | array of strings | File or directory paths mentioned or implied by the current turn. |
+| `agent_mentions` | array of strings | Agent names the user explicitly named (e.g. `"code-writer"`). |
+| `tool_mentions` | array of strings | Tool names the user explicitly named (e.g. `"Bash"`, `"Grep"`). |
+| `command_prefix` | string or null | The slash command the user typed, if any (e.g. `"/refactor"`). |
+
+**The ≥ 2 dimensions rule.** The matcher counts how many of these fields are populated — each non-empty field is one "input dimension". If fewer than 2 dimensions are populated, the matcher returns `needs_more_detail` without attempting to score any catalog entries. This is not an error; it means the context is too sparse to route reliably. A `task_description` with at least one keyword counts as one dimension; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each add one dimension when non-empty.
+
+**Good context** (2 dimensions — `task_description` + `file_paths`):
+
+```json
+{
+  "task_description": "implement OAuth login flow",
+  "file_paths": ["src/auth/oauth.py"],
+  "agent_mentions": [],
+  "tool_mentions": [],
+  "command_prefix": null
+}
+```
+
+**Too sparse** (1 dimension — `task_description` only):
+
+```json
+{
+  "task_description": "help",
+  "file_paths": [],
+  "agent_mentions": [],
+  "tool_mentions": [],
+  "command_prefix": null
+}
+```
+
+The first example scores against the catalog and produces a routing decision. The second returns `needs_more_detail` — the task sentence carries no useful keyword signal and no other dimensions provide context. When you see `needs_more_detail`, recompose the context: name the verb, the target files, and any explicit agent or tool mentions, then retry.
+
+For the full field-level reference and the decision-composition rules, see [`docs/schema.md` §2](docs/schema.md#2-dispatch-context-schema).
+
 ### Try the demo without integrating
 
 `/dispatch` ships with bundled demo fixtures (a small pre-built catalog of sample agents and skills) so you can see all seven decision branches in action without touching your own agents or building a catalog. This is called **demo mode** — the matcher runs against the bundled fixtures, not your live session traffic. It does not intercept your session or route your tasks automatically. After running it, you decide whether to wire the matcher into your own router agent.
