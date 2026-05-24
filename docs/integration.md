@@ -221,9 +221,10 @@ activation. Emit the audit line.
 suggested agent, note the uncertainty in your audit line. Overriding an
 advisory decision without a stated reason is logged as drift.
 
-**`ambiguous`** — Two or more agents tied above the scoring floor (gap < 0.2).
-Present the candidates from the `alternatives` field to the user and ask them
-to choose. Do not pick one unilaterally.
+**`advisory`** (gap-tied variant) — Two or more agents scored similarly above
+the scoring floor (gap < 0.2). The top candidate is suggested via `agent`; use
+it while noting the uncertainty in your audit line. The `alternatives` field
+lists the close-scoring candidates for reference.
 
 **`ask_user`** — Reserved in v0.1/v0.2. The matcher does not produce this
 decision currently. Include a handler for forward compatibility: if received,

@@ -151,21 +151,6 @@ One agent scored >= 0.85 with a gap of >= 0.2 over the second-place agent. High-
 
 **Handler guidance:** compose an Agent tool call for the named `agent`. If `skills` is non-empty, propagate those skill names into the sub-agent's prompt.
 
-#### `ambiguous`
-
-The top agent scored >= 0.5 but the gap between it and the second-place agent was < 0.2. Two or more agents tied.
-
-```json
-{
-  "decision": "ambiguous",
-  "confidence": 0.71,
-  "rationale": "Multiple agents score similarly (gap=0.05); user input needed to disambiguate.",
-  "alternatives": [{"agent": "code-writer", "score": 0.71}, {"agent": "debugger", "score": 0.66}]
-}
-```
-
-**Handler guidance:** present the candidates from `alternatives` to the user and ask them to choose. Do not pick one unilaterally.
-
 #### `self_handle`
 
 No dominant agent, but at least one skill scored >= 0.5.
@@ -184,7 +169,7 @@ No dominant agent, but at least one skill scored >= 0.5.
 
 #### `advisory`
 
-An agent scored >= 0.5 but below the `delegate` threshold (gap was >= 0.2, ruling out `ambiguous`). Delegation is suggested but not certain.
+An agent scored >= 0.5 but below the `delegate` threshold. This covers both gap-tied / close-scoring cases (gap < 0.2) and cases where the gap is sufficient but confidence is below the delegate floor. Delegation is suggested but not certain.
 
 ```json
 {
@@ -203,7 +188,7 @@ An agent scored >= 0.5 but below the `delegate` threshold (gap was >= 0.2, rulin
 
 **Reserved. Not produced by the v0.1 or v0.2 matcher.**
 
-This decision type is defined in `VALID_DECISIONS` but the matcher's decision ladder does not emit it. It is reserved for a future mode where the matcher explicitly requests human input before proceeding — distinct from `ambiguous` (which signals "two strong candidates") and `needs_more_detail` (which signals "too little context").
+This decision type is defined in `VALID_DECISIONS` but the matcher's decision ladder does not emit it. It is reserved for a future mode where the matcher explicitly requests human input before proceeding — distinct from `advisory` (which signals a gap-tied or below-threshold match) and `needs_more_detail` (which signals "too little context").
 
 **Handler guidance:** include a handler for forward compatibility. If your router receives `ask_user`, pause and ask the user to clarify before taking any action. Do not treat it as an error.
 
@@ -266,9 +251,6 @@ def decide(scored_agents, scored_skills, features):
         return {"decision": "delegate", "agent": best_agent.name,
                 "skills": skills_for_agent(best_agent, features), ...}
 
-    if best_agent and best_agent.score >= 0.5 and gap(scored_agents) < 0.2:
-        return {"decision": "ambiguous", "candidates": top_3_agents, ...}
-
     if best_skills:
         return {"decision": "self_handle", "skills": [s.name for s in best_skills], ...}
 
@@ -283,14 +265,13 @@ The router agent is excluded from the scored-agents pool via the `routable: fals
 
 ### Decision ladder
 
-| Decision              | Condition                                                   | Confidence   |
-| --------------------- | ----------------------------------------------------------- | ------------ |
-| `needs_more_detail`   | Feature density < 2 populated dimensions                    | `0.0`        |
-| `delegate`            | Best agent score ≥ 0.85, gap ≥ 0.2                          | best score   |
-| `ambiguous`           | Best agent score ≥ 0.5, gap < 0.2                           | best score   |
-| `self_handle`         | No dominant agent; ≥1 skill score ≥ 0.5                     | best score   |
-| `advisory`            | Best agent score ≥ 0.5, gap ≥ 0.2 (below delegate threshold) | best score  |
-| `self_handle_unaided` | No agent or skill above threshold                           | `0.0`        |
+| Decision              | Condition                                                              | Confidence   |
+| --------------------- | ---------------------------------------------------------------------- | ------------ |
+| `needs_more_detail`   | Feature density < 2 populated dimensions                               | `0.0`        |
+| `delegate`            | Best agent score ≥ 0.85, gap ≥ 0.2                                     | best score   |
+| `self_handle`         | No dominant agent; ≥1 skill score ≥ 0.5                                | best score   |
+| `advisory`            | Best agent score ≥ 0.5 (gap-tied or below delegate threshold)          | best score   |
+| `self_handle_unaided` | No agent or skill above threshold                                      | `0.0`        |
 
 `ask_user` is reserved and not produced by the current decision ladder.
 

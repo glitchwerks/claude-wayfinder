@@ -14,7 +14,7 @@ A conventional LLM router enforces routing policy through prose instructions rea
 - **Post-cognitive.** The matcher fires after the router agent has read the conversation and extracted intent, file paths, and tools. Raw prompts are signal-poor; the router's interpretation is richer — same model, more signal.
 - **Auto-generated catalog.** Built from skill sidecars and agent frontmatter at session start. No hand-curated rule config to drift out of sync.
 
-The decision contract is a seven-member typed enum: `delegate` / `self_handle` / `self_handle_unaided` / `advisory` / `ambiguous` / `ask_user` / `needs_more_detail`.
+The decision contract is a seven-member typed enum: `delegate` / `self_handle` / `self_handle_unaided` / `advisory` / `ask_user` / `needs_more_detail` / `mixed_content`.
 
 For the design rationale, see [`docs/design.md`](docs/design.md). For the algorithm specification, see [`docs/schema.md`](docs/schema.md).
 
