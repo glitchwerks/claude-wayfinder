@@ -41,6 +41,8 @@ Each object in the `entries` array of `dispatch-catalog.json` represents one age
 
 ### `source` field values
 
+<!-- D1/D4 extracted from #148 owned-project-agent-sidecars spec (audit #216 → fix #221): sidecar is a delivery mechanism, not an authorship claim; source encodes who authored the agent, unchanged by sidecar adoption -->
+<!-- D1/D2/D7 extracted from #140 plugin-agent-sidecar-overrides spec (audit #216 → fix #221): agent sidecar path is triggers/<plugin>/agents/<name>.yml, disambiguated by kind; same precedence slot as skill plugin-override -->
 | Value | Meaning |
 |---|---|
 | `"owned"` | Scanned from the user's own `skills/` or `agents/` directory tree. The default for first-party content. Trigger configuration may come from inline frontmatter in the agent `.md` or from a colocated `<name>.triggers.yml` sidecar next to it; the sidecar takes precedence when both are present. |
