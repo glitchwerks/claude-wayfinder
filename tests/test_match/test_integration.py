@@ -1175,6 +1175,78 @@ class TestOverrideShortCircuit:
     returns the override decision without running scoring.
     """
 
+    def test_main_logs_json_parse_error_entry(self, tmp_path: Path) -> None:
+        """JSON-parse-error path writes a log entry before returning.
+
+        When stdin contains invalid JSON, ``main()`` emits a
+        ``needs_more_detail`` decision to stdout.  This test proves that
+        a log entry is also written so downstream NDJSON consumers can
+        observe the parse failure.
+
+        The log entry must carry:
+        - ``override_id: null`` (no override fired — parse failed first)
+        - ``output.decision == "needs_more_detail"``
+        - ``catalog_hash == ""`` (sentinel: catalog loaded but stdin not parsed)
+        """
+        import os as _os
+        import subprocess as _subprocess
+
+        catalog_path = tmp_path / "catalog.json"
+        catalog_data = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                    applicable_skills=[],
+                ),
+            ]
+        )
+        catalog_path.write_text(json.dumps(catalog_data), encoding="utf-8")
+
+        log_path = tmp_path / "log.jsonl"
+
+        result = _subprocess.run(
+            [PYTHON, "-m", *_MATCH_MODULE, "--catalog-path", str(catalog_path)],
+            input="{not json",
+            capture_output=True,
+            text=True,
+            env={
+                **_os.environ,
+                "DISPATCH_CATALOG_PATH": str(catalog_path),
+                "DISPATCH_LOG_PATH": str(log_path),
+            },
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"Expected exit 0 for parse-error path, got {result.returncode}; "
+            f"stderr={result.stderr!r}"
+        )
+        out = json.loads(result.stdout)
+        assert out["decision"] == "needs_more_detail", (
+            f"Expected decision='needs_more_detail', got {out['decision']!r}"
+        )
+        assert log_path.exists(), (
+            "Log file was not created on the JSON-parse-error path — "
+            "_write_log_entry must be called before the parse-error return"
+        )
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1, (
+            f"Expected exactly 1 log entry from parse-error run, got {len(lines)}"
+        )
+        entry = json.loads(lines[0])
+        assert entry["override_id"] is None, (
+            f"Expected override_id=null in parse-error log entry, "
+            f"got {entry.get('override_id')!r}"
+        )
+        assert entry["output"]["decision"] == "needs_more_detail", (
+            f"Expected output.decision='needs_more_detail' in log entry, "
+            f"got {entry['output'].get('decision')!r}"
+        )
+        assert entry["catalog_hash"] == "", (
+            f"Expected catalog_hash='' (sentinel for parse-failed pre-catalog) "
+            f"in log entry, got {entry.get('catalog_hash')!r}"
+        )
+
     def test_main_short_circuits_on_override(
         self, tmp_path: Path, monkeypatch: object
     ) -> None:

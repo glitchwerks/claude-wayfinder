@@ -121,17 +121,24 @@ def main(argv: list[str] | None = None) -> None:
     try:
         context: dict[str, Any] = json.loads(raw_input)
     except json.JSONDecodeError as exc:
-        print(
-            json.dumps(
-                {
-                    "decision": "needs_more_detail",
-                    "confidence": 0.0,
-                    "rationale": f"Could not parse input JSON: {exc}",
-                    "alternatives": [],
-                }
-            ),
-            flush=True,
+        result = {
+            "decision": "needs_more_detail",
+            "confidence": 0.0,
+            "disposition_source": "scored",
+            "rationale": f"Could not parse input JSON: {exc}",
+            "alternatives": [],
+        }
+        # Log the parse failure before returning.  catalog_hash="" is the
+        # sentinel for "catalog not loaded; parse failed pre-catalog" so
+        # that NDJSON consumers can distinguish these entries by hash shape.
+        _write_log_entry(
+            {},
+            result,
+            "",
+            _resolve_log_path(),
+            override_id=None,
         )
+        print(json.dumps(result, sort_keys=True), flush=True)
         return
 
     # --- Extract features ---
