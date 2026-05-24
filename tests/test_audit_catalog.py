@@ -37,6 +37,7 @@ from claude_wayfinder.audit_catalog import (
     run_audit,
 )
 from claude_wayfinder.match import CatalogEntry, Keyword, Triggers
+from claude_wayfinder.match._types import OverrideRule
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -936,3 +937,450 @@ class TestTargetFilter:
         names = {f["entry"] for f in payload}
         assert "alpha" in names
         assert "beta" not in names
+
+
+# ---------------------------------------------------------------------------
+# Override rule helpers
+# ---------------------------------------------------------------------------
+
+
+def _override_rule(
+    rule_id: str = "r1",
+    decision: str = "delegate",
+    agent: str | None = "code-writer",
+    skills: tuple[str, ...] = (),
+    command_prefix: str | None = None,
+    path_globs: tuple[str, ...] = (),
+    tool_mentions: frozenset[str] | None = None,
+) -> OverrideRule:
+    """Build an OverrideRule with sensible defaults for testing.
+
+    Args:
+        rule_id: Stable rule identifier.
+        decision: One of VALID_DECISIONS.
+        agent: Agent name, or None.
+        skills: Tuple of skill names.
+        command_prefix: Exact-match command prefix, or None.
+        path_globs: fnmatch globs tuple.
+        tool_mentions: Set of tool names; defaults to empty frozenset.
+
+    Returns:
+        An OverrideRule instance.
+    """
+    return OverrideRule(
+        id=rule_id,
+        decision=decision,
+        agent=agent,
+        skills=skills,
+        confidence=1.0,
+        rationale="test",
+        command_prefix=command_prefix,
+        path_globs=path_globs,
+        tool_mentions=(
+            tool_mentions if tool_mentions is not None else frozenset()
+        ),
+    )
+
+
+def _skill_entry(name: str) -> CatalogEntry:
+    """Build a skill CatalogEntry with the given name.
+
+    Args:
+        name: Skill name.
+
+    Returns:
+        A CatalogEntry with kind='skill'.
+    """
+    return _entry(name, kind="skill", routable=False)
+
+
+def _agent_entry(name: str) -> CatalogEntry:
+    """Build an agent CatalogEntry with the given name.
+
+    Args:
+        name: Agent name.
+
+    Returns:
+        A CatalogEntry with kind='agent'.
+    """
+    return _entry(name, kind="agent", routable=True)
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — Rule 1: override-zero-predicates (BLOCKING)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideZeroPredicates:
+    """BLOCKING: OverrideRule with no predicates set must be flagged."""
+
+    def test_zero_predicates_flagged(self) -> None:
+        """Rule with no command_prefix, path_globs, or tool_mentions fires."""
+        from claude_wayfinder.audit_catalog import rule_override_zero_predicates
+
+        orule = _override_rule(
+            rule_id="catch-all",
+            command_prefix=None,
+            path_globs=(),
+            tool_mentions=frozenset(),
+        )
+        findings = rule_override_zero_predicates([], [orule])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.BLOCKING
+        assert findings[0].rule == "override-zero-predicates"
+        assert "catch-all" in findings[0].entry
+
+    def test_command_prefix_set_clean(self) -> None:
+        """Rule with command_prefix set does not fire."""
+        from claude_wayfinder.audit_catalog import rule_override_zero_predicates
+
+        orule = _override_rule(
+            rule_id="r1",
+            command_prefix="/deploy",
+        )
+        assert rule_override_zero_predicates([], [orule]) == []
+
+    def test_path_globs_set_clean(self) -> None:
+        """Rule with path_globs set does not fire."""
+        from claude_wayfinder.audit_catalog import rule_override_zero_predicates
+
+        orule = _override_rule(
+            rule_id="r1",
+            path_globs=("**/*.py",),
+        )
+        assert rule_override_zero_predicates([], [orule]) == []
+
+    def test_tool_mentions_set_clean(self) -> None:
+        """Rule with tool_mentions set does not fire."""
+        from claude_wayfinder.audit_catalog import rule_override_zero_predicates
+
+        orule = _override_rule(
+            rule_id="r1",
+            tool_mentions=frozenset({"Bash"}),
+        )
+        assert rule_override_zero_predicates([], [orule]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — Rule 2: override-unknown-skill (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideUnknownSkill:
+    """CONCERN: OverrideRule.skills references a skill not in the catalog."""
+
+    def test_unknown_skill_flagged(self) -> None:
+        """Skill in override not in catalog entries fires a finding."""
+        from claude_wayfinder.audit_catalog import rule_override_unknown_skill
+
+        catalog = [_skill_entry("python")]
+        orule = _override_rule(
+            rule_id="r1",
+            skills=("python", "nonexistent-skill"),
+            command_prefix="/go",
+        )
+        findings = rule_override_unknown_skill(catalog, [orule])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert findings[0].rule == "override-unknown-skill"
+        assert "nonexistent-skill" in findings[0].message
+
+    def test_all_known_skills_clean(self) -> None:
+        """All skills in override present in catalog — no finding."""
+        from claude_wayfinder.audit_catalog import rule_override_unknown_skill
+
+        catalog = [_skill_entry("python"), _skill_entry("testing")]
+        orule = _override_rule(
+            rule_id="r1",
+            skills=("python", "testing"),
+            command_prefix="/test",
+        )
+        assert rule_override_unknown_skill(catalog, [orule]) == []
+
+    def test_no_skills_clean(self) -> None:
+        """Override with empty skills tuple produces no finding."""
+        from claude_wayfinder.audit_catalog import rule_override_unknown_skill
+
+        catalog: list[CatalogEntry] = []
+        orule = _override_rule(
+            rule_id="r1",
+            skills=(),
+            command_prefix="/x",
+        )
+        assert rule_override_unknown_skill(catalog, [orule]) == []
+
+    def test_one_finding_per_unknown_skill(self) -> None:
+        """Two unknown skills produce two findings, not one."""
+        from claude_wayfinder.audit_catalog import rule_override_unknown_skill
+
+        catalog: list[CatalogEntry] = []
+        orule = _override_rule(
+            rule_id="r1",
+            skills=("bad-a", "bad-b"),
+            command_prefix="/x",
+        )
+        findings = rule_override_unknown_skill(catalog, [orule])
+        assert len(findings) == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — Rule 3: override-unknown-agent (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideUnknownAgent:
+    """CONCERN: OverrideRule.agent not present in catalog agents."""
+
+    def test_unknown_agent_flagged(self) -> None:
+        """Agent in override not in catalog entries fires a finding."""
+        from claude_wayfinder.audit_catalog import rule_override_unknown_agent
+
+        catalog = [_agent_entry("code-writer")]
+        orule = _override_rule(
+            rule_id="r1",
+            agent="phantom-agent",
+            command_prefix="/phantom",
+        )
+        findings = rule_override_unknown_agent(catalog, [orule])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert findings[0].rule == "override-unknown-agent"
+        assert "phantom-agent" in findings[0].message
+
+    def test_known_agent_clean(self) -> None:
+        """Agent in override present in catalog — no finding."""
+        from claude_wayfinder.audit_catalog import rule_override_unknown_agent
+
+        catalog = [_agent_entry("code-writer")]
+        orule = _override_rule(
+            rule_id="r1",
+            agent="code-writer",
+            command_prefix="/code",
+        )
+        assert rule_override_unknown_agent(catalog, [orule]) == []
+
+    def test_none_agent_skipped(self) -> None:
+        """Override with agent=None (e.g. self_handle_unaided) is not flagged."""
+        from claude_wayfinder.audit_catalog import rule_override_unknown_agent
+
+        catalog: list[CatalogEntry] = []
+        orule = _override_rule(
+            rule_id="r1",
+            agent=None,
+            decision="self_handle_unaided",
+            command_prefix="/x",
+        )
+        assert rule_override_unknown_agent(catalog, [orule]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — Rule 4: override-unreachable (NIT)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideUnreachable:
+    """NIT: Two rules string-identical on all predicates — later is unreachable."""
+
+    def test_identical_predicate_triple_flagged(self) -> None:
+        """Two rules with identical command_prefix+path_globs+tool_mentions fire."""
+        from claude_wayfinder.audit_catalog import rule_override_unreachable
+
+        r1 = _override_rule(
+            rule_id="first",
+            command_prefix="/deploy",
+            path_globs=("**/*.tf",),
+            tool_mentions=frozenset({"Bash"}),
+        )
+        r2 = _override_rule(
+            rule_id="second",
+            command_prefix="/deploy",
+            path_globs=("**/*.tf",),
+            tool_mentions=frozenset({"Bash"}),
+        )
+        findings = rule_override_unreachable([], [r1, r2])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.NIT
+        assert findings[0].rule == "override-unreachable"
+        assert "first" in findings[0].message
+        assert "second" in findings[0].message
+
+    def test_different_command_prefix_clean(self) -> None:
+        """Different command_prefix means rules are distinguishable."""
+        from claude_wayfinder.audit_catalog import rule_override_unreachable
+
+        r1 = _override_rule(rule_id="r1", command_prefix="/a")
+        r2 = _override_rule(rule_id="r2", command_prefix="/b")
+        assert rule_override_unreachable([], [r1, r2]) == []
+
+    def test_different_path_globs_clean(self) -> None:
+        """Different path_globs means rules are distinguishable."""
+        from claude_wayfinder.audit_catalog import rule_override_unreachable
+
+        r1 = _override_rule(
+            rule_id="r1", command_prefix=None, path_globs=("**/*.py",)
+        )
+        r2 = _override_rule(
+            rule_id="r2", command_prefix=None, path_globs=("**/*.ts",)
+        )
+        assert rule_override_unreachable([], [r1, r2]) == []
+
+    def test_single_rule_no_finding(self) -> None:
+        """One rule cannot shadow itself."""
+        from claude_wayfinder.audit_catalog import rule_override_unreachable
+
+        r1 = _override_rule(rule_id="r1", command_prefix="/x")
+        assert rule_override_unreachable([], [r1]) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — Rule 5: override-load-error (CLI — BLOCKING via run_audit_cli)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideLoadError:
+    """BLOCKING finding emitted when --overrides-path points at bad JSON."""
+
+    def test_malformed_json_produces_blocking_finding(
+        self, tmp_path: Path
+    ) -> None:
+        """Malformed overrides JSON surfaces as a BLOCKING finding via CLI."""
+        cat = {"entries": []}
+        cat_p = tmp_path / "cat.json"
+        cat_p.write_text(json.dumps(cat))
+        ov_p = tmp_path / "overrides.json"
+        ov_p.write_text("{not valid json")
+        cp = _run_cli(
+            "audit-catalog",
+            "--catalog",
+            str(cat_p),
+            "--overrides-path",
+            str(ov_p),
+        )
+        # BLOCKING exit code = 3
+        assert cp.returncode == 3, cp.stdout + cp.stderr
+
+    def test_missing_overrides_file_produces_blocking_finding(
+        self, tmp_path: Path
+    ) -> None:
+        """Missing overrides file surfaces as a BLOCKING finding via CLI."""
+        cat = {"entries": []}
+        cat_p = tmp_path / "cat.json"
+        cat_p.write_text(json.dumps(cat))
+        ov_p = tmp_path / "no-such-file.json"
+        cp = _run_cli(
+            "audit-catalog",
+            "--catalog",
+            str(cat_p),
+            "--overrides-path",
+            str(ov_p),
+        )
+        assert cp.returncode == 3, cp.stdout + cp.stderr
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — Rule 6: override-duplicate-id (BLOCKING)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideDuplicateId:
+    """BLOCKING: Two OverrideRules share the same id string."""
+
+    def test_duplicate_id_flagged(self) -> None:
+        """Two rules with the same id fire a BLOCKING finding."""
+        from claude_wayfinder.audit_catalog import rule_override_duplicate_id
+
+        r1 = _override_rule(rule_id="same-id", command_prefix="/a")
+        r2 = _override_rule(rule_id="same-id", command_prefix="/b")
+        findings = rule_override_duplicate_id([], [r1, r2])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.BLOCKING
+        assert findings[0].rule == "override-duplicate-id"
+        assert "same-id" in findings[0].message
+
+    def test_unique_ids_clean(self) -> None:
+        """Rules with distinct ids produce no finding."""
+        from claude_wayfinder.audit_catalog import rule_override_duplicate_id
+
+        r1 = _override_rule(rule_id="r1", command_prefix="/a")
+        r2 = _override_rule(rule_id="r2", command_prefix="/b")
+        assert rule_override_duplicate_id([], [r1, r2]) == []
+
+    def test_single_rule_no_finding(self) -> None:
+        """A single rule cannot be a duplicate."""
+        from claude_wayfinder.audit_catalog import rule_override_duplicate_id
+
+        r1 = _override_rule(rule_id="only", command_prefix="/x")
+        assert rule_override_duplicate_id([], [r1]) == []
+
+    def test_three_rules_two_duplicate_one_finding(self) -> None:
+        """Three rules where two share an id: one BLOCKING finding emitted."""
+        from claude_wayfinder.audit_catalog import rule_override_duplicate_id
+
+        r1 = _override_rule(rule_id="dup", command_prefix="/a")
+        r2 = _override_rule(rule_id="dup", command_prefix="/b")
+        r3 = _override_rule(rule_id="unique", command_prefix="/c")
+        findings = rule_override_duplicate_id([], [r1, r2, r3])
+        assert len(findings) == 1
+        assert "dup" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — Rule 7: override-tool-case-error (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideToolCaseError:
+    """CONCERN: tool_mentions in an OverrideRule uses wrong casing."""
+
+    def test_lowercase_tool_flagged(self) -> None:
+        """'bash' in tool_mentions fires when canonical is 'Bash'."""
+        from claude_wayfinder.audit_catalog import rule_override_tool_case_error
+
+        orule = _override_rule(
+            rule_id="r1",
+            tool_mentions=frozenset({"bash"}),
+        )
+        findings = rule_override_tool_case_error([], [orule])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.CONCERN
+        assert findings[0].rule == "override-tool-case-error"
+        assert "bash" in findings[0].message
+        assert "Bash" in findings[0].message
+
+    def test_correct_case_clean(self) -> None:
+        """Correctly-cased 'Bash' in tool_mentions produces no finding."""
+        from claude_wayfinder.audit_catalog import rule_override_tool_case_error
+
+        orule = _override_rule(
+            rule_id="r1",
+            tool_mentions=frozenset({"Bash"}),
+        )
+        assert rule_override_tool_case_error([], [orule]) == []
+
+    def test_unknown_tool_not_flagged(self) -> None:
+        """Unknown tool names pass through without a finding."""
+        from claude_wayfinder.audit_catalog import rule_override_tool_case_error
+
+        orule = _override_rule(
+            rule_id="r1",
+            tool_mentions=frozenset({"CustomToolXYZ"}),
+        )
+        assert rule_override_tool_case_error([], [orule]) == []
+
+    def test_one_finding_per_miscased_tool(self) -> None:
+        """Two miscased tools in one rule produce two findings."""
+        from claude_wayfinder.audit_catalog import rule_override_tool_case_error
+
+        orule = _override_rule(
+            rule_id="r1",
+            tool_mentions=frozenset({"bash", "read"}),
+        )
+        findings = rule_override_tool_case_error([], [orule])
+        assert len(findings) == 2
+
+    def test_also_checks_overrides_path_cli_flag(
+        self, tmp_path: Path
+    ) -> None:
+        """--overrides-path flag appears in audit-catalog --help output."""
+        cp = _run_cli("audit-catalog", "--help")
+        assert "--overrides-path" in cp.stdout
