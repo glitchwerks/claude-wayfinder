@@ -16,7 +16,7 @@ A conventional LLM router enforces routing policy through prose instructions rea
 
 The decision contract is a seven-member typed enum: `delegate` / `self_handle` / `self_handle_unaided` / `advisory` / `ask_user` / `needs_more_detail` / `mixed_content`.
 
-For the design rationale, see [`docs/design.md`](docs/design.md). For the algorithm specification, see [`docs/schema.md`](docs/schema.md).
+**Advanced reading:** for the design rationale, see [`docs/design.md`](docs/design.md). For the algorithm specification, see [`docs/schema.md`](docs/schema.md).
 
 ## Install (Claude Code users)
 
@@ -56,28 +56,29 @@ Open a new session. Hooks read the setup-state flag at session start; an in-prog
 
 ## How to use it
 
-### In Claude Code: `/dispatch`
+There are two distinct paths depending on your goal.
 
-v0.1 is a **try-before-integrate** primitive. The `/dispatch` skill runs the matcher against bundled demo fixtures so you can see all seven decision branches in action — it does not intercept your session traffic or route your tasks automatically. After running it, you decide whether to wire the matcher into your own router agent. Automatic routing is deferred to v0.2 ([#6](https://github.com/glitchwerks/claude-wayfinder/issues/6)).
+### Try the demo without integrating
 
-When invoked, the skill runs the matcher against the bundled demo catalog and returns all seven decision branches with inputs, decisions, confidence scores, and rationale. A single decision block looks like this:
+`/dispatch` ships with bundled demo fixtures (a small pre-built catalog of sample agents and skills) so you can see all seven decision branches in action without touching your own agents or building a catalog. This is called **demo mode** — the matcher runs against the bundled fixtures, not your live session traffic. It does not intercept your session or route your tasks automatically. After running it, you decide whether to wire the matcher into your own router agent.
+
+When invoked in demo mode, the skill runs the matcher against the bundled demo catalog and returns all seven decision branches with inputs, decisions, confidence scores, and rationale. A single decision block looks like this:
 
 ```
-# Example output; your agents will have different names
+# illustrative — agent names and rationale text will differ in your catalog
 [1/7] Branch: delegate
   input       : 'implement the authentication module'
   file_paths  : ['src/auth.py']
   decision    : delegate
   confidence  : 0.9000
   agent       : code-writer
-  rationale   : code-writer matched on keyword 'implement' (weight 1.0) and
-                path glob '**/*.py' (weight 0.5). Gap to next agent: 0.45.
+  rationale   : matched keywords: implement.
   skills      : ['python']
 ```
 
 **How you know it's working:** the decision field contains one of the seven typed strings; confidence is a float between 0 and 1; rationale names the specific triggers that fired. An `ask_user` result is valid in the contract but reserved in v0.1 — the matcher will not produce it against real input.
 
-### Difference between `/dispatch` and `python -m claude_wayfinder demo`
+#### Difference between `/dispatch` and `python -m claude_wayfinder demo`
 
 | | `/dispatch` (in Claude Code) | `python -m claude_wayfinder demo` (CLI) |
 |---|---|---|
@@ -88,61 +89,11 @@ When invoked, the skill runs the matcher against the bundled demo catalog and re
 
 Both run the same matcher against the same bundled fixtures. The CLI path is the faster evaluation route if you are deciding whether to install the plugin.
 
-### Bundled skills
+### Integrate into your router
 
-The plugin ships two skills usable inside Claude Code:
+Once you have seen demo mode and want the matcher routing your real tasks, you need to build a **real catalog** (a `dispatch-catalog.json` generated from your own agent and skill frontmatter) and point the plugin at it via an environment variable. Until `$DISPATCH_CATALOG_PATH` is set, `/dispatch` stays in demo mode — no real routing happens.
 
-- `claude-wayfinder:dispatch` — runs the matcher in demo mode (bundled fixtures) or against your live catalog when `$DISPATCH_CATALOG_PATH` is set. See the `/dispatch` section above.
-- `claude-wayfinder:dispatch-authoring` — matcher-aware authoring and troubleshooting knowledge for the full dispatch authoring surface (trigger frontmatter, applicable_agents, applicable_skills, routable). Covers the seven-decision ladder, scoring math, weight ladder, path-glob footguns, conflict-pair detection, and the audit-catalog CLI pointer. See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
-
-### Dispatch overrides
-
-Override rules let you short-circuit the scorer for known-good routing decisions. When an override rule's predicates match the dispatch context, the matcher returns the rule's pre-declared decision verbatim — no scoring, no decision ladder.
-
-Set the env var to point at your rule file:
-
-```bash
-export DISPATCH_OVERRIDES_PATH=/path/to/dispatch-overrides.json
-```
-
-A minimal two-rule file covering the two most common predicates (substitute your own agent names):
-
-```json
-{
-  "version": 1,
-  "rules": [
-    {
-      "id": "deploy-command",
-      "decision": "self_handle_unaided",
-      "agent": null,
-      "skills": [],
-      "confidence": 1.0,
-      "rationale": "/deploy is always handled manually",
-      "predicates": { "command_prefix": "/deploy" }
-    },
-    {
-      "id": "py-files-to-code-writer",
-      "decision": "delegate",
-      "agent": "code-writer",
-      "skills": ["python"],
-      "confidence": 0.99,
-      "rationale": "All Python edits go to code-writer unconditionally",
-      "predicates": { "path_globs": ["**/*.py"] }
-    }
-  ]
-}
-```
-
-When `$DISPATCH_OVERRIDES_PATH` is unset, scored matching runs unchanged. On load failure, `[OVERRIDES ERROR]` is emitted to stderr and the matcher falls back to scoring. For the full predicate vocabulary, audit rules, telemetry schema, and design rationale, see [`docs/superpowers/specs/2026-05-24-dispatch-overrides.md`](docs/superpowers/specs/2026-05-24-dispatch-overrides.md).
-
-### What's next
-
-If you want to use the matcher for real routing in your own Claude Code setup, there are two paths:
-
-- **Integrate now via the contributor path.** Clone the repo, build your own catalog from your agent and skill frontmatter, and call the library API from your router agent. The [Contributing](#contributing) section covers the mechanics, and `python -m claude_wayfinder --help` documents the CLI surface.
-- **Wait for the bundled runtime.** Issue [#6](https://github.com/glitchwerks/claude-wayfinder/issues/6) tracks the zero-friction-install spike — a bundled router agent and catalog generator that would make daily-driver routing available without manual integration. That work is scoped to v0.2.
-
-## Quick start
+**Feature density** — the number of populated input dimensions in a dispatch context — determines whether the matcher attempts scoring. Provide at least two dimensions (for example, a `task_description` plus `file_paths`) or the matcher returns `needs_more_detail` without scoring.
 
 Minimum path from zero to a working real-catalog `/dispatch`:
 
@@ -185,7 +136,7 @@ python -m claude_wayfinder demo
 Expected output (truncated — seven decision blocks):
 
 ```
-# Example output; your agents will have different names
+# illustrative — agent names and rationale text will differ in your catalog
 [1/7] Branch: delegate
   input       : 'implement the authentication module'
   file_paths  : ['src/auth.py']
@@ -216,6 +167,60 @@ The full CLI surface is documented via `python -m claude_wayfinder --help`. Key 
 - `dispatch` — run the matcher against a live catalog; reads dispatch context JSON from stdin.
 - `catalog build` — scan skill sidecars and agent frontmatter and write a `dispatch-catalog.json`.
 - `audit-catalog` — catalog-wide static analysis (conflict pairs, structural checks, matcher-aware semantic rules). See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
+
+## Bundled skills
+
+The plugin ships two skills usable inside Claude Code:
+
+- `claude-wayfinder:dispatch` — runs the matcher in demo mode (bundled fixtures) or against your live catalog when `$DISPATCH_CATALOG_PATH` is set. See the [Try the demo](#try-the-demo-without-integrating) section above.
+- `claude-wayfinder:dispatch-authoring` — matcher-aware authoring and troubleshooting knowledge for the full dispatch authoring surface (trigger frontmatter, applicable_agents, applicable_skills, routable). Covers the seven-decision ladder, scoring math, weight ladder, path-glob footguns, conflict-pair detection, and the audit-catalog CLI pointer. See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
+
+## Dispatch overrides
+
+Override rules let you short-circuit the scorer for known-good routing decisions. When an override rule's predicates match the dispatch context, the matcher returns the rule's pre-declared decision verbatim — no scoring, no decision ladder.
+
+Set the env var to point at your rule file:
+
+```bash
+export DISPATCH_OVERRIDES_PATH=/path/to/dispatch-overrides.json
+```
+
+A minimal two-rule file covering the two most common predicates (substitute your own agent names):
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "deploy-command",
+      "decision": "self_handle_unaided",
+      "agent": null,
+      "skills": [],
+      "confidence": 1.0,
+      "rationale": "/deploy is always handled manually",
+      "predicates": { "command_prefix": "/deploy" }
+    },
+    {
+      "id": "py-files-to-code-writer",
+      "decision": "delegate",
+      "agent": "code-writer",
+      "skills": ["python"],
+      "confidence": 0.99,
+      "rationale": "All Python edits go to code-writer unconditionally",
+      "predicates": { "path_globs": ["**/*.py"] }
+    }
+  ]
+}
+```
+
+When `$DISPATCH_OVERRIDES_PATH` is unset, scored matching runs unchanged. On load failure, `[OVERRIDES ERROR]` is emitted to stderr and the matcher falls back to scoring. For the full predicate vocabulary, audit rules, telemetry schema, and design rationale, see [`docs/superpowers/specs/2026-05-24-dispatch-overrides.md`](docs/superpowers/specs/2026-05-24-dispatch-overrides.md).
+
+## What's next
+
+If you want to use the matcher for real routing in your own Claude Code setup, there are two paths:
+
+- **Integrate now via the contributor path.** Clone the repo, build your own catalog from your agent and skill frontmatter, and call the library API from your router agent. The [Contributing](#contributing) section covers the mechanics, and `python -m claude_wayfinder --help` documents the CLI surface.
+- **Wait for the bundled runtime.** Issue [#6](https://github.com/glitchwerks/claude-wayfinder/issues/6) tracks the zero-friction-install spike — a bundled router agent and catalog generator that would make daily-driver routing available without manual integration. That work is scoped to v0.2.
 
 ## Library API
 
