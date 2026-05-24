@@ -470,7 +470,7 @@ def score(entry, features):
 
     s = 0.0
     s += 0.4 * matched_glob_count(entry, features)
-    s += sum(0.3 * k.weight for k in entry.triggers.keywords if k.term in features.keywords)
+    s += sum(0.5 * k.weight for k in entry.triggers.keywords if k.term in features.keywords)
     s += 0.5 * len([t for t in entry.triggers.tool_mentions if t in features.tool_mentions])
     return min(s, 1.0)
 ```
@@ -522,7 +522,8 @@ If you declare only `"**/*.toml"`, a bare `pyproject.toml` at the repo root may 
 - **`excludes`** — short-circuit to `0.0`. Hard zero-out. Used to disambiguate skills with overlapping keywords (e.g. `claude-api` excludes `openai`). Matches `keywords` only — see above.
 - **`path_globs`** — `0.4` per matched glob (each glob counted at most once even if it matches multiple paths). Uses `fnmatch` syntax — see footgun above.
 - **`path_globs_excluded`** — path-level exclusion gate. If **any** glob in this list matches **any** candidate file path, the entire entry is dropped from the scored pool before any additive scoring. Exclusion wins over inclusion: an entry that matches both `path_globs` and `path_globs_excluded` is dropped. Uses the same `fnmatch.fnmatch` semantics as `path_globs`. See §4a.
-- **`keywords`** — `0.3 × weight` per matched term, accumulated. Weight ladder: `0.25` (weak), `0.5` (normal), `1.0` (strong). Terms must be single tokens (no whitespace).
+- **`keywords`** — `0.5 × weight` per matched term, accumulated. Weight ladder: `0.25` (weak), `0.5` (normal), `1.0` (strong). Terms must be single tokens (no whitespace).
+- **Satisfied keyword group** (AND-group all-terms-match) — `1.0 × group.weight` per satisfied group (additional bonus beyond per-term contributions; see `_match.py:_GROUP_MULTIPLIER`).
 - **`tool_mentions`** — `0.5` per matched tool name. Highest per-element coefficient because tool mentions are unambiguous high-precision signals.
 
 Total score is clamped to `1.0`.
