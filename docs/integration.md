@@ -1,5 +1,7 @@
 # Integration Guide — claude-wayfinder
 
+> **Prerequisite:** plugin installed via `/plugin install`, and `/setup-wayfinder` completed successfully. See [README.md](../README.md#install-claude-code-users) for install steps.
+
 This guide is for consumers who want to use claude-wayfinder as the actual dispatch layer in their router agent, not just evaluate the demo. It assumes you have a Claude Code router agent in place and want to replace (or augment) its prose-policy routing with deterministic decisions from the matcher.
 
 **Prerequisites:**
