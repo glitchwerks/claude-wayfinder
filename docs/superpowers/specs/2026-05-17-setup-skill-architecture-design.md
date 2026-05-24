@@ -4,10 +4,7 @@ Tracking epic: [#99](https://github.com/glitchwerks/claude-wayfinder/issues/99) 
 Author: brainstorming session 2026-05-17 (cbeaulieu-gt + Claude)
 Status: **design approved — input to writing-plans**
 Predecessors:
-- `docs/superpowers/plans/2026-05-16-v0.4-bundled-venv.md` (deferred SessionStart-bootstrap design)
-- `docs/superpowers/plans/2026-05-16-v0.4-bundled-venv.inquisitor-pass-1.md` (9 charges)
-- `docs/superpowers/plans/2026-05-17-v0.4-bundled-venv-revision.md` (planner revision; superseded)
-- `docs/superpowers/plans/2026-05-17-v0.4-bundled-venv.inquisitor-pass-2.md` (4 NEW MAJOR charges, REVISE-AGAIN verdict)
+- [#81](https://github.com/glitchwerks/claude-wayfinder/issues/81) v0.4 bundled-venv epic (closed/not_planned) — four plan files from that epic (deferred SessionStart-bootstrap design, inquisitor pass 1, planner revision, inquisitor pass 2) were deleted in [#223](https://github.com/glitchwerks/claude-wayfinder/issues/223) after the epic was superseded by this architecture (#99).
 
 ---
 
