@@ -60,13 +60,13 @@ A coarser set — for example, just `delegate` and `self_handle` — would lose 
 | `self_handle`         | No dominant agent; at least one skill scored ≥ 0.5. Activate skills; proceed without delegating.   |
 | `self_handle_unaided` | Sufficient context, but no specialist or skill applies. Proceed without delegation or activation.   |
 | `advisory`            | An agent scored ≥ 0.5 but below the `delegate` threshold. Delegation is suggested, not certain.    |
-| `ambiguous`           | Two or more agents tied above 0.5 (gap < 0.2). Ask the user; do not pick unilaterally.             |
+| `mixed_content`       | Two or more agents clamp at 1.0 on path-disjoint lanes. Structural multi-agent task; split and delegate each lane. (Added v0.10.0 / #210. Supersedes `ambiguous`, which was merged into `advisory` per #209.) |
 | `ask_user`            | Reserved. Does not fire in v0.1 or v0.2. Exists in `VALID_DECISIONS` for forward compatibility.    |
 | `needs_more_detail`   | Feature density below threshold (< 2 populated input dimensions). Recompose context and retry.     |
 
 Collapsing `advisory` into `delegate` would remove the uncertainty signal — the router would treat a 0.61-confidence suggestion the same as a 0.92-confidence match. Collapsing `self_handle` and `self_handle_unaided` would lose the distinction between "activate these skills" and "proceed without activation."
 
-`ask_user` is reserved: it exists in the contract so consumers can write a forward-compatible handler today. The design space it occupies — explicitly requesting human input before proceeding, distinct from `ambiguous` (two strong candidates) and `needs_more_detail` (too little context) — is real but not implemented in the current decision ladder. Dropping it from the contract would require a breaking change to add it later.
+`ask_user` is reserved: it exists in the contract so consumers can write a forward-compatible handler today. The design space it occupies — explicitly requesting human input before proceeding, distinct from `mixed_content` (structural multi-lane task) and `needs_more_detail` (too little context) — is real but not implemented in the current decision ladder. Dropping it from the contract would require a breaking change to add it later.
 
 ---
 

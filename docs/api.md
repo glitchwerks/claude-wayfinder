@@ -98,7 +98,7 @@ Composes the routing decision from pre-scored agents and skills. Implements the 
 
 1. `needs_more_detail` — feature density below threshold (fewer than 2 populated input dimensions)
 2. `delegate` — best agent scores ≥ 0.85 with a gap ≥ 0.2 over second place
-3. `ambiguous` — best agent scores ≥ 0.5 but gap < 0.2
+3. `mixed_content` — two or more agents clamp at 1.0 on path-disjoint lanes
 4. `self_handle` — at least one skill scores ≥ 0.5 and no dominant agent
 5. `advisory` — agent exists above 0.5 but match is not conclusive
 6. `self_handle_unaided` — no useful signal
@@ -132,9 +132,9 @@ frozenset({
     "self_handle",
     "self_handle_unaided",
     "advisory",
-    "ambiguous",
     "ask_user",
     "needs_more_detail",
+    "mixed_content",
 })
 ```
 
