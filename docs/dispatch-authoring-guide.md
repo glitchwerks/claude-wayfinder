@@ -18,7 +18,7 @@ For canonical field definitions — types, defaults, and schema stability guaran
 
 **`command_prefixes`** — Slash commands that hard-short-circuit the matcher to a score of `1.0` for this entry, bypassing all additive scoring. Use for entries that should win unconditionally when the user types a specific command. A prefix should start with `/`; a string without a leading slash will not match a user-typed `/foo` command.
 
-**`agent_mentions`** — Agent names whose explicit appearance in the prompt hard-short-circuits to `1.0`, the same way `command_prefixes` does. Useful for entries that should win when the user says "ask the code-writer agent" or otherwise names the agent directly.
+**`agent_mentions`** — Agent names whose explicit appearance in the prompt hard-short-circuits to `1.0`, the same way `command_prefixes` does. For example, if your router has a `code-writer` agent and a user says "ask the code-writer agent", listing `code-writer` here ensures that agent wins unconditionally. Use for any agent that should win when the user names it directly.
 
 **`path_globs`** — `fnmatch`-style globs matched against the `file_paths` dimension of the dispatch input. Each matched glob contributes `+0.4` to the running score. The most common footgun: `*.py` matches only top-level files under `fnmatch` semantics; use `**/*.py` for nested paths. See the `path-glob-footgun` rule in the audit-catalog section for the auto-detection version of this check.
 

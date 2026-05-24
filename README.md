@@ -63,6 +63,7 @@ v0.1 is a **try-before-integrate** primitive. The `/dispatch` skill runs the mat
 When invoked, the skill runs the matcher against the bundled demo catalog and returns all seven decision branches with inputs, decisions, confidence scores, and rationale. A single decision block looks like this:
 
 ```
+# Example output; your agents will have different names
 [1/7] Branch: delegate
   input       : 'implement the authentication module'
   file_paths  : ['src/auth.py']
@@ -104,7 +105,7 @@ Set the env var to point at your rule file:
 export DISPATCH_OVERRIDES_PATH=/path/to/dispatch-overrides.json
 ```
 
-A minimal two-rule file covering the two most common predicates:
+A minimal two-rule file covering the two most common predicates (substitute your own agent names):
 
 ```json
 {
@@ -184,6 +185,7 @@ python -m claude_wayfinder demo
 Expected output (truncated — seven decision blocks):
 
 ```
+# Example output; your agents will have different names
 [1/7] Branch: delegate
   input       : 'implement the authentication module'
   file_paths  : ['src/auth.py']

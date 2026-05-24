@@ -40,6 +40,7 @@ Extracts and normalises the feature set from a dispatch context dict. All string
 The expected shape of `context` mirrors the matcher's stdin JSON contract:
 
 ```python
+# Substitute your own agent names
 {
     "task_description": "implement the login page",  # required
     "file_paths":       ["src/auth/login.py"],        # optional
@@ -106,6 +107,7 @@ Composes the routing decision from pre-scored agents and skills. Implements the 
 `scored_agents` must exclude the `general-purpose` router agent before this call. Returns a decision dict matching the output JSON schema:
 
 ```python
+# Substitute your own agent names
 {
     "decision":     "delegate",
     "agent":        "code-writer",
