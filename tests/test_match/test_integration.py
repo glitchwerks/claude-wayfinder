@@ -1163,3 +1163,89 @@ class TestPluginOverrideAgentRouting:
             f"plugin-override agent was not included in scoring "
             f"(decision was 'no_match'); full output: {out}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #213 — override short-circuit integration test
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideShortCircuit:
+    """When DISPATCH_OVERRIDES_PATH is set and a rule matches, the matcher
+    returns the override decision without running scoring.
+    """
+
+    def test_main_short_circuits_on_override(
+        self, tmp_path: Path, monkeypatch: object
+    ) -> None:
+        """Override rule fires and short-circuits the scored pipeline.
+
+        Catalog has a code-writer agent that would score high on
+        "implement feature x".  An overrides file sets a rule with
+        command_prefix=/skip → self_handle_unaided with override metadata.
+        The input carries command_prefix=/skip so the rule must fire.
+
+        Assertions:
+        - decision == "self_handle_unaided" (from the rule, not scoring)
+        - disposition_source == "override"
+        - override_id == "always-skip"
+        - rationale == "test override fires"
+        """
+        catalog_path = tmp_path / "catalog.json"
+        catalog_data = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                    applicable_skills=[],
+                ),
+            ]
+        )
+        catalog_path.write_text(json.dumps(catalog_data), encoding="utf-8")
+
+        overrides_path = tmp_path / "overrides.json"
+        overrides_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "rules": [
+                        {
+                            "id": "always-skip",
+                            "decision": "self_handle_unaided",
+                            "agent": None,
+                            "skills": [],
+                            "confidence": 1.0,
+                            "rationale": "test override fires",
+                            "predicates": {"command_prefix": "/skip"},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _run(
+            stdin_obj={
+                "task_description": "implement feature x",
+                "command_prefix": "/skip",
+            },
+            catalog=catalog_data,
+            catalog_path=catalog_path,
+            extra_env={"DISPATCH_OVERRIDES_PATH": str(overrides_path)},
+            tmp_path=tmp_path,
+        )
+        assert result.returncode == 0, f"matcher exited non-zero:\n{result.stderr}"
+        out = json.loads(result.stdout)
+        assert out["decision"] == "self_handle_unaided", (
+            f"Expected 'self_handle_unaided' from override, "
+            f"got '{out['decision']}'"
+        )
+        assert out["disposition_source"] == "override", (
+            f"Expected disposition_source='override', got {out.get('disposition_source')!r}"
+        )
+        assert out["override_id"] == "always-skip", (
+            f"Expected override_id='always-skip', got {out.get('override_id')!r}"
+        )
+        assert out["rationale"] == "test override fires", (
+            f"Expected rationale from override rule, got {out.get('rationale')!r}"
+        )

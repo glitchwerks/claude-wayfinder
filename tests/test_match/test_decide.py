@@ -361,3 +361,112 @@ class TestDecisionAskUser:
         assert result.returncode == 0, result.stderr
         out = json.loads(result.stdout)
         assert out["decision"] != "ask_user"
+
+
+# ===========================================================================
+# disposition_source: "scored" — every decide() return carries this tag
+# ===========================================================================
+
+
+class TestDispositionSourceScored:
+    """Every branch of decide() must tag its result with disposition_source='scored'.
+
+    The tag is a machine-readable audit field that downstream tooling uses
+    to distinguish scored decisions from override-injected ones.  Every
+    return site in decide() and _detect_mixed_content() must carry it.
+    """
+
+    def test_needs_more_detail_carries_disposition_source_scored(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """needs_more_detail branch tags disposition_source='scored'.
+
+        Sparse input (single word, no paths, no tools) produces
+        needs_more_detail (feature_count < 2).  The returned dict must
+        include disposition_source='scored'.
+        """
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                ),
+            ]
+        )
+        stdin_obj = {"task_description": "ok"}
+        result = _run(stdin_obj, catalog, tmp_path=tmp_path)
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["decision"] == "needs_more_detail"
+        assert out["disposition_source"] == "scored", (
+            "needs_more_detail branch must carry disposition_source='scored'"
+        )
+
+    def test_self_handle_unaided_carries_disposition_source_scored(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """self_handle_unaided branch tags disposition_source='scored'.
+
+        No agent or skill scores above threshold — fallback branch.
+        """
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                ),
+            ]
+        )
+        # "weather" and "curl" don't match any catalog keywords → score 0
+        # feature_count >= 2: keywords from description + tool_mentions
+        stdin_obj = {
+            "task_description": "what is the weather like today",
+            "tool_mentions": ["curl"],
+        }
+        result = _run(stdin_obj, catalog, tmp_path=tmp_path)
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["decision"] == "self_handle_unaided"
+        assert out["disposition_source"] == "scored", (
+            "self_handle_unaided branch must carry disposition_source='scored'"
+        )
+
+    def test_delegate_carries_disposition_source_scored(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """delegate branch tags disposition_source='scored'.
+
+        High-confidence single-agent match (score >= 0.85, gap >= 0.2).
+        """
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[
+                        {"term": "implement", "weight": 1.0},
+                        {"term": "write", "weight": 1.0},
+                    ],
+                    path_globs=["**/*.py"],
+                    tool_mentions=["git"],
+                ),
+                _make_agent(
+                    "debugger",
+                    keywords=[{"term": "debug", "weight": 1.0}],
+                ),
+            ]
+        )
+        stdin_obj = {
+            "task_description": "implement and write a new python feature",
+            "file_paths": ["src/main.py"],
+            "tool_mentions": ["git"],
+        }
+        result = _run(stdin_obj, catalog, tmp_path=tmp_path)
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["decision"] == "delegate"
+        assert out["disposition_source"] == "scored", (
+            "delegate branch must carry disposition_source='scored'"
+        )

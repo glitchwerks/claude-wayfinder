@@ -80,6 +80,21 @@ def _resolve_catalog_path(
     )
 
 
+def _resolve_overrides_path() -> Path | None:
+    """Return the overrides file path from env, or None when disabled.
+
+    Resolution: ``$DISPATCH_OVERRIDES_PATH`` env var only.  No
+    auto-discovery.  When the env var is absent overrides are silently
+    disabled and the matcher proceeds with scored matching.
+
+    Returns:
+        ``Path`` to the overrides file, or ``None`` when the env var is
+        not set.
+    """
+    val = os.environ.get("DISPATCH_OVERRIDES_PATH")
+    return Path(val).expanduser() if val else None
+
+
 def _resolve_log_path() -> Path | None:
     """Return the dispatch log file path from env, or None to disable logging.
 
@@ -157,6 +172,7 @@ def _write_log_entry(
     output_dict: dict[str, Any],
     catalog_hash: str,
     log_path: Path | None,
+    override_id: str | None = None,
 ) -> None:
     """Append one decision record to the dispatch log file.
 
@@ -175,6 +191,9 @@ def _write_log_entry(
             ``_compute_catalog_hash``.
         log_path: Path to the ``.jsonl`` log file, or ``None`` to
             silently skip log writing.
+        override_id: The matched override rule's ``id`` when the
+            decision was produced by an override, or ``None`` for
+            scored decisions.
     """
     if log_path is None:
         return
@@ -186,6 +205,7 @@ def _write_log_entry(
         "output": output_dict,
         "catalog_hash": catalog_hash,
         "matcher_version": _get_matcher_version(),
+        "override_id": override_id,
     }
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)

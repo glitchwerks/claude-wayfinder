@@ -90,6 +90,15 @@ from claude_wayfinder.match._match import (
 from claude_wayfinder.match._match import (
     score as score,
 )
+from claude_wayfinder.match._overrides import (
+    OverridesError as OverridesError,
+)
+from claude_wayfinder.match._overrides import (
+    load_overrides as load_overrides,
+)
+from claude_wayfinder.match._overrides import (
+    resolve_override as resolve_override,
+)
 from claude_wayfinder.match._parse import _parse_triggers as _parse_triggers  # re-export
 from claude_wayfinder.match._types import (
     VALID_DECISIONS as VALID_DECISIONS,
@@ -110,6 +119,12 @@ from claude_wayfinder.match._types import (
     LaneInfo as LaneInfo,
 )
 from claude_wayfinder.match._types import (
+    OverrideMatch as OverrideMatch,
+)
+from claude_wayfinder.match._types import (
+    OverrideRule as OverrideRule,
+)
+from claude_wayfinder.match._types import (
     ScoredEntry as ScoredEntry,
 )
 from claude_wayfinder.match._types import (
@@ -126,6 +141,9 @@ __all__ = [
     "Keyword",
     "KeywordGroup",
     "LaneInfo",
+    "OverrideMatch",
+    "OverrideRule",
+    "OverridesError",
     "ScoredEntry",
     "Slot",
     "Triggers",
@@ -133,7 +151,9 @@ __all__ = [
     "decide",
     "group_satisfied",
     "load_catalog",
+    "load_overrides",
     "main",
     "matched_paths_for",
+    "resolve_override",
     "score",
 ]
