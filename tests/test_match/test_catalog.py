@@ -499,3 +499,56 @@ class TestLoadCatalogEmptyEntries:
         p.write_text(json.dumps({"entries": []}))
         result = load_catalog(p)
         assert tuple(result) == tuple()
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — _write_log_entry records override_id (#213)
+# ---------------------------------------------------------------------------
+
+
+class TestWriteLogEntryOverrideId:
+    """_write_log_entry stores the override_id field in the NDJSON entry.
+
+    Task 4 added ``override_id: str | None = None`` to the signature and
+    unconditionally writes ``entry["override_id"]`` to the log record.
+    These two tests prove the field is present and carries the correct
+    value for both the override case and the default (scored) case.
+    """
+
+    def test_write_log_entry_records_override_id(self, tmp_path: Path) -> None:
+        """override_id kwarg is written verbatim into the log entry dict.
+
+        Writes one entry with override_id="my-rule", reads back the NDJSON
+        line, and asserts the stored value matches.
+        """
+        from claude_wayfinder.match._catalog import _write_log_entry
+
+        log_path = tmp_path / "log.jsonl"
+        _write_log_entry(
+            {},
+            {"decision": "delegate"},
+            "sha256:abc",
+            log_path,
+            override_id="my-rule",
+        )
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+        assert entry["override_id"] == "my-rule"
+
+    def test_write_log_entry_override_id_null_default(self, tmp_path: Path) -> None:
+        """override_id defaults to None when the kwarg is omitted.
+
+        Scored decisions do not supply override_id; the entry must carry
+        ``null`` (JSON) / ``None`` (Python) so NDJSON consumers can
+        distinguish override-fired entries from scored entries.
+        """
+        from claude_wayfinder.match._catalog import _write_log_entry
+
+        log_path = tmp_path / "log.jsonl"
+        _write_log_entry(
+            {},
+            {"decision": "delegate"},
+            "sha256:abc",
+            log_path,
+        )
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+        assert entry["override_id"] is None

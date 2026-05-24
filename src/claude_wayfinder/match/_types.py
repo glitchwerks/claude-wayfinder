@@ -205,3 +205,54 @@ class LaneInfo:
     score: float
     matched_paths: tuple[str, ...]
     skills: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class OverrideRule:
+    """A deterministic override rule.
+
+    See docs/superpowers/specs/2026-05-24-dispatch-overrides.md.
+
+    A rule matches when ALL of its non-empty predicates are satisfied.
+    A rule with zero predicates is invalid (caught by audit-catalog).
+
+    Attributes:
+        id: Stable rule identifier (kebab-case, unique within the file).
+        decision: One of VALID_DECISIONS; the verbatim decision to emit.
+        agent: Agent name when decision implies one; None otherwise.
+        skills: Skill names emitted verbatim into the decision output.
+        confidence: Float in [0.0, 1.0] surfaced as the decision
+            confidence.
+        rationale: Human-readable string surfaced as the decision
+            rationale.
+        command_prefix: Exact-string match for context.command_prefix,
+            or None.
+        path_globs: fnmatch globs; rule matches when ANY path matches
+            ANY glob.
+        tool_mentions: Rule matches when intersection with context tools
+            is non-empty.
+    """
+
+    id: str
+    decision: str
+    agent: str | None
+    skills: tuple[str, ...]
+    confidence: float
+    rationale: str
+    command_prefix: str | None
+    path_globs: tuple[str, ...]
+    tool_mentions: frozenset[str]
+
+
+@dataclass(frozen=True)
+class OverrideMatch:
+    """Result of a successful override resolution.
+
+    Attributes:
+        rule: The matched OverrideRule.
+        matched_predicates: Names of predicates that contributed to the
+            match.
+    """
+
+    rule: OverrideRule
+    matched_predicates: tuple[str, ...]

@@ -94,6 +94,46 @@ The plugin ships two skills usable inside Claude Code:
 - `claude-wayfinder:dispatch` — runs the matcher in demo mode (bundled fixtures) or against your live catalog when `$DISPATCH_CATALOG_PATH` is set. See the `/dispatch` section above.
 - `claude-wayfinder:dispatch-authoring` — matcher-aware authoring and troubleshooting knowledge for the full dispatch authoring surface (trigger frontmatter, applicable_agents, applicable_skills, routable). Covers the seven-decision ladder, scoring math, weight ladder, path-glob footguns, conflict-pair detection, and the audit-catalog CLI pointer. See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
 
+### Dispatch overrides
+
+Override rules let you short-circuit the scorer for known-good routing decisions. When an override rule's predicates match the dispatch context, the matcher returns the rule's pre-declared decision verbatim — no scoring, no decision ladder.
+
+Set the env var to point at your rule file:
+
+```bash
+export DISPATCH_OVERRIDES_PATH=/path/to/dispatch-overrides.json
+```
+
+A minimal two-rule file covering the two most common predicates:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "deploy-command",
+      "decision": "self_handle_unaided",
+      "agent": null,
+      "skills": [],
+      "confidence": 1.0,
+      "rationale": "/deploy is always handled manually",
+      "predicates": { "command_prefix": "/deploy" }
+    },
+    {
+      "id": "py-files-to-code-writer",
+      "decision": "delegate",
+      "agent": "code-writer",
+      "skills": ["python"],
+      "confidence": 0.99,
+      "rationale": "All Python edits go to code-writer unconditionally",
+      "predicates": { "path_globs": ["**/*.py"] }
+    }
+  ]
+}
+```
+
+When `$DISPATCH_OVERRIDES_PATH` is unset, scored matching runs unchanged. On load failure, `[OVERRIDES ERROR]` is emitted to stderr and the matcher falls back to scoring. For the full predicate vocabulary, audit rules, telemetry schema, and design rationale, see [`docs/superpowers/specs/2026-05-24-dispatch-overrides.md`](docs/superpowers/specs/2026-05-24-dispatch-overrides.md).
+
 ### What's next
 
 If you want to use the matcher for real routing in your own Claude Code setup, there are two paths:

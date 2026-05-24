@@ -390,3 +390,163 @@ class TestStaleMtimeWarning:
             f"'decision' key missing from stale-catalog output.\n"
             f"output: {decision}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Demo-mode override short-circuit
+# ---------------------------------------------------------------------------
+
+
+class TestDemoModeOverride:
+    """When ``$DISPATCH_OVERRIDES_PATH`` is set and a rule matches a demo
+    prompt, ``run_demo()`` must short-circuit scoring and emit the override
+    decision with ``disposition_source: override`` in the formatted output."""
+
+    @pytest.fixture
+    def override_file(self, tmp_path: Path) -> Path:
+        """Write an overrides file whose rule matches the first demo prompt.
+
+        The first demo prompt has ``file_paths: ["src/auth.py"]``, so a
+        ``path_globs: ["src/*.py"]`` predicate will fire on it.
+
+        Args:
+            tmp_path: pytest temporary directory.
+
+        Returns:
+            Path to the written overrides JSON file.
+        """
+        rules = {
+            "rules": [
+                {
+                    "id": "demo-override-fires",
+                    "decision": "self_handle_unaided",
+                    "confidence": 0.99,
+                    "rationale": "override rule matched src/*.py",
+                    "predicates": {
+                        "path_globs": ["src/*.py"],
+                    },
+                }
+            ]
+        }
+        p = tmp_path / "overrides.json"
+        p.write_text(json.dumps(rules), encoding="utf-8")
+        return p
+
+    def test_demo_override_emits_disposition_source(
+        self, override_file: Path, tmp_path: Path
+    ) -> None:
+        """run_demo() with a matching override must show 'override' in output.
+
+        The output is human-readable formatted text.  When an override rule
+        fires, the formatted block for that prompt must contain the string
+        ``disposition_source : override`` and ``override_id``.
+        """
+        import io
+
+        from claude_wayfinder.cli import run_demo
+
+        env_backup = os.environ.get("DISPATCH_OVERRIDES_PATH")
+        try:
+            os.environ["DISPATCH_OVERRIDES_PATH"] = str(override_file)
+            buf = io.StringIO()
+            exit_code = run_demo(out=buf)
+        finally:
+            if env_backup is None:
+                os.environ.pop("DISPATCH_OVERRIDES_PATH", None)
+            else:
+                os.environ["DISPATCH_OVERRIDES_PATH"] = env_backup
+
+        assert exit_code == 0, (
+            f"run_demo() exited {exit_code} with override set"
+        )
+        output = buf.getvalue()
+        assert "disposition_source : override" in output, (
+            f"Expected 'disposition_source : override' in demo output.\n"
+            f"output:\n{output}"
+        )
+        assert "override_id" in output, (
+            f"Expected 'override_id' in demo output.\n"
+            f"output:\n{output}"
+        )
+        assert "demo-override-fires" in output, (
+            f"Expected rule id 'demo-override-fires' in demo output.\n"
+            f"output:\n{output}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Overrides-mtime staleness warning
+# ---------------------------------------------------------------------------
+
+
+class TestOverridesStalenessWarning:
+    """When the overrides file is older than the catalog, a DISPATCH WARNING
+    must appear on stderr.  Execution must still proceed normally."""
+
+    def test_dispatch_warns_when_overrides_older_than_catalog(
+        self, tmp_path: Path
+    ) -> None:
+        """Warning fires when overrides mtime is strictly older than catalog.
+
+        The overrides file is written first so its mtime is earlier, then a
+        brief sleep ensures the catalog's mtime is strictly newer.
+        """
+        overrides = tmp_path / "overrides.json"
+        overrides.write_text(
+            '{"version": 1, "rules": []}', encoding="utf-8"
+        )
+        time.sleep(0.05)
+        catalog = tmp_path / "catalog.json"
+        catalog.write_text(
+            _DEMO_CATALOG_PATH.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        result = _run_dispatch(
+            env_overrides={
+                "DISPATCH_CATALOG_PATH": str(catalog),
+                "DISPATCH_OVERRIDES_PATH": str(overrides),
+            },
+        )
+
+        assert "[DISPATCH WARNING]" in result.stderr, (
+            "Expected '[DISPATCH WARNING]' in stderr when overrides is older "
+            "than catalog, but got:\n"
+            f"stderr: {result.stderr!r}"
+        )
+        assert "stale" in result.stderr.lower() or "older" in result.stderr.lower(), (
+            "Expected staleness message in stderr, but got:\n"
+            f"stderr: {result.stderr!r}"
+        )
+
+    def test_dispatch_silent_when_overrides_newer_than_catalog(
+        self, tmp_path: Path
+    ) -> None:
+        """No warning when overrides mtime is newer than (or equal to) catalog.
+
+        The catalog is written first, then after a sleep the overrides file
+        is written so its mtime is strictly newer.
+        """
+        catalog = tmp_path / "catalog.json"
+        catalog.write_text(
+            _DEMO_CATALOG_PATH.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        time.sleep(0.05)
+        overrides = tmp_path / "overrides.json"
+        overrides.write_text(
+            '{"version": 1, "rules": []}', encoding="utf-8"
+        )
+
+        result = _run_dispatch(
+            env_overrides={
+                "DISPATCH_CATALOG_PATH": str(catalog),
+                "DISPATCH_OVERRIDES_PATH": str(overrides),
+            },
+        )
+
+        assert "[DISPATCH WARNING]" not in result.stderr, (
+            "Unexpected '[DISPATCH WARNING]' in stderr when overrides is "
+            "newer than catalog.\n"
+            f"stderr: {result.stderr!r}"
+        )

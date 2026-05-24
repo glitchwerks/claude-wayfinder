@@ -147,6 +147,7 @@ def _detect_mixed_content(
         ],
         "unassigned_paths": unassigned,
         "alternatives": alternatives,
+        "disposition_source": "scored",
     }
 
 
@@ -194,6 +195,7 @@ def decide(
                 "(file paths, explicit tool mentions, or additional keywords)."
             ),
             "alternatives": [],
+            "disposition_source": "scored",
         }
 
     best_agent = scored_agents[0] if scored_agents else None
@@ -216,6 +218,7 @@ def decide(
             "confidence": round(best_agent.score, 6),
             "rationale": _rationale_for(best_agent, features),
             "alternatives": _top_alternatives(scored_agents[1:], n=3),
+            "disposition_source": "scored",
         }
 
     # Step 3: self_handle — at least one strong skill, no dominant agent.
@@ -229,6 +232,7 @@ def decide(
                 + ", ".join(se.entry.name for se in best_skills)
             ),
             "alternatives": [],
+            "disposition_source": "scored",
         }
 
     # Step 3.5: mixed_content — structural fork where >= 2 agents clamp at
@@ -267,6 +271,7 @@ def decide(
             "confidence": round(score, 6),
             "rationale": rationale,
             "alternatives": _top_alternatives(scored_agents[1:], n=3),
+            "disposition_source": "scored",
         }
 
     # Step 5: self_handle_unaided — no useful signal.
@@ -278,6 +283,7 @@ def decide(
             "proceeding without delegation or skill activation."
         ),
         "alternatives": [],
+        "disposition_source": "scored",
     }
 
 

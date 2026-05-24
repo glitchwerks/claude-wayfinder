@@ -1163,3 +1163,296 @@ class TestPluginOverrideAgentRouting:
             f"plugin-override agent was not included in scoring "
             f"(decision was 'no_match'); full output: {out}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #213 — override short-circuit integration test
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideShortCircuit:
+    """When DISPATCH_OVERRIDES_PATH is set and a rule matches, the matcher
+    returns the override decision without running scoring.
+    """
+
+    def test_main_logs_json_parse_error_entry(self, tmp_path: Path) -> None:
+        """JSON-parse-error path writes a log entry before returning.
+
+        When stdin contains invalid JSON, ``main()`` emits a
+        ``needs_more_detail`` decision to stdout.  This test proves that
+        a log entry is also written so downstream NDJSON consumers can
+        observe the parse failure.
+
+        The log entry must carry:
+        - ``override_id: null`` (no override fired — parse failed first)
+        - ``output.decision == "needs_more_detail"``
+        - ``catalog_hash == ""`` (sentinel: catalog loaded but stdin not parsed)
+        """
+        import os as _os
+        import subprocess as _subprocess
+
+        catalog_path = tmp_path / "catalog.json"
+        catalog_data = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                    applicable_skills=[],
+                ),
+            ]
+        )
+        catalog_path.write_text(json.dumps(catalog_data), encoding="utf-8")
+
+        log_path = tmp_path / "log.jsonl"
+
+        result = _subprocess.run(
+            [PYTHON, "-m", *_MATCH_MODULE, "--catalog-path", str(catalog_path)],
+            input="{not json",
+            capture_output=True,
+            text=True,
+            env={
+                **_os.environ,
+                "DISPATCH_CATALOG_PATH": str(catalog_path),
+                "DISPATCH_LOG_PATH": str(log_path),
+            },
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"Expected exit 0 for parse-error path, got {result.returncode}; "
+            f"stderr={result.stderr!r}"
+        )
+        out = json.loads(result.stdout)
+        assert out["decision"] == "needs_more_detail", (
+            f"Expected decision='needs_more_detail', got {out['decision']!r}"
+        )
+        assert log_path.exists(), (
+            "Log file was not created on the JSON-parse-error path — "
+            "_write_log_entry must be called before the parse-error return"
+        )
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1, (
+            f"Expected exactly 1 log entry from parse-error run, got {len(lines)}"
+        )
+        entry = json.loads(lines[0])
+        assert entry["override_id"] is None, (
+            f"Expected override_id=null in parse-error log entry, "
+            f"got {entry.get('override_id')!r}"
+        )
+        assert entry["output"]["decision"] == "needs_more_detail", (
+            f"Expected output.decision='needs_more_detail' in log entry, "
+            f"got {entry['output'].get('decision')!r}"
+        )
+        assert entry["catalog_hash"] == "", (
+            f"Expected catalog_hash='' (sentinel for parse-failed pre-catalog) "
+            f"in log entry, got {entry.get('catalog_hash')!r}"
+        )
+
+    def test_main_short_circuits_on_override(
+        self, tmp_path: Path, monkeypatch: object
+    ) -> None:
+        """Override rule fires and short-circuits the scored pipeline.
+
+        Catalog has a code-writer agent that would score high on
+        "implement feature x".  An overrides file sets a rule with
+        command_prefix=/skip → self_handle_unaided with override metadata.
+        The input carries command_prefix=/skip so the rule must fire.
+
+        Assertions:
+        - decision == "self_handle_unaided" (from the rule, not scoring)
+        - disposition_source == "override"
+        - override_id == "always-skip"
+        - rationale == "test override fires"
+        """
+        catalog_path = tmp_path / "catalog.json"
+        catalog_data = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                    applicable_skills=[],
+                ),
+            ]
+        )
+        catalog_path.write_text(json.dumps(catalog_data), encoding="utf-8")
+
+        overrides_path = tmp_path / "overrides.json"
+        overrides_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "rules": [
+                        {
+                            "id": "always-skip",
+                            "decision": "self_handle_unaided",
+                            "agent": None,
+                            "skills": [],
+                            "confidence": 1.0,
+                            "rationale": "test override fires",
+                            "predicates": {"command_prefix": "/skip"},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _run(
+            stdin_obj={
+                "task_description": "implement feature x",
+                "command_prefix": "/skip",
+            },
+            catalog=catalog_data,
+            catalog_path=catalog_path,
+            extra_env={"DISPATCH_OVERRIDES_PATH": str(overrides_path)},
+            tmp_path=tmp_path,
+        )
+        assert result.returncode == 0, f"matcher exited non-zero:\n{result.stderr}"
+        out = json.loads(result.stdout)
+        assert out["decision"] == "self_handle_unaided", (
+            f"Expected 'self_handle_unaided' from override, "
+            f"got '{out['decision']}'"
+        )
+        assert out["disposition_source"] == "override", (
+            f"Expected disposition_source='override', got {out.get('disposition_source')!r}"
+        )
+        assert out["override_id"] == "always-skip", (
+            f"Expected override_id='always-skip', got {out.get('override_id')!r}"
+        )
+        assert out["rationale"] == "test override fires", (
+            f"Expected rationale from override rule, got {out.get('rationale')!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #213 — E2E pipeline test through _main.py with bundled demo fixtures
+# ---------------------------------------------------------------------------
+
+
+class TestDemoFixturesE2EPipeline:
+    """End-to-end pipeline test using the bundled demo fixtures.
+
+    Exercises ``_main.py:main()`` directly (via subprocess ``-m`` invocation),
+    NOT ``cli.py:run_demo()``.  Task 4b already covers the ``run_demo()``
+    path; this class independently verifies that ``_main.py`` short-circuits
+    correctly when the bundled ``demo-overrides.json`` is active.
+
+    The bundled fixtures live at:
+      ``src/claude_wayfinder/fixtures/demo-catalog.json``
+      ``src/claude_wayfinder/fixtures/demo-overrides.json``
+
+    Agent/skill name note: ``demo-overrides.json`` references only agents and
+    skills present in ``demo-catalog.json`` (``code-writer``, ``devops``,
+    ``python``) so the audit-clean requirement is satisfied.
+    """
+
+    # Resolve the fixtures directory from the installed package location so
+    # the test works regardless of shell CWD or worktree layout.
+    _FIXTURES_DIR: Path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "claude_wayfinder"
+        / "fixtures"
+    )
+
+    def test_deploy_command_short_circuits_via_main(
+        self, tmp_path: Path
+    ) -> None:
+        """command_prefix /deploy fires demo-deploy-command via _main.py.
+
+        The demo-overrides.json rule ``demo-deploy-command`` predicates on
+        ``command_prefix: /deploy``.  Sending that context through
+        ``_main.py`` must return:
+
+        - ``decision == "self_handle_unaided"``  (the rule's decision)
+        - ``disposition_source == "override"``   (short-circuit fired)
+        - ``override_id == "demo-deploy-command"``
+
+        This path runs through ``_main.py:main()`` only; ``run_demo()`` is
+        a separate entry point covered by Task 4b's test.
+        """
+        catalog_path = self._FIXTURES_DIR / "demo-catalog.json"
+        overrides_path = self._FIXTURES_DIR / "demo-overrides.json"
+
+        assert catalog_path.exists(), (
+            f"Bundled demo-catalog.json not found at {catalog_path}"
+        )
+        assert overrides_path.exists(), (
+            f"Bundled demo-overrides.json not found at {overrides_path}"
+        )
+
+        result = subprocess.run(
+            [PYTHON, "-m", *_MATCH_MODULE],
+            input=json.dumps(
+                {
+                    "task_description": "deploy the staging service",
+                    "file_paths": [],
+                    "command_prefix": "/deploy",
+                }
+            ),
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "DISPATCH_CATALOG_PATH": str(catalog_path),
+                "DISPATCH_OVERRIDES_PATH": str(overrides_path),
+            },
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"_main.py exited non-zero:\n{result.stderr}"
+        )
+        out = json.loads(result.stdout)
+        assert out["decision"] == "self_handle_unaided", (
+            f"Expected decision='self_handle_unaided' from override, "
+            f"got {out['decision']!r}; full output: {out}"
+        )
+        assert out["disposition_source"] == "override", (
+            f"Expected disposition_source='override', "
+            f"got {out.get('disposition_source')!r}"
+        )
+        assert out["override_id"] == "demo-deploy-command", (
+            f"Expected override_id='demo-deploy-command', "
+            f"got {out.get('override_id')!r}"
+        )
+
+    def test_non_override_context_produces_scored_disposition(
+        self, tmp_path: Path
+    ) -> None:
+        """A context that matches no override predicate falls through to scoring.
+
+        Sends a task that does not trigger any predicate in
+        ``demo-overrides.json`` (no ``/deploy`` prefix, no ``docs/**/*.md``
+        path, no ``Write`` tool mention).  The pipeline must complete normal
+        scored matching and return ``disposition_source == "scored"``.
+
+        This negative case proves the override short-circuit does NOT fire
+        for arbitrary inputs — only for predicates that match.
+        """
+        catalog_path = self._FIXTURES_DIR / "demo-catalog.json"
+        overrides_path = self._FIXTURES_DIR / "demo-overrides.json"
+
+        result = subprocess.run(
+            [PYTHON, "-m", *_MATCH_MODULE],
+            input=json.dumps(
+                {
+                    "task_description": "implement the authentication module",
+                    "file_paths": ["src/auth.py"],
+                }
+            ),
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "DISPATCH_CATALOG_PATH": str(catalog_path),
+                "DISPATCH_OVERRIDES_PATH": str(overrides_path),
+            },
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"_main.py exited non-zero:\n{result.stderr}"
+        )
+        out = json.loads(result.stdout)
+        assert out.get("disposition_source") == "scored", (
+            f"Expected disposition_source='scored' for non-override context, "
+            f"got {out.get('disposition_source')!r}; full output: {out}"
+        )

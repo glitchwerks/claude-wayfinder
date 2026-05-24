@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "demo-deploy-command",
+      "decision": "self_handle_unaided",
+      "agent": null,
+      "skills": [],
+      "confidence": 1.0,
+      "rationale": "demo: /deploy short-circuits to manual handling",
+      "predicates": {"command_prefix": "/deploy"}
+    },
+    {
+      "id": "demo-docs-to-code-writer",
+      "decision": "delegate",
+      "agent": "code-writer",
+      "skills": [],
+      "confidence": 1.0,
+      "rationale": "demo: any docs/ path routes to code-writer",
+      "predicates": {"path_globs": ["docs/**/*.md"]}
+    },
+    {
+      "id": "demo-write-tool",
+      "decision": "advisory",
+      "agent": "code-writer",
+      "skills": ["python"],
+      "confidence": 0.9,
+      "rationale": "demo: Write tool mention pre-tags code-writer",
+      "predicates": {"tool_mentions": ["Write"]}
+    }
+  ]
+}

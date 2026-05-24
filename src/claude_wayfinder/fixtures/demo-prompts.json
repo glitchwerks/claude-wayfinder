@@ -40,5 +40,12 @@
     "_note": "feature density < 2 (single keyword token, no paths); needs_more_detail fires",
     "task_description": "help",
     "file_paths": []
+  },
+  {
+    "_branch": "override: self_handle_unaided",
+    "_note": "command_prefix /deploy matches demo-deploy-command override rule; short-circuits scoring",
+    "task_description": "deploy the staging service",
+    "file_paths": [],
+    "command_prefix": "/deploy"
   }
 ]

@@ -18,11 +18,18 @@ from claude_wayfinder.match._catalog import (
     _emit_catalog_error,
     _resolve_catalog_path,
     _resolve_log_path,
+    _resolve_overrides_path,
     _write_log_entry,
     load_catalog,
 )
 from claude_wayfinder.match._decide import decide
 from claude_wayfinder.match._match import build_features, score
+from claude_wayfinder.match._overrides import (
+    OverrideRule,
+    OverridesError,
+    load_overrides,
+    resolve_override,
+)
 from claude_wayfinder.match._types import ScoredEntry
 from claude_wayfinder.match_filters import is_agent_routable
 
@@ -114,21 +121,73 @@ def main(argv: list[str] | None = None) -> None:
     try:
         context: dict[str, Any] = json.loads(raw_input)
     except json.JSONDecodeError as exc:
-        print(
-            json.dumps(
-                {
-                    "decision": "needs_more_detail",
-                    "confidence": 0.0,
-                    "rationale": f"Could not parse input JSON: {exc}",
-                    "alternatives": [],
-                }
-            ),
-            flush=True,
+        result = {
+            "decision": "needs_more_detail",
+            "confidence": 0.0,
+            "disposition_source": "scored",
+            "rationale": f"Could not parse input JSON: {exc}",
+            "alternatives": [],
+        }
+        # Log the parse failure before returning.  catalog_hash="" is the
+        # sentinel for "catalog not loaded; parse failed pre-catalog" so
+        # that NDJSON consumers can distinguish these entries by hash shape.
+        _write_log_entry(
+            {},
+            result,
+            "",
+            _resolve_log_path(),
+            override_id=None,
         )
+        print(json.dumps(result, sort_keys=True), flush=True)
         return
 
     # --- Extract features ---
     features = build_features(context)
+
+    # --- Load + resolve overrides (issue #213) ---
+    overrides_path = _resolve_overrides_path()
+    override_rules: list[OverrideRule] = []
+    if overrides_path is not None:
+        try:
+            override_rules = load_overrides(overrides_path)
+        except OverridesError as exc:
+            print(
+                f"[OVERRIDES ERROR] {exc}; proceeding with scored matching.",
+                file=sys.stderr,
+            )
+        # Stderr note only when consumer has opted in to overrides
+        # (Rev 1 CONCERN-1: gated on env var being set).
+        print(
+            f"[dispatch] overrides: {len(override_rules)} rules loaded"
+            f" from {overrides_path}",
+            file=sys.stderr,
+        )
+
+    # --- Short-circuit on override match ---
+    override_match = resolve_override(override_rules, features)
+    if override_match is not None:
+        rule = override_match.rule
+        result: dict[str, Any] = {
+            "decision": rule.decision,
+            "confidence": rule.confidence,
+            "rationale": rule.rationale,
+            "alternatives": [],
+            "disposition_source": "override",
+            "override_id": rule.id,
+        }
+        if rule.agent is not None:
+            result["agent"] = rule.agent
+        if rule.skills:
+            result["skills"] = list(rule.skills)
+        _write_log_entry(
+            context,
+            result,
+            catalog_hash,
+            _resolve_log_path(),
+            override_id=rule.id,
+        )
+        print(json.dumps(result, sort_keys=True), flush=True)
+        return
 
     # --- Score all entries ---
     # is_agent_routable excludes the router agent (routable=False) and
@@ -157,7 +216,7 @@ def main(argv: list[str] | None = None) -> None:
     result = decide(scored_agents, scored_skills, features, entries)
 
     # --- Log decision (non-fatal: log failure never blocks stdout output) ---
-    _write_log_entry(context, result, catalog_hash, _resolve_log_path())
+    _write_log_entry(context, result, catalog_hash, _resolve_log_path(), override_id=None)
 
     # --- Emit JSON ---
     print(json.dumps(result, sort_keys=True), flush=True)

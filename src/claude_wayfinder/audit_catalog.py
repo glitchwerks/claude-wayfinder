@@ -8,7 +8,11 @@ The module is structured as three layers:
 2. ``RULES`` — a registry of pure rule functions, each taking the parsed
    catalog and returning a list of Findings.  Rules are added one per
    subsequent commit in this feature branch.
-3. ``run_audit()`` — top-level entry that loads a catalog and applies
+3. ``OVERRIDE_RULES`` — a registry of override-aware rule functions,
+   each taking the parsed catalog AND a list of OverrideRule objects.
+   These are the BLOCKING-2 fix: the original ``RuleFn`` signature
+   cannot receive override rules.
+4. ``run_audit()`` — top-level entry that loads a catalog and applies
    every registered rule.
 
 The CLI shim in ``cli.py`` calls into ``run_audit_cli()`` defined here.
@@ -31,6 +35,8 @@ from claude_wayfinder._trigger_validators import (
     is_weight_in_ladder,
 )
 from claude_wayfinder.match import CatalogEntry, load_catalog
+from claude_wayfinder.match._overrides import OverridesError, load_overrides
+from claude_wayfinder.match._types import OverrideRule
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -102,20 +108,60 @@ def register(fn: RuleFn) -> RuleFn:
     return fn
 
 
+# An override-aware rule function takes both the catalog AND the
+# loaded override rules and returns 0+ findings.  This is the
+# BLOCKING-2 fix: ``RuleFn`` cannot accept override input.
+OverrideRuleFn = Callable[
+    [list[CatalogEntry], list[OverrideRule]],
+    list[Finding],
+]
+
+# Registry — populated via @register_override.
+OVERRIDE_RULES: list[OverrideRuleFn] = []
+
+
+def register_override(fn: OverrideRuleFn) -> OverrideRuleFn:
+    """Register a rule that audits both catalog entries and override rules.
+
+    Intended for use as a decorator on override-aware rule functions.
+    Each registered function is called by ``run_audit()`` when override
+    rules are supplied.
+
+    Args:
+        fn: A callable that accepts ``list[CatalogEntry]`` and
+            ``list[OverrideRule]`` and returns ``list[Finding]``.
+
+    Returns:
+        The original function unchanged (decorator protocol).
+    """
+    OVERRIDE_RULES.append(fn)
+    return fn
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 
-def run_audit(entries: Iterable[CatalogEntry]) -> list[Finding]:
+def run_audit(
+    entries: Iterable[CatalogEntry],
+    override_rules: list[OverrideRule] | None = None,
+) -> list[Finding]:
     """Apply every registered rule to ``entries`` and return all findings.
 
     Iterates through ``RULES`` in registration order and concatenates
-    each rule's output into a single flat list.  With no rules registered
-    (the initial scaffold state), always returns an empty list.
+    each rule's output into a single flat list.  When ``override_rules``
+    is supplied (non-None and non-empty), also applies every rule in
+    ``OVERRIDE_RULES``.
+
+    Backwards compatible: callers that pass only ``entries`` continue
+    to work; the override branch is skipped entirely when
+    ``override_rules`` is ``None``.
 
     Args:
         entries: Parsed catalog entries (typically from ``load_catalog``).
+        override_rules: Parsed override rules, or ``None`` to skip
+            override-aware audit rules.
 
     Returns:
         A flat list of findings, order-stable for a given catalog.
@@ -124,6 +170,9 @@ def run_audit(entries: Iterable[CatalogEntry]) -> list[Finding]:
     findings: list[Finding] = []
     for rule in RULES:
         findings.extend(rule(catalog))
+    if override_rules:
+        for orule_fn in OVERRIDE_RULES:
+            findings.extend(orule_fn(catalog, override_rules))
     return findings
 
 
@@ -172,6 +221,15 @@ def add_audit_catalog_args(parser: argparse.ArgumentParser) -> None:
             "as 'alpha <-> beta') match when either side of the pair "
             "label contains the substring -- so '--target alpha' "
             "surfaces pairs involving alpha. Default: no filter."
+        ),
+    )
+    parser.add_argument(
+        "--overrides-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to a dispatch overrides JSON file to audit "
+            "alongside the catalog."
         ),
     )
 
@@ -340,7 +398,23 @@ def run_audit_cli(args: argparse.Namespace) -> int:
         )
         return 1
 
-    findings = run_audit(entries)
+    load_error_findings: list[Finding] = []
+    override_rules: list[OverrideRule] = []
+    overrides_path = getattr(args, "overrides_path", None)
+    if overrides_path is not None:
+        try:
+            override_rules = load_overrides(overrides_path)
+        except OverridesError as exc:
+            load_error_findings.append(
+                Finding(
+                    Severity.BLOCKING,
+                    "override-load-error",
+                    str(overrides_path),
+                    str(exc),
+                )
+            )
+
+    findings = load_error_findings + run_audit(entries, override_rules)
 
     sev_flag = getattr(args, "severity", None)
     threshold = _SEVERITY_FROM_FLAG.get(sev_flag) if sev_flag else None
@@ -805,4 +879,294 @@ def rule_duplicate_trigger_set(
                     ),
                 )
             )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Override-aware rules (BLOCKING-2 fix)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Rule: override-zero-predicates (BLOCKING)
+# ---------------------------------------------------------------------------
+
+
+@register_override
+def rule_override_zero_predicates(
+    catalog: list[CatalogEntry],
+    override_rules: list[OverrideRule],
+) -> list[Finding]:
+    """Flag OverrideRules with no predicate set.
+
+    A rule with no ``command_prefix``, ``path_globs``, or
+    ``tool_mentions`` would match every context — a silent traffic-killer.
+
+    Args:
+        catalog: Parsed catalog entries (unused but required by protocol).
+        override_rules: Override rules to audit.
+
+    Returns:
+        One BLOCKING finding per zero-predicate rule.
+    """
+    out: list[Finding] = []
+    for orule in override_rules:
+        has_cp = orule.command_prefix is not None
+        has_pg = bool(orule.path_globs)
+        has_tm = bool(orule.tool_mentions)
+        if not (has_cp or has_pg or has_tm):
+            out.append(
+                Finding(
+                    severity=Severity.BLOCKING,
+                    rule="override-zero-predicates",
+                    entry=orule.id,
+                    message=(
+                        f"override rule '{orule.id}' has no predicates "
+                        "(command_prefix, path_globs, tool_mentions all "
+                        "empty) — would match every dispatch context"
+                    ),
+                )
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: override-unknown-skill (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+@register_override
+def rule_override_unknown_skill(
+    catalog: list[CatalogEntry],
+    override_rules: list[OverrideRule],
+) -> list[Finding]:
+    """Flag OverrideRules that name skills absent from the catalog.
+
+    One Finding per (rule_id, unknown_skill) pair.
+
+    Args:
+        catalog: Parsed catalog entries.
+        override_rules: Override rules to audit.
+
+    Returns:
+        CONCERN findings for each unknown skill reference.
+    """
+    known_skills: frozenset[str] = frozenset(
+        e.name for e in catalog if e.kind == "skill"
+    )
+    out: list[Finding] = []
+    for orule in override_rules:
+        for skill in orule.skills:
+            if skill not in known_skills:
+                out.append(
+                    Finding(
+                        severity=Severity.CONCERN,
+                        rule="override-unknown-skill",
+                        entry=orule.id,
+                        message=(
+                            f"override rule '{orule.id}' references skill "
+                            f"'{skill}' which is not in the catalog; "
+                            "the override will emit an unresolvable skill"
+                        ),
+                    )
+                )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: override-unknown-agent (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+@register_override
+def rule_override_unknown_agent(
+    catalog: list[CatalogEntry],
+    override_rules: list[OverrideRule],
+) -> list[Finding]:
+    """Flag OverrideRules that name an agent absent from the catalog.
+
+    Skip rules where ``agent`` is ``None`` (valid for decisions such as
+    ``self_handle_unaided`` that have no agent component).
+
+    Args:
+        catalog: Parsed catalog entries.
+        override_rules: Override rules to audit.
+
+    Returns:
+        CONCERN findings for each unknown agent reference.
+    """
+    known_agents: frozenset[str] = frozenset(
+        e.name for e in catalog if e.kind == "agent"
+    )
+    out: list[Finding] = []
+    for orule in override_rules:
+        if orule.agent is None:
+            continue
+        if orule.agent not in known_agents:
+            out.append(
+                Finding(
+                    severity=Severity.CONCERN,
+                    rule="override-unknown-agent",
+                    entry=orule.id,
+                    message=(
+                        f"override rule '{orule.id}' references agent "
+                        f"'{orule.agent}' which is not in the catalog"
+                    ),
+                )
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: override-unreachable (NIT)
+# ---------------------------------------------------------------------------
+
+def _override_predicate_key(
+    orule: OverrideRule,
+) -> tuple[str | None, tuple[str, ...], frozenset[str]]:
+    """Return a hashable key for an override rule's predicate triple.
+
+    Args:
+        orule: The override rule to compute the key for.
+
+    Returns:
+        Tuple of (command_prefix, sorted path_globs, tool_mentions).
+    """
+    return (
+        orule.command_prefix,
+        tuple(sorted(orule.path_globs)),
+        orule.tool_mentions,
+    )
+
+
+@register_override
+def rule_override_unreachable(
+    catalog: list[CatalogEntry],
+    override_rules: list[OverrideRule],
+) -> list[Finding]:
+    """Flag override rules that are string-identical duplicates of earlier ones.
+
+    Two rules with the same ``command_prefix``, ``path_globs``, and
+    ``tool_mentions`` string values are duplicates.  The later rule can
+    never fire because the earlier rule matches first (first-match-wins
+    semantics).
+
+    Only catches literal copy/paste — no glob-subsumption analysis.
+    O(n²) but n is small (override files are tens of rules, not
+    thousands).
+
+    Args:
+        catalog: Parsed catalog entries (unused but required by protocol).
+        override_rules: Override rules to audit.
+
+    Returns:
+        One NIT finding per (earlier_id, later_id) shadowed pair.
+    """
+    out: list[Finding] = []
+    for i, later in enumerate(override_rules):
+        later_key = _override_predicate_key(later)
+        for earlier in override_rules[:i]:
+            if _override_predicate_key(earlier) == later_key:
+                out.append(
+                    Finding(
+                        severity=Severity.NIT,
+                        rule="override-unreachable",
+                        entry=later.id,
+                        message=(
+                            f"override rule '{later.id}' has identical "
+                            f"predicates to earlier rule '{earlier.id}' "
+                            "and can never be reached (first-match-wins)"
+                        ),
+                    )
+                )
+                break  # Report once per later rule
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: override-duplicate-id (BLOCKING)
+# ---------------------------------------------------------------------------
+
+
+@register_override
+def rule_override_duplicate_id(
+    catalog: list[CatalogEntry],
+    override_rules: list[OverrideRule],
+) -> list[Finding]:
+    """Flag override rules that share an id with another rule.
+
+    One Finding per duplicate id citing both positions.
+
+    Args:
+        catalog: Parsed catalog entries (unused but required by protocol).
+        override_rules: Override rules to audit.
+
+    Returns:
+        One BLOCKING finding per duplicated id.
+    """
+    seen: dict[str, int] = {}
+    out: list[Finding] = []
+    reported: set[str] = set()
+    for idx, orule in enumerate(override_rules):
+        if orule.id in seen:
+            if orule.id not in reported:
+                reported.add(orule.id)
+                out.append(
+                    Finding(
+                        severity=Severity.BLOCKING,
+                        rule="override-duplicate-id",
+                        entry=orule.id,
+                        message=(
+                            f"override rule id '{orule.id}' appears at "
+                            f"positions {seen[orule.id]} and {idx} — "
+                            "ids must be unique within the overrides file"
+                        ),
+                    )
+                )
+        else:
+            seen[orule.id] = idx
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rule: override-tool-case-error (CONCERN)
+# ---------------------------------------------------------------------------
+
+
+@register_override
+def rule_override_tool_case_error(
+    catalog: list[CatalogEntry],
+    override_rules: list[OverrideRule],
+) -> list[Finding]:
+    """Flag miscased tool names in OverrideRule.tool_mentions.
+
+    Reuses ``_CANONICAL_TOOLS_LOWER`` from the catalog rule.
+    ``features.tool_mentions`` preserves caller-supplied casing (canonical),
+    so a lowercase override predicate silently never matches.
+
+    One Finding per (rule_id, miscased_tool) pair.
+
+    Args:
+        catalog: Parsed catalog entries (unused but required by protocol).
+        override_rules: Override rules to audit.
+
+    Returns:
+        CONCERN findings for each miscased tool mention.
+    """
+    out: list[Finding] = []
+    for orule in override_rules:
+        for tm in sorted(orule.tool_mentions):
+            canonical = _CANONICAL_TOOLS_LOWER.get(tm.lower())
+            if canonical is not None and canonical != tm:
+                out.append(
+                    Finding(
+                        severity=Severity.CONCERN,
+                        rule="override-tool-case-error",
+                        entry=orule.id,
+                        message=(
+                            f"override rule '{orule.id}' tool_mention "
+                            f"'{tm}' is case-incorrect; "
+                            f"matcher expects '{canonical}'"
+                        ),
+                    )
+                )
     return out
