@@ -30,6 +30,8 @@ For canonical field definitions — types, defaults, and schema stability guaran
 
 **`path_globs_excluded`** — Path globs that drop this entry from the scored pool when any glob matches any candidate file path. Exclusion wins over `path_globs` inclusion — an entry matching both is dropped. Use for "applies everywhere except X" patterns (e.g. an agent with `**/*.md` that must not win on `agents/**/*.md`). Same `fnmatch` semantics as `path_globs`; include both `agents/**/*.md` and `agents/*.md` forms (the `**` footgun applies here too). Example:
 
+**File:** `triggers.yml` (any skill or agent sidecar)
+
 ```yaml
 triggers:
   path_globs:
@@ -62,6 +64,8 @@ The `refresh-catalog` skill body (`skills/refresh-catalog/SKILL.md`) opens:
 The rest of the body uses `catalog`, `regenerate`, `rebuild`, `dispatch`, and `refresh` as recurring operational vocabulary. `catalog` is the load-bearing noun — the skill exists to rebuild it. `regenerate` and `rebuild` are the primary verbs the user would type. `dispatch` and `refresh` appear in supporting context.
 
 ### The triggers.yml that results
+
+**File:** `skills/refresh-catalog/triggers.yml`
 
 ```yaml
 triggers:
@@ -146,6 +150,8 @@ But there is also an **entry-side** problem the `audit-catalog` CLI would surfac
 ### The fix
 
 Add a `path_globs` entry that reflects the file types the agent works with:
+
+**File:** `agents/schema-migrator/triggers.yml`
 
 ```yaml
 triggers:
