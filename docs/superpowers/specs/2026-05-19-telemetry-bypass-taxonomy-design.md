@@ -3,7 +3,7 @@ title: Telemetry enrichment v2 — bypass-cause taxonomy
 date: 2026-05-19
 tracking: glitchwerks/claude-wayfinder#143
 supersedes: glitchwerks/claude-wayfinder#152 (abandoned)
-postmortem: docs/superpowers/postmortems/2026-05-18-telemetry-enrichment-pivot/POSTMORTEM.md
+postmortem: "#143 / abandoned PR #152 — lessons extracted to docs/design/methodology-lessons.md"
 inquisitor_pass_1: 2026-05-19 (3 BLOCKING / 6 CONCERN / 2 NIT — addressed in v2-draft2)
 inquisitor_pass_2: 2026-05-19 (2 BLOCKING / 5 CONCERN / 2 NIT — addressed in v2-draft3)
 inquisitor_pass_3: 2026-05-19 (1 BLOCKING / 3 CONCERN / 1 NIT — addressed in v2-draft4, this revision; pattern converged)
@@ -35,7 +35,9 @@ skills_relevant:
 v1 (PR #152, abandoned) tried to recover *what the matcher would have decided*
 for the ~98% of drift events where the matcher never ran. That design died on
 substrate confusion and cross-process contract fragility. See the postmortem
-for full forensics: `docs/superpowers/postmortems/2026-05-18-telemetry-enrichment-pivot/POSTMORTEM.md`.
+for full forensics: the six extracted lessons live in
+`docs/design/methodology-lessons.md`; the originating postmortem was deleted
+per the plan-file lifecycle rule (parent issue #143 / abandoned PR #152).
 
 v2 has a narrower goal: **categorize *what actually happened* for each drift
 event**, using only data the PreToolUse hook already has on the tool-call
