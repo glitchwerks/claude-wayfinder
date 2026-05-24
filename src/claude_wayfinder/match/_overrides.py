@@ -1,4 +1,4 @@
-"""Override rule loading for the dispatch matcher (issue #213).
+"""Override rule loading and resolution for the dispatch matcher (#213).
 
 Override rules pre-declare a verbatim decision tuple that the matcher
 returns when a rule's predicates match the dispatch context.  Resolution
@@ -8,22 +8,23 @@ decision-ladder pipeline.
 Public surface:
     - ``load_overrides(path)`` — parse a JSON rules file into a typed
       OverrideRule list.
+    - ``resolve_override(rules, features)`` — first-match-wins predicate
+      evaluation returning an OverrideMatch or None.
     - ``OverridesError`` — raised on missing/malformed/invalid override
       files.
-
-Note:
-    ``resolve_override`` and fnmatch-based predicate matching are added
-    in Task 3 of issue #213.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import sys
 from pathlib import Path
 
 from claude_wayfinder.match._types import (
     VALID_DECISIONS,
+    Features,
+    OverrideMatch,
     OverrideRule,
 )
 
@@ -90,3 +91,74 @@ def load_overrides(path: Path) -> list[OverrideRule]:
             )
         )
     return rules
+
+
+def _rule_matches(rule: OverrideRule, features: Features) -> tuple[str, ...]:
+    """Return predicate names that fired, or () when the rule does not match.
+
+    AND semantics apply: every predicate set on the rule must fire.
+    A rule with zero predicates returns () as a defense-in-depth guard
+    so it never fires at runtime even if audit-catalog missed it.
+
+    Args:
+        rule: The override rule whose predicates are evaluated.
+        features: Extracted dispatch context features.
+
+    Returns:
+        Tuple of matched predicate names (e.g. ``("path_globs",)``), or
+        an empty tuple when any required predicate misses.
+    """
+    fired: list[str] = []
+
+    has_cp = rule.command_prefix is not None
+    has_pg = bool(rule.path_globs)
+    has_tm = bool(rule.tool_mentions)
+
+    if not (has_cp or has_pg or has_tm):
+        return ()
+
+    if has_cp:
+        if features.command_prefix != rule.command_prefix:
+            return ()
+        fired.append("command_prefix")
+
+    if has_pg:
+        path_hit = any(
+            fnmatch.fnmatch(p, g)
+            for p in features.paths
+            for g in rule.path_globs
+        )
+        if not path_hit:
+            return ()
+        fired.append("path_globs")
+
+    if has_tm:
+        if not (rule.tool_mentions & features.tool_mentions):
+            return ()
+        fired.append("tool_mentions")
+
+    return tuple(fired)
+
+
+def resolve_override(
+    rules: list[OverrideRule],
+    features: Features,
+) -> OverrideMatch | None:
+    """Return the first rule whose predicates all match, or None.
+
+    First-match-wins by file order (rules are evaluated in the order they
+    appear in the overrides JSON).  A matched rule short-circuits the
+    scoring pipeline.
+
+    Args:
+        rules: Loaded override rules in file order.
+        features: Extracted dispatch context features.
+
+    Returns:
+        OverrideMatch on the first hit; None when no rule matches.
+    """
+    for rule in rules:
+        fired = _rule_matches(rule, features)
+        if fired:
+            return OverrideMatch(rule=rule, matched_predicates=fired)
+    return None

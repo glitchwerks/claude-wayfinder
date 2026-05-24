@@ -125,3 +125,82 @@ def test_load_overrides_invalid_decision_raises(tmp_path: Path) -> None:
     })
     with pytest.raises(OverridesError, match="invalid decision"):
         load_overrides(p)
+
+
+# ---------------------------------------------------------------------------
+# resolve_override() tests — RED phase
+# ---------------------------------------------------------------------------
+
+from claude_wayfinder.match._overrides import resolve_override  # noqa: E402
+from claude_wayfinder.match._types import Features  # noqa: E402
+
+
+def _rule(rid: str = "r", **predicates: object) -> OverrideRule:
+    """Build a minimal OverrideRule for resolver tests."""
+    return OverrideRule(
+        id=rid,
+        decision="delegate",
+        agent="code-writer",
+        skills=("python",),
+        confidence=0.99,
+        rationale="t",
+        command_prefix=predicates.get("command_prefix"),  # type: ignore[arg-type]
+        path_globs=tuple(predicates.get("path_globs", ())),  # type: ignore[arg-type]
+        tool_mentions=frozenset(predicates.get("tool_mentions", ())),  # type: ignore[arg-type]
+    )
+
+
+def test_resolve_override_no_rules_returns_none() -> None:
+    """resolve_override returns None when the rules list is empty."""
+    assert resolve_override([], Features()) is None
+
+
+def test_resolve_override_path_glob_match() -> None:
+    """resolve_override returns an OverrideMatch when path_globs hit."""
+    rule = _rule(path_globs=("**/*.py",))
+    f = Features(paths=("src/foo.py",))
+    m = resolve_override([rule], f)
+    assert m is not None
+    assert m.rule.id == "r"
+    assert "path_globs" in m.matched_predicates
+
+
+def test_resolve_override_command_prefix_match() -> None:
+    """resolve_override returns an OverrideMatch when command_prefix hit."""
+    rule = _rule(command_prefix="/deploy")
+    f = Features(command_prefix="/deploy")
+    m = resolve_override([rule], f)
+    assert m is not None
+
+
+def test_resolve_override_tool_mentions_match() -> None:
+    """resolve_override returns an OverrideMatch when tool_mentions overlap."""
+    rule = _rule(tool_mentions=("Bash",))
+    f = Features(tool_mentions=frozenset({"Bash", "Read"}))
+    m = resolve_override([rule], f)
+    assert m is not None
+
+
+def test_resolve_override_and_combined_predicates() -> None:
+    """All active predicates must match (AND semantics); partial match fails."""
+    rule = _rule(command_prefix="/x", path_globs=("*.md",))
+    # command_prefix matches but no path matches -> no overall match
+    f = Features(command_prefix="/x", paths=("src/foo.py",))
+    assert resolve_override([rule], f) is None
+
+
+def test_resolve_override_first_match_wins() -> None:
+    """The first rule whose predicates all fire is returned; later rules skip."""
+    r1 = _rule(rid="first", path_globs=("**/*.py",))
+    r2 = _rule(rid="second", path_globs=("**/*.py",))
+    f = Features(paths=("src/foo.py",))
+    m = resolve_override([r1, r2], f)
+    assert m is not None
+    assert m.rule.id == "first"
+
+
+def test_resolve_override_zero_predicates_never_matches() -> None:
+    """Defense in depth: a rule with zero predicates never fires at runtime."""
+    rule = _rule()  # no predicates set
+    f = Features(paths=("any.py",))
+    assert resolve_override([rule], f) is None
