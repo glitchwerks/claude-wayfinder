@@ -6,6 +6,85 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-05-24
+
+Minor release adding a **deterministic override mechanism** to the dispatch
+matcher. When an override rule matches the dispatch context, the matcher
+returns the rule's pre-declared `(decision, agent, skills, confidence,
+rationale)` verbatim — bypassing scoring and the 7-branch decision ladder —
+and tags the output with `disposition_source: "override"` so downstream
+tooling can distinguish override-fired decisions from scored ones.
+
+Wayfinder ships the **mechanism only**; rule files are consumer-private per
+the public/private boundary established in `#54`. Downstream consumers (the
+canonical example being `glitchwerks/claude-configs`) author their own
+`dispatch-overrides.json` and point `$DISPATCH_OVERRIDES_PATH` at it — the
+follow-up migration is tracked in `glitchwerks/claude-configs#732`.
+
+### Added
+
+- **New `_overrides.py` module** with `load_overrides(path)`,
+  `resolve_override(rules, features)`, and `OverridesError` (#213).
+  Public surface re-exported from `claude_wayfinder.match.__init__`.
+- **`OverrideRule` and `OverrideMatch` dataclasses** (`_types.py`) — frozen,
+  Google-style docstrings, three v1 predicates (`command_prefix`,
+  `path_globs`, `tool_mentions`), all AND-combined.
+- **First-match-wins resolution semantics** by file order; the
+  `override-unreachable` audit-catalog rule (NIT) catches the string-identical
+  copy/paste footgun. Glob subsumption is intentionally not checked.
+- **`disposition_source` field on every matcher decision** —
+  `"scored"` for scoring-pipeline outputs, `"override"` for short-circuited
+  override matches. Tagged on every return site in `_decide.py` for
+  symmetry; downstream tooling can rely on the field always being present.
+- **`override_id` field in dispatch-log NDJSON entries** (top-level, sibling
+  of `output`/`catalog_hash`/`matcher_version`) — rule id string when an
+  override fired, `null` otherwise. Enables cheap NDJSON sweeps to count
+  how often each rule fires.
+- **`audit-catalog --overrides-path <path>` CLI flag** audits a rules file
+  alongside the catalog. Seven new rules: `override-zero-predicates`
+  (BLOCKING), `override-unknown-skill` (CONCERN), `override-unknown-agent`
+  (CONCERN), `override-unreachable` (NIT, string-identical only),
+  `override-load-error` (BLOCKING, CLI-emitted on `OverridesError`),
+  `override-duplicate-id` (BLOCKING), `override-tool-case-error` (CONCERN,
+  reuses `_CANONICAL_TOOLS_LOWER`).
+- **`OverrideRuleFn` registry + `@register_override` decorator** in
+  `audit_catalog.py` — parallel registry to existing `RuleFn`/`@register`,
+  receives both `list[CatalogEntry]` and `list[OverrideRule]`. Backwards
+  compatible: `run_audit(entries)` without the second arg still works.
+- **`[DISPATCH WARNING]` staleness check** in `_dispatch.py` — fires when
+  `overrides.mtime < catalog.mtime` (the overrides file is older than the
+  catalog and may reference renamed/removed agents). Non-fatal; execution
+  proceeds.
+- **Demo override fixtures** in `src/claude_wayfinder/fixtures/demo-overrides.json`
+  (3 rules, one per predicate) + a matching demo prompt in
+  `demo-prompts.json`. End-to-end pipeline test runs through `_main.py:main()`.
+- **Reviewer-facing spec** at
+  `docs/superpowers/specs/2026-05-24-dispatch-overrides.md` — schema,
+  predicate vocabulary, resolution order, public/private boundary,
+  telemetry shape, audit-rule table, out-of-scope list.
+
+### Changed
+
+- **`_write_log_entry()` signature** gained `override_id: str | None = None`
+  (defaults to `None`; existing call sites keep working without
+  modification).
+- **JSON-parse-error early-return path in `_main.py`** now writes a log
+  entry before returning, with `catalog_hash=""` as the sentinel for
+  "catalog not loaded; parse failed pre-catalog". Closes a previously-silent
+  schema hole that would have tripped any consumer sweeping NDJSON for
+  `override_id is null` to count scored decisions.
+
+### Internal
+
+- New tests: `tests/test_match/test_overrides.py` (loader + resolver, 14
+  cases), `tests/test_match/test_decide.py` (`disposition_source`
+  symmetry), `tests/test_match/test_integration.py` (override short-circuit
+  E2E + parse-error log + demo fixture pipeline). `tests/test_audit_catalog.py`
+  gained 26 cases covering all 7 override rules (fire + clean paths each).
+  `tests/test_cli_dispatch.py` gained override demo-mode + staleness coverage.
+- 610 tests passing on `pytest -v --ignore=tests/integration`; `ruff check`
+  clean. Demo fixtures pass `audit-catalog` with 0 findings.
+
 ## [0.10.0] — 2026-05-23
 
 Minor release adding a new `mixed_content` decision type to the matcher's
