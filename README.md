@@ -147,6 +147,12 @@ Minimum path from zero to a working real-catalog `/dispatch`:
 
 **2. One-time setup** — when the next session starts, the SessionStart hook will show a setup banner. Run `/setup-wayfinder` once to materialize the Python venv. See [Troubleshooting](#troubleshooting) for details.
 
+**Step 2.5 — Do you have catalog-ready skills/agents?** The catalog builder scans your skill and agent files for a `triggers:` block. Without trigger frontmatter, `catalog build` completes but produces an empty or near-empty catalog and `/dispatch` will not route anything useful.
+
+Each skill or agent you want the matcher to consider needs a `triggers.yml` sidecar declaring at least one of: `keywords`, `path_globs`, `agent_names`, `tool_names`, or `command_prefixes`. See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md) for field definitions and worked examples of adding triggers to existing skills and agents.
+
+If you do not have any trigger frontmatter yet, skip ahead and run `/dispatch` in demo mode — it runs against bundled fixtures so you can see all seven decision branches in action without a real catalog. Come back to this step once you have added triggers.
+
 **3. Build a catalog** — run this console script once (and again whenever your skill or agent frontmatter changes):
 
 ```bash
@@ -156,6 +162,8 @@ claude-wayfinder catalog build \
   --out ~/.claude/dispatch-catalog.json \
   --log ~/.claude/dispatch-catalog-build.log
 ```
+
+On success, this writes `~/.claude/dispatch-catalog.json` — a JSON file listing every skill and agent entry the matcher will score.
 
 **4. Set `$DISPATCH_CATALOG_PATH`** — in your shell profile:
 
