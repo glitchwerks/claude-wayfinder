@@ -1,5 +1,7 @@
 # Release Process
 
+_Maintainer doc — relevant only if you ship releases of `claude-wayfinder` or a fork. Consumers do not need to follow this runbook._
+
 Authoritative release runbook for `claude-wayfinder`. Every command shown uses the `git -C <repo>` pattern (CLAUDE.md § Shell — never `cd <repo> && git ...`).
 
 The **Quick reference card** at the end is the section to keep open during a release. Return to the sections above for rationale and edge-case guidance.
@@ -126,7 +128,7 @@ Then open a new Claude Code session and run `/reload-plugins`.
 
 **Rule:** Use `git rev-parse 'vX.Y.Z^{commit}'` for the marketplace SHA pin. Bare `git rev-parse vX.Y.Z` returns the tag-object SHA on annotated tags, which the marketplace loader cannot resolve.
 
-**Source of truth:** `~/.claude/agent-memory/general-purpose/feedback_action_pin_use_commit_not_tag_obj.md` — proven in glitchwerks/plugins#20, fixed in #21.
+**Source of truth:** glitchwerks/plugins#20 (proved the tag-object SHA breaks the loader), glitchwerks/plugins#21 (fix).
 
 **Comply:** Always append `^{commit}` (step 7 above).
 
@@ -136,7 +138,7 @@ Then open a new Claude Code session and run `/reload-plugins`.
 
 **Rule:** A release is not installable from `glitchwerks/plugins` until `marketplace.json` is bumped.
 
-**Source of truth:** `~/.claude/agent-memory/general-purpose/feedback_release_requires_marketplace_repo_bump.md` — proven during claude-wayfinder v0.4.1 (glitchwerks/plugins#19).
+**Source of truth:** glitchwerks/plugins#19 (claude-wayfinder v0.4.1 — release was not installable until the marketplace bump landed).
 
 **Comply:** Steps 8–10 are not optional. Verify with step 10 before announcing.
 
@@ -184,7 +186,7 @@ Then open a new Claude Code session and run `/reload-plugins`.
 
 **Rule:** Do not wipe `~/.claude/plugins/cache/glitchwerks/claude-wayfinder/` unless `source.repo` in `marketplace.json` actually changed. Wiping on a pure version bump removes the slot for the previous version while users still have it active.
 
-**Source of truth:** `~/.claude/agent-memory/general-purpose/feedback_plugin_cache_survives_repo_split.md`.
+**Source of truth:** Verified during the claude-prospector spike when the plugin was split out of claude-configs; the cached `origin` did not update on a `source.repo` change, confirming the cache slot is keyed to the original repo path and must be wiped only when the path changes.
 
 **Comply:** Check the marketplace PR diff for a `source.repo` change. If unchanged, skip step 12.
 
