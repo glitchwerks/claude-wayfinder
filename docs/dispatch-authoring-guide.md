@@ -6,7 +6,7 @@
 
 The `dispatch-authoring` skill covers the rules and scoring math. This companion document turns those rules into concrete walkthroughs: a skill authored from scratch, a skill tuned to fix a stale entry, and an agent that mysteriously never gets dispatched. It also serves as the rule reference for `audit-catalog`, the catalog-wide static analysis CLI.
 
-Read the `dispatch-authoring` skill body first (`skills/dispatch-authoring/SKILL.md`) for the field definitions and scoring formula. Come here when you need worked examples, the complete audit-catalog rule table, or the exit-code contract.
+Read the bundled `dispatch-authoring` skill body first ([`skills/dispatch-authoring/SKILL.md`](../skills/dispatch-authoring/SKILL.md)) for the field definitions and scoring formula. Come here when you need worked examples, the complete audit-catalog rule table, or the exit-code contract.
 
 ---
 
