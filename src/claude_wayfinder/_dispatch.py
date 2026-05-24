@@ -124,6 +124,37 @@ def check_catalog_staleness(
         )
 
 
+def check_overrides_staleness(
+    catalog_path: Path,
+    overrides_path: Path | None,
+) -> None:
+    """Emit a stderr warning when the overrides file is older than the catalog.
+
+    Fires only when *overrides_path* is set, both files exist, and the
+    overrides mtime is strictly less than the catalog mtime.  All other
+    cases (either file missing, overrides newer or equal, env var absent)
+    are silent.
+
+    Args:
+        catalog_path: Resolved path to the dispatch catalog file.
+        overrides_path: Resolved path to the overrides JSON file, or
+            ``None`` when ``$DISPATCH_OVERRIDES_PATH`` is unset.
+    """
+    if overrides_path is None:
+        return
+    try:
+        overrides_mtime = overrides_path.stat().st_mtime
+        catalog_mtime = catalog_path.stat().st_mtime
+    except OSError:
+        return
+    if overrides_mtime < catalog_mtime:
+        print(
+            "[DISPATCH WARNING] overrides file is older than catalog"
+            " — rules may reference stale agent/skill names",
+            file=sys.stderr,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Catalog validation
 # ---------------------------------------------------------------------------
@@ -324,6 +355,13 @@ def run_dispatch(
         catalog_path=catalog_path,
         skills_dir=Path(skills_dir_env) if skills_dir_env else None,
         agents_dir=Path(agents_dir_env) if agents_dir_env else None,
+    )
+
+    # Overrides-mtime check (warn-only — must not block execution).
+    overrides_env = os.environ.get("DISPATCH_OVERRIDES_PATH")
+    check_overrides_staleness(
+        catalog_path=catalog_path,
+        overrides_path=Path(overrides_env).expanduser() if overrides_env else None,
     )
 
     # Read dispatch context from stdin if not supplied directly.

@@ -472,3 +472,81 @@ class TestDemoModeOverride:
             f"Expected rule id 'demo-override-fires' in demo output.\n"
             f"output:\n{output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Overrides-mtime staleness warning
+# ---------------------------------------------------------------------------
+
+
+class TestOverridesStalenessWarning:
+    """When the overrides file is older than the catalog, a DISPATCH WARNING
+    must appear on stderr.  Execution must still proceed normally."""
+
+    def test_dispatch_warns_when_overrides_older_than_catalog(
+        self, tmp_path: Path
+    ) -> None:
+        """Warning fires when overrides mtime is strictly older than catalog.
+
+        The overrides file is written first so its mtime is earlier, then a
+        brief sleep ensures the catalog's mtime is strictly newer.
+        """
+        overrides = tmp_path / "overrides.json"
+        overrides.write_text(
+            '{"version": 1, "rules": []}', encoding="utf-8"
+        )
+        time.sleep(0.05)
+        catalog = tmp_path / "catalog.json"
+        catalog.write_text(
+            _DEMO_CATALOG_PATH.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        result = _run_dispatch(
+            env_overrides={
+                "DISPATCH_CATALOG_PATH": str(catalog),
+                "DISPATCH_OVERRIDES_PATH": str(overrides),
+            },
+        )
+
+        assert "[DISPATCH WARNING]" in result.stderr, (
+            "Expected '[DISPATCH WARNING]' in stderr when overrides is older "
+            "than catalog, but got:\n"
+            f"stderr: {result.stderr!r}"
+        )
+        assert "stale" in result.stderr.lower() or "older" in result.stderr.lower(), (
+            "Expected staleness message in stderr, but got:\n"
+            f"stderr: {result.stderr!r}"
+        )
+
+    def test_dispatch_silent_when_overrides_newer_than_catalog(
+        self, tmp_path: Path
+    ) -> None:
+        """No warning when overrides mtime is newer than (or equal to) catalog.
+
+        The catalog is written first, then after a sleep the overrides file
+        is written so its mtime is strictly newer.
+        """
+        catalog = tmp_path / "catalog.json"
+        catalog.write_text(
+            _DEMO_CATALOG_PATH.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        time.sleep(0.05)
+        overrides = tmp_path / "overrides.json"
+        overrides.write_text(
+            '{"version": 1, "rules": []}', encoding="utf-8"
+        )
+
+        result = _run_dispatch(
+            env_overrides={
+                "DISPATCH_CATALOG_PATH": str(catalog),
+                "DISPATCH_OVERRIDES_PATH": str(overrides),
+            },
+        )
+
+        assert "[DISPATCH WARNING]" not in result.stderr, (
+            "Unexpected '[DISPATCH WARNING]' in stderr when overrides is "
+            "newer than catalog.\n"
+            f"stderr: {result.stderr!r}"
+        )
