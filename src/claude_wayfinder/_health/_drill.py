@@ -28,6 +28,7 @@ import argparse
 import collections
 import datetime
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,46 @@ from claude_wayfinder._health._report import (
     load_catalog_entries,
     load_jsonl,
 )
+
+# ---------------------------------------------------------------------------
+# Default path helpers (Issue #262)
+# ---------------------------------------------------------------------------
+# These mirror the helpers in __init__.py.  Defined here rather than imported
+# to avoid a circular import (since __init__.py imports from _drill.py).
+# ---------------------------------------------------------------------------
+
+
+def _default_drift_log() -> Path:
+    """Return the default drift-log path, resolved at call time.
+
+    Precedence (matches ``scripts/analyze-drift-causes.py``):
+      1. ``ROUTER_DRIFT_PATH`` env var.
+      2. ``~/.claude/state/router-drift.jsonl`` via ``Path.home()``.
+
+    Returns:
+        Path to the drift log file.
+    """
+    env = os.environ.get("ROUTER_DRIFT_PATH")
+    if env:
+        return Path(env)
+    return Path.home() / ".claude" / "state" / "router-drift.jsonl"
+
+
+def _default_dispatch_log() -> Path:
+    """Return the default dispatch-log path, resolved at call time.
+
+    Precedence:
+      1. ``DISPATCH_LOG`` env var.
+      2. ``~/.claude/state/dispatch-log.jsonl`` via ``Path.home()``.
+
+    Returns:
+        Path to the dispatch log file.
+    """
+    env = os.environ.get("DISPATCH_LOG")
+    if env:
+        return Path(env)
+    return Path.home() / ".claude" / "state" / "dispatch-log.jsonl"
+
 
 # ---------------------------------------------------------------------------
 # Window parsing helper (#170)
@@ -175,14 +216,22 @@ def _cmd_drill(argv: list[str]) -> int:
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to router-drift.jsonl.",
+        help=(
+            "Path to router-drift.jsonl.  Defaults to "
+            "$ROUTER_DRIFT_PATH env var, then "
+            "~/.claude/state/router-drift.jsonl."
+        ),
     )
     parser.add_argument(
         "--dispatch-log",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to dispatch-log.jsonl (reserved for future cross-log correlation).",
+        help=(
+            "Path to dispatch-log.jsonl (reserved for future cross-log "
+            "correlation).  Defaults to $DISPATCH_LOG env var, then "
+            "~/.claude/state/dispatch-log.jsonl."
+        ),
     )
     parser.add_argument(
         "--window",
@@ -214,9 +263,11 @@ def _cmd_drill(argv: list[str]) -> int:
         parser.error(str(exc))
         return 2  # unreachable but satisfies type checker
 
-    drift_events: list[dict[str, Any]] = []
-    if args.drift_log is not None:
-        drift_events = load_jsonl(args.drift_log)
+    # Resolve default paths (Issue #262): explicit flag > env var > home default.
+    drift_log_path = (
+        args.drift_log if args.drift_log is not None else _default_drift_log()
+    )
+    drift_events = load_jsonl(drift_log_path)
 
     windowed = _events_in_window(drift_events, window)
 
@@ -437,7 +488,11 @@ def _cmd_top(argv: list[str]) -> int:
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to dispatch-log.jsonl.",
+        help=(
+            "Path to dispatch-log.jsonl.  Defaults to "
+            "$DISPATCH_LOG env var, then "
+            "~/.claude/state/dispatch-log.jsonl."
+        ),
     )
     parser.add_argument(
         "--window",
@@ -466,9 +521,11 @@ def _cmd_top(argv: list[str]) -> int:
         parser.error(str(exc))
         return 2
 
-    dispatch_events: list[dict[str, Any]] = []
-    if args.dispatch_log is not None:
-        dispatch_events = load_jsonl(args.dispatch_log)
+    # Resolve default path (Issue #262): explicit flag > env var > home default.
+    dispatch_log_path = (
+        args.dispatch_log if args.dispatch_log is not None else _default_dispatch_log()
+    )
+    dispatch_events = load_jsonl(dispatch_log_path)
 
     windowed = _events_in_window(dispatch_events, window)
 
