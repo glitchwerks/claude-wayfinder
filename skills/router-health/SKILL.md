@@ -33,21 +33,26 @@ not need the full report.
 
 ## Path resolution
 
-The script (`claude_wayfinder._health.main`) requires explicit paths — there
-are no `~/.claude/...` defaults baked in. Resolve each path in this order:
+The script (`claude_wayfinder._health.main`) resolves each path argument via
+env var override or ``~/.claude/...`` home-dir default (Issue #262).  Explicit
+flags always win; passing no flag is equivalent to the default shown below.
 
-| Argument                  | Env var override         | Default (when env var absent)                |
-| ------------------------- | ------------------------ | -------------------------------------------- |
-| `--drift-log`             | `$ROUTER_DRIFT_LOG`      | `$HOME/.claude/state/router-drift.jsonl`     |
-| `--dispatch-log`          | `$DISPATCH_LOG`          | `$HOME/.claude/state/dispatch-log.jsonl`     |
-| `--catalog-path`          | `$DISPATCH_CATALOG_PATH` | _(omit; catalog section will be empty)_      |
-| `--skills-dir`            | `$ROUTER_SKILLS_DIR`     | `$HOME/.claude/skills`                       |
-| `--agents-dir`            | `$ROUTER_AGENTS_DIR`     | `$HOME/.claude/agents`                       |
-| `--plugin-overrides-dir`  | `$ROUTER_PLUGIN_OVERRIDES_DIR` | `$HOME/.claude/triggers`               |
+| Argument                  | Env var override              | Default (when env var absent)                |
+| ------------------------- | ----------------------------- | -------------------------------------------- |
+| `--drift-log`             | `$ROUTER_DRIFT_PATH`          | `~/.claude/state/router-drift.jsonl`         |
+| `--dispatch-log`          | `$DISPATCH_LOG`               | `~/.claude/state/dispatch-log.jsonl`         |
+| `--catalog-path`          | `$DISPATCH_CATALOG_PATH`      | _(omit; catalog section will be empty)_      |
+| `--skills-dir`            | `$ROUTER_SKILLS_DIR`          | `~/.claude/skills`                           |
+| `--agents-dir`            | `$ROUTER_AGENTS_DIR`          | `~/.claude/agents`                           |
+| `--plugin-overrides-dir`  | `$ROUTER_PLUGIN_OVERRIDES_DIR`| `~/.claude/triggers`                         |
 
 Absent log files are treated as empty (telemetry sections render with zero
 events). Missing skills/agents/overrides directories produce a FAIL on the
 corresponding CI invariants, which is the correct signal.
+
+Note: `--drift-log` uses `$ROUTER_DRIFT_PATH` (matching
+`scripts/analyze-drift-causes.py`), not `$ROUTER_DRIFT_LOG`.  Both tools
+resolve the drift log from the same env var so overriding one overrides both.
 
 ## Step 1: Run the report
 
@@ -58,22 +63,31 @@ substitute the absolute interpreter path:
 `${CLAUDE_PLUGIN_DATA}/venv/bin/python` (POSIX) or
 `${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe` (Windows).
 
+Bare invocation uses the home-dir defaults automatically:
+
+```bash
+python -m claude_wayfinder health --report
+```
+
+Override individual paths via env vars when needed:
+
+```bash
+ROUTER_DRIFT_PATH=/custom/drift.jsonl python -m claude_wayfinder health --report
+```
+
+Or pass explicit flags (these override both env vars and defaults):
+
 ```bash
 python -m claude_wayfinder health --report \
-  --drift-log    "${ROUTER_DRIFT_LOG:-$HOME/.claude/state/router-drift.jsonl}" \
-  --dispatch-log "${DISPATCH_LOG:-$HOME/.claude/state/dispatch-log.jsonl}" \
-  --skills-dir   "${ROUTER_SKILLS_DIR:-$HOME/.claude/skills}" \
-  --agents-dir   "${ROUTER_AGENTS_DIR:-$HOME/.claude/agents}" \
-  --plugin-overrides-dir "${ROUTER_PLUGIN_OVERRIDES_DIR:-$HOME/.claude/triggers}"
+  --drift-log    /path/to/router-drift.jsonl \
+  --dispatch-log /path/to/dispatch-log.jsonl \
+  --skills-dir   /path/to/skills \
+  --agents-dir   /path/to/agents \
+  --plugin-overrides-dir /path/to/triggers
 ```
 
 `--catalog-path` is omitted intentionally — the script falls back to
 `$DISPATCH_CATALOG_PATH` when no flag is passed.
-
-This single command works in both Bash and PowerShell when the env-var
-defaults shown are pre-resolved by the calling shell. PowerShell users who
-need inline defaults should expand each variable before calling:
-`$env:ROUTER_DRIFT_LOG ?? "$env:USERPROFILE\.claude\state\router-drift.jsonl"`.
 
 If `--brief` was passed by the user, capture the output but do not print it
 verbatim — only use it as input to Step 2.
@@ -124,10 +138,11 @@ crash on type-tagged events.
 For **Bypass rate** FAIL or warning, use the `drill` subcommand:
 
 ```bash
-python -m claude_wayfinder health drill --metric bypass \
-  --drift-log "${ROUTER_DRIFT_LOG:-$HOME/.claude/state/router-drift.jsonl}" \
-  --window 30d
+python -m claude_wayfinder health drill --metric bypass --window 30d
 ```
+
+The `--drift-log` flag is optional; the CLI reads from
+`$ROUTER_DRIFT_PATH` or `~/.claude/state/router-drift.jsonl` by default.
 
 Report the daily distribution and top-bypassing sessions from the output.
 If 5+ events come from the same session, that session is the likely outlier —
@@ -137,9 +152,7 @@ was bypassed, correlate by `session_id` with `dispatch-log.jsonl`.
 For **Advisory override rate** FAIL or warning, use the `drill` subcommand:
 
 ```bash
-python -m claude_wayfinder health drill --metric advisory-override \
-  --drift-log "${ROUTER_DRIFT_LOG:-$HOME/.claude/state/router-drift.jsonl}" \
-  --window 30d
+python -m claude_wayfinder health drill --metric advisory-override --window 30d
 ```
 
 Report the top-3 overriding sessions from the output. Correlate with
@@ -169,9 +182,7 @@ embedding, unsorted set serialization.
 After the per-metric drill-down, surface the **5 most recent drift events**:
 
 ```bash
-python -m claude_wayfinder health drill --metric recent-drift \
-  --drift-log "${ROUTER_DRIFT_LOG:-$HOME/.claude/state/router-drift.jsonl}" \
-  --limit 5
+python -m claude_wayfinder health drill --metric recent-drift --limit 5
 ```
 
 If there are **zero** recent events, say so explicitly — that is a
@@ -185,10 +196,11 @@ counts. Extend it with:
 ### Top 3 dispatched agents (last 30 days)
 
 ```bash
-python -m claude_wayfinder health top --kind agents \
-  --dispatch-log "${DISPATCH_LOG:-$HOME/.claude/state/dispatch-log.jsonl}" \
-  --window 30d --limit 3
+python -m claude_wayfinder health top --kind agents --window 30d --limit 3
 ```
+
+The `--dispatch-log` flag is optional; the CLI reads from `$DISPATCH_LOG`
+or `~/.claude/state/dispatch-log.jsonl` by default.
 
 Flag if any one agent dominates above 60% — that may indicate the router
 is over-delegating to a single specialist, or that the user's workload is
@@ -197,9 +209,7 @@ genuinely concentrated.
 ### Top 3 most-invoked skills (last 30 days)
 
 ```bash
-python -m claude_wayfinder health top --kind skills \
-  --dispatch-log "${DISPATCH_LOG:-$HOME/.claude/state/dispatch-log.jsonl}" \
-  --window 30d --limit 3
+python -m claude_wayfinder health top --kind skills --window 30d --limit 3
 ```
 
 The top skill being `dispatch` itself is expected; if any other skill

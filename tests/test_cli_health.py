@@ -981,3 +981,369 @@ class TestHealthCatalogStatus:
         assert "skills" in data, "JSON output must contain 'skills' key."
         assert "agents" in data, "JSON output must contain 'agents' key."
         assert "routable" in data, "JSON output must contain 'routable' key."
+
+
+# ---------------------------------------------------------------------------
+# Issue #262: Default paths for --drift-log and related args
+# ---------------------------------------------------------------------------
+
+
+class TestHealthCliDefaults:
+    """Bare ``health --report`` / ``health drill`` must read from ~/.claude paths.
+
+    These tests verify Issue #262 — invoking the CLI without explicit path
+    flags no longer produces a misleading empty report.  The tests use
+    subprocess with a monkeypatched ``HOME``/``USERPROFILE`` to redirect
+    Path.home() to a controlled directory.
+    """
+
+    def _env_with_fake_home(
+        self,
+        fake_home: Path,
+        extra: dict | None = None,
+    ) -> dict:
+        """Build a subprocess env dict with HOME pointing at *fake_home*.
+
+        Clears path-override env vars so the defaults are exercised, then
+        overlays any *extra* entries.
+
+        Args:
+            fake_home: Directory to use as the fake home.
+            extra: Additional env vars to overlay (optional).
+
+        Returns:
+            A full environment dict suitable for ``subprocess.run``.
+        """
+        import os
+
+        env = {**os.environ}
+        env["HOME"] = str(fake_home)
+        env["USERPROFILE"] = str(fake_home)
+        # Clear all path-override vars so we test the pure defaults.
+        for var in (
+            "ROUTER_DRIFT_PATH",
+            "DISPATCH_LOG",
+            "ROUTER_SKILLS_DIR",
+            "ROUTER_AGENTS_DIR",
+            "ROUTER_PLUGIN_OVERRIDES_DIR",
+        ):
+            env.pop(var, None)
+        if extra:
+            env.update(extra)
+        return env
+
+    def test_bare_report_exits_zero_with_fake_home(
+        self, tmp_path: Path
+    ) -> None:
+        """``health --report`` with no path flags exits 0 using default paths.
+
+        Redirects HOME to a tmp dir that has an empty drift/dispatch log so
+        the default path resolution produces a valid (empty) report rather
+        than crashing with "required argument missing".
+
+        This is the primary regression guard for Issue #262.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory.
+        """
+        fake_home = tmp_path / "home"
+        state_dir = fake_home / ".claude" / "state"
+        state_dir.mkdir(parents=True)
+        # Write minimal log files so the defaults are resolvable.
+        (state_dir / "router-drift.jsonl").write_text("", encoding="utf-8")
+        (state_dir / "dispatch-log.jsonl").write_text("", encoding="utf-8")
+        # Create skills/agents/triggers dirs so CI invariants don't FAIL due
+        # to missing directories.
+        (fake_home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".claude" / "agents").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".claude" / "triggers").mkdir(parents=True, exist_ok=True)
+
+        env = self._env_with_fake_home(fake_home)
+        result = subprocess.run(
+            [sys.executable, "-m", "claude_wayfinder", "health", "--report"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (
+            "``health --report`` with no flags must exit 0 using default paths.\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+        assert "Router Health" in result.stdout, (
+            "Expected 'Router Health' header in bare-invocation report output."
+        )
+
+    def test_bare_report_reads_from_default_drift_log(
+        self, tmp_path: Path
+    ) -> None:
+        """``health --report`` without --drift-log reads events from the default path.
+
+        Writes bypass+dispatch events to ``$HOME/.claude/state/router-drift.jsonl``
+        and verifies the report shows non-zero bypass counts.  The broken
+        (pre-fix) behavior would show "0 bypass events / 0 total agent calls"
+        because the default path is never read.
+
+        This is the primary regression test for Issue #262.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory.
+        """
+        fake_home = tmp_path / "home"
+        state_dir = fake_home / ".claude" / "state"
+        state_dir.mkdir(parents=True)
+        # 1 bypass, 9 dispatches → bypass rate 10%.
+        (state_dir / "router-drift.jsonl").write_text(
+            json.dumps({
+                "type": "router_drift",
+                "category": "bypass",
+                "ts": _RECENT_TS,
+                "session_id": "sess-default-read",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        (state_dir / "dispatch-log.jsonl").write_text(
+            "\n".join(
+                json.dumps({
+                    "type": "agent_dispatch",
+                    "ts": _RECENT_TS,
+                    "session_id": f"sess-d{i}",
+                    "agent": "code-writer",
+                })
+                for i in range(9)
+            ) + "\n",
+            encoding="utf-8",
+        )
+        (fake_home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".claude" / "agents").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".claude" / "triggers").mkdir(parents=True, exist_ok=True)
+
+        env = self._env_with_fake_home(fake_home)
+        result = subprocess.run(
+            [sys.executable, "-m", "claude_wayfinder", "health", "--report"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (
+            f"Expected exit 0.\nstderr: {result.stderr}"
+        )
+        # With the fix, bypass count must be non-zero.
+        # The broken code shows "0 bypass events / 0 total agent calls".
+        assert "0 bypass events / 0 total agent calls" not in result.stdout, (
+            "Bypass count must reflect the event written to the default drift "
+            "log path.  '0 bypass events / 0 total agent calls' means the "
+            "default path is NOT being read (Issue #262 footgun).\n"
+            f"stdout:\n{result.stdout}"
+        )
+
+    def test_env_var_drift_path_overrides_default(
+        self, tmp_path: Path
+    ) -> None:
+        """``ROUTER_DRIFT_PATH`` overrides the home-dir default for drift log.
+
+        Writes bypass events ONLY to the env-var path; the default path is
+        left empty.  The report must show non-zero bypass count, proving
+        ``ROUTER_DRIFT_PATH`` is honored rather than the empty default.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory.
+        """
+        fake_home = tmp_path / "home"
+        state_dir = fake_home / ".claude" / "state"
+        state_dir.mkdir(parents=True)
+        # Default path deliberately empty.
+        (state_dir / "router-drift.jsonl").write_text("", encoding="utf-8")
+        (state_dir / "dispatch-log.jsonl").write_text("", encoding="utf-8")
+        (fake_home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".claude" / "agents").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".claude" / "triggers").mkdir(parents=True, exist_ok=True)
+
+        # Write 2 bypass events only at the env-var path.
+        env_drift = tmp_path / "env-router-drift.jsonl"
+        env_drift.write_text(
+            "\n".join(
+                json.dumps({
+                    "type": "router_drift",
+                    "category": "bypass",
+                    "ts": _RECENT_TS,
+                    "session_id": f"env-sess-{i}",
+                })
+                for i in range(2)
+            ) + "\n",
+            encoding="utf-8",
+        )
+
+        env = self._env_with_fake_home(
+            fake_home, extra={"ROUTER_DRIFT_PATH": str(env_drift)}
+        )
+        result = subprocess.run(
+            [sys.executable, "-m", "claude_wayfinder", "health", "--report"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (
+            f"Expected exit 0.\nstderr: {result.stderr}"
+        )
+        # Env-var path has 2 bypass events; default is empty.
+        # Non-zero count in report proves env-var is honored.
+        assert "0 bypass events / 0 total agent calls" not in result.stdout, (
+            "Bypass count must be non-zero when ROUTER_DRIFT_PATH contains "
+            "events and default path is empty.\n"
+            f"stdout:\n{result.stdout}"
+        )
+
+    def test_explicit_flag_overrides_env_and_default_for_drift_log(
+        self, tmp_path: Path
+    ) -> None:
+        """Explicit ``--drift-log`` flag wins over ``ROUTER_DRIFT_PATH`` and default.
+
+        An explicit flag pointing at an EMPTY log must produce a zero-bypass
+        report even when the env var and default locations have events.
+
+        Precedence: explicit flag > env var > ~/.claude default.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory.
+        """
+        fake_home = tmp_path / "home"
+        state_dir = fake_home / ".claude" / "state"
+        state_dir.mkdir(parents=True)
+
+        bypass_line = json.dumps({
+            "type": "router_drift",
+            "category": "bypass",
+            "ts": "2026-05-20T12:00:00+00:00",
+            "session_id": "sess-should-be-ignored",
+        }) + "\n"
+
+        # Poison both default and env-var locations with events.
+        (state_dir / "router-drift.jsonl").write_text(
+            bypass_line, encoding="utf-8"
+        )
+        env_drift = tmp_path / "env-drift.jsonl"
+        env_drift.write_text(bypass_line, encoding="utf-8")
+
+        # Empty explicit log.
+        explicit_log = tmp_path / "explicit-empty.jsonl"
+        explicit_log.write_text("", encoding="utf-8")
+
+        (state_dir / "dispatch-log.jsonl").write_text("", encoding="utf-8")
+        skills_dir = fake_home / ".claude" / "skills"
+        agents_dir = fake_home / ".claude" / "agents"
+        triggers_dir = fake_home / ".claude" / "triggers"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        triggers_dir.mkdir(parents=True, exist_ok=True)
+
+        env = self._env_with_fake_home(
+            fake_home, extra={"ROUTER_DRIFT_PATH": str(env_drift)}
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_wayfinder",
+                "health",
+                "--report",
+                "--drift-log",
+                str(explicit_log),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (
+            f"Explicit --drift-log should still work.\n"
+            f"stderr: {result.stderr}"
+        )
+
+    def test_missing_default_drift_log_treated_as_empty(
+        self, tmp_path: Path
+    ) -> None:
+        """Missing default drift log is treated as empty, not an error.
+
+        When the default path does not exist on disk, the CLI must exit 0
+        with a valid empty-telemetry report.  This confirms ``load_jsonl``'s
+        "missing = empty" contract holds through the default-path code path.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory.
+        """
+        fake_home = tmp_path / "home_no_logs"
+        fake_home.mkdir()
+        # No state dir — no logs exist at all.
+        (fake_home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".claude" / "agents").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".claude" / "triggers").mkdir(parents=True, exist_ok=True)
+
+        env = self._env_with_fake_home(fake_home)
+        result = subprocess.run(
+            [sys.executable, "-m", "claude_wayfinder", "health", "--report"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (
+            "Missing default drift log must not raise — exit 0 expected.\n"
+            f"stderr: {result.stderr}"
+        )
+        assert "Router Health" in result.stdout, (
+            "Report header must appear even when log files are absent at the "
+            "default path."
+        )
+
+    def test_drill_bare_invocation_uses_default_drift_log(
+        self, tmp_path: Path
+    ) -> None:
+        """``health drill --metric bypass`` without --drift-log uses default path.
+
+        Writes a bypass event to the default drift log location and runs the
+        drill subcommand without an explicit --drift-log flag.  The output
+        must reflect the event (non-zero total), proving the default path
+        is resolved inside ``_drill.py`` as well as ``__init__.py``.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory.
+        """
+        fake_home = tmp_path / "home"
+        state_dir = fake_home / ".claude" / "state"
+        state_dir.mkdir(parents=True)
+        (state_dir / "router-drift.jsonl").write_text(
+            json.dumps({
+                "type": "router_drift",
+                "category": "bypass",
+                "ts": _RECENT_TS,
+                "session_id": "drill-default-sess",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        env = self._env_with_fake_home(fake_home)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_wayfinder",
+                "health",
+                "drill",
+                "--metric",
+                "bypass",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (
+            "health drill --metric bypass must exit 0 using default drift log path.\n"
+            f"stderr: {result.stderr}\nstdout: {result.stdout}"
+        )
+        # Drill output for bypass with 1 event must report Total bypass events: 1.
+        # The broken code (no default path) would show 0.
+        assert "Total bypass events: 0" not in result.stdout, (
+            "Drill must report non-zero bypass events when default drift log "
+            "contains an event.  'Total bypass events: 0' means the default "
+            "path is NOT being read in _drill.py (Issue #262).\n"
+            f"stdout:\n{result.stdout}"
+        )

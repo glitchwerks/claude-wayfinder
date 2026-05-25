@@ -151,15 +151,108 @@ from claude_wayfinder._health._report import (
 # ---------------------------------------------------------------------------
 
 
+def _default_drift_log() -> Path:
+    """Return the default drift-log path, resolved at call time.
+
+    Precedence (matches ``scripts/analyze-drift-causes.py``):
+      1. ``ROUTER_DRIFT_PATH`` env var.
+      2. ``~/.claude/state/router-drift.jsonl`` via ``Path.home()``.
+
+    Resolved at call time (not import time) so that test monkeypatching of
+    environment variables and ``Path.home()`` takes effect.
+
+    Returns:
+        Path to the drift log file.
+    """
+    import os
+
+    env = os.environ.get("ROUTER_DRIFT_PATH")
+    if env:
+        return Path(env)
+    return Path.home() / ".claude" / "state" / "router-drift.jsonl"
+
+
+def _default_dispatch_log() -> Path:
+    """Return the default dispatch-log path, resolved at call time.
+
+    Precedence:
+      1. ``DISPATCH_LOG`` env var.
+      2. ``~/.claude/state/dispatch-log.jsonl`` via ``Path.home()``.
+
+    Returns:
+        Path to the dispatch log file.
+    """
+    import os
+
+    env = os.environ.get("DISPATCH_LOG")
+    if env:
+        return Path(env)
+    return Path.home() / ".claude" / "state" / "dispatch-log.jsonl"
+
+
+def _default_skills_dir() -> Path:
+    """Return the default skills directory path, resolved at call time.
+
+    Precedence:
+      1. ``ROUTER_SKILLS_DIR`` env var.
+      2. ``~/.claude/skills`` via ``Path.home()``.
+
+    Returns:
+        Path to the skills directory.
+    """
+    import os
+
+    env = os.environ.get("ROUTER_SKILLS_DIR")
+    if env:
+        return Path(env)
+    return Path.home() / ".claude" / "skills"
+
+
+def _default_agents_dir() -> Path:
+    """Return the default agents directory path, resolved at call time.
+
+    Precedence:
+      1. ``ROUTER_AGENTS_DIR`` env var.
+      2. ``~/.claude/agents`` via ``Path.home()``.
+
+    Returns:
+        Path to the agents directory.
+    """
+    import os
+
+    env = os.environ.get("ROUTER_AGENTS_DIR")
+    if env:
+        return Path(env)
+    return Path.home() / ".claude" / "agents"
+
+
+def _default_plugin_overrides_dir() -> Path:
+    """Return the default plugin-overrides directory path, resolved at call time.
+
+    Precedence:
+      1. ``ROUTER_PLUGIN_OVERRIDES_DIR`` env var.
+      2. ``~/.claude/triggers`` via ``Path.home()``.
+
+    Returns:
+        Path to the plugin-overrides directory.
+    """
+    import os
+
+    env = os.environ.get("ROUTER_PLUGIN_OVERRIDES_DIR")
+    if env:
+        return Path(env)
+    return Path.home() / ".claude" / "triggers"
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
-    All directory and file paths previously defaulting to ``~/.claude/...``
-    now require explicit values (Issue #10).  The ``~/.claude/`` default
-    has been removed; callers must pass ``--catalog-path``, ``--drift-log``,
-    ``--dispatch-log``, ``--skills-dir``, ``--agents-dir``, and
-    ``--plugin-overrides-dir`` explicitly, or set ``DISPATCH_CATALOG_PATH``
-    for the catalog.
+    Each path argument now defaults to an env-var override or the standard
+    ``~/.claude/...`` location when the flag is omitted (Issue #262).
+    Defaults are resolved at call time via helper functions so that test
+    monkeypatching of ``HOME``/``USERPROFILE`` takes effect.
+
+    Explicit flags always win over env vars, which win over home-dir defaults.
 
     Args:
         argv: Argument list.  Defaults to sys.argv[1:].
@@ -221,8 +314,10 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=(
-            "Path to router-drift.jsonl.  Telemetry section is empty "
-            "when omitted and the file does not exist."
+            "Path to router-drift.jsonl.  Defaults to "
+            "$ROUTER_DRIFT_PATH env var, then "
+            "~/.claude/state/router-drift.jsonl.  "
+            "Missing files are treated as empty."
         ),
     )
     parser.add_argument(
@@ -230,44 +325,67 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=(
-            "Path to dispatch-log.jsonl.  Telemetry section is empty "
-            "when omitted and the file does not exist."
+            "Path to dispatch-log.jsonl.  Defaults to "
+            "$DISPATCH_LOG env var, then "
+            "~/.claude/state/dispatch-log.jsonl.  "
+            "Missing files are treated as empty."
         ),
     )
     parser.add_argument(
         "--skills-dir",
         type=Path,
         default=None,
-        help="Skills directory for CI invariant checks.",
+        help=(
+            "Skills directory for CI invariant checks.  Defaults to "
+            "$ROUTER_SKILLS_DIR env var, then ~/.claude/skills."
+        ),
     )
     parser.add_argument(
         "--agents-dir",
         type=Path,
         default=None,
-        help="Agents directory for CI invariant checks.",
+        help=(
+            "Agents directory for CI invariant checks.  Defaults to "
+            "$ROUTER_AGENTS_DIR env var, then ~/.claude/agents."
+        ),
     )
     parser.add_argument(
         "--plugin-overrides-dir",
         type=Path,
         default=None,
-        help="Plugin overrides directory for CI invariant checks.",
+        help=(
+            "Plugin overrides directory for CI invariant checks.  Defaults to "
+            "$ROUTER_PLUGIN_OVERRIDES_DIR env var, then ~/.claude/triggers."
+        ),
     )
 
     args = parser.parse_args(argv)
 
-    # Log files: treat absent paths the same as empty files.
-    _empty: list[dict[str, Any]] = []
-    dispatch_log = (
-        load_jsonl(args.dispatch_log) if args.dispatch_log is not None else _empty
+    # Resolve paths: explicit flag > env var > home-dir default (Issue #262).
+    # load_jsonl treats missing files as empty — no exception raised.
+    drift_log_path = args.drift_log if args.drift_log is not None else _default_drift_log()
+    dispatch_log_path = (
+        args.dispatch_log if args.dispatch_log is not None else _default_dispatch_log()
     )
-    drift_log = (
-        load_jsonl(args.drift_log) if args.drift_log is not None else _empty
+    skills_dir = (
+        args.skills_dir if args.skills_dir is not None else _default_skills_dir()
+    )
+    agents_dir = (
+        args.agents_dir if args.agents_dir is not None else _default_agents_dir()
+    )
+    plugin_overrides_dir = (
+        args.plugin_overrides_dir
+        if args.plugin_overrides_dir is not None
+        else _default_plugin_overrides_dir()
     )
 
+    dispatch_log = load_jsonl(dispatch_log_path)
+    drift_log = load_jsonl(drift_log_path)
+
     invariants = check_ci_invariants(
-        skills_dir=args.skills_dir,
-        agents_dir=args.agents_dir,
-        plugin_overrides_dir=args.plugin_overrides_dir,
+        skills_dir=skills_dir,
+        agents_dir=agents_dir,
+        plugin_overrides_dir=plugin_overrides_dir,
     )
 
     if args.ci:
