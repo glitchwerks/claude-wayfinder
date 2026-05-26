@@ -6,6 +6,75 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-26
+
+Minor release adding the `dispatch --batch` CLI surface for downstream
+replay harnesses, fixing two operator footguns in `/router-health`, and
+correcting two schema documents that had drifted out of sync with the
+runtime. Documentation underwent a large consumer-leakage and docs audit
+pass; bulk plan-file lifecycle cleanup removed superseded design
+artifacts (the durable design decisions remain in specs and CHANGELOGs).
+
+### Added
+
+- **`dispatch --batch` flag** (#241). Reads NDJSON dispatch contexts from
+  stdin (one per line), writes NDJSON decisions to stdout in input order
+  with a leading `input_index` field for ordering safety. Catalog is
+  resolved exactly once per invocation; blank lines are skipped and
+  malformed lines produce per-line error records without crashing the
+  batch. Exit 0 on success/partial-success, non-zero on hard errors
+  (missing catalog, malformed CLI args). Documented under `--help` and
+  in the README. Gives downstream consumers (e.g.
+  `claude-configs#703`) a stable batch surface so they no longer have
+  to subprocess single-mode N times, import the internal Python API, or
+  build on `scripts/replay_mixed_content.py`.
+
+### Fixed
+
+- **`health --report` defaults to `~/.claude/...` paths** (#262). The CLI
+  now defaults `--drift-log`/`--dispatch-log`/`--skills-dir`/`--agents-dir`/
+  `--plugin-overrides-dir` to the canonical locations under `~/.claude/`
+  with env-var override (`ROUTER_DRIFT_PATH`, `DISPATCH_LOG`, etc.). Aligns
+  the CLI with the sibling `scripts/analyze-drift-causes.py` so bare
+  invocations produce consistent output. Previously, bare
+  `claude-wayfinder health --report` silently reported "0 enriched events"
+  while the sibling script reported 468 — an operator footgun, not a real
+  source-of-truth mismatch.
+- **Decision enum sync** (#218, #230, #231). Dropped the stale `ambiguous`
+  decision from `schema.md` and `docs/integration.md`; the schema and
+  integration docs now reflect the current 7-member set. Affects any
+  downstream consumer reading the published schema to validate matcher
+  output.
+- **Keyword scoring coefficient corrected to 0.5** in `docs/schema.md`
+  (#219, #225). Documentation had drifted from the runtime constant.
+
+### Documentation
+
+- Large consumer-leakage audit (#234, #235) plus follow-ups (#236-#250)
+  tightening prereqs, jargon, ordering, and quick-start framing across
+  `README.md`, `docs/api.md`, `docs/dispatch-authoring-guide.md`,
+  `docs/dispatch-discipline.md`, `docs/integration.md`, `docs/schema.md`,
+  `docs/design/trigger-schema.md`, and the `router-health` SKILL.
+- `docs/release-process.md` relocated to `docs/maintenance/` (#238, #242).
+- Dispatch-overrides spec relocated from `docs/superpowers/specs/` to
+  `docs/dispatch-overrides.md`; README now explains overrides directly
+  (#246, #254).
+- Methodology lessons extracted to `docs/design/methodology-lessons.md`
+  (#222, #233); sidecar conventions extracted to `docs/schema.md` and
+  `docs/design/trigger-schema.md` (#221, #232).
+- Closure specs added for #138 (mixed-content disambiguation, #264) and
+  #57 (hook opt-in spike — premise invalidated by `/router-health` data
+  dependency, #266). Both retained at `docs/superpowers/specs/` as
+  durable design evidence.
+- Bulk plan-file lifecycle cleanup: deleted shipped plan sets for #143
+  and #213 (#224, #229), and the superseded v0.4 bundled-venv plan set
+  (#223, #227).
+
+### Chore
+
+- Bumped `@anthropic-ai/claude-code` to 2.1.150 (#259).
+- Bumped `softprops/action-gh-release` to v3 (#261).
+
 ## [0.11.0] — 2026-05-24
 
 Minor release adding a **deterministic override mechanism** to the dispatch
