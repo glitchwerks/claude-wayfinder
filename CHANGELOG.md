@@ -6,6 +6,36 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-05-26
+
+Patch release shipping two operator-ergonomics fixes for the
+`/setup-wayfinder` and `/dispatch` skills. No schema, catalog, or
+matcher-behavior changes.
+
+### Fixed
+
+- **`/setup-wayfinder` failed when `setup-state.json` content was
+  interpreted as a shell argument** (#279, PR #280). Step 1's bash
+  command now writes the JSON via a heredoc instead of an inline
+  string literal, removing the quoting hazard that broke the venv
+  rebuild path on some shells.
+- **`/dispatch` skill body did not document the canonical catalog
+  path, and the `[CATALOG ERROR]` banner was misleading when the env
+  var pointed at a non-existent location** (#281, PR #282).
+  - `skills/dispatch/SKILL.md` now states the canonical catalog
+    location (`~/.claude/state/dispatch-catalog.json`) directly so
+    router agents do not have to guess.
+  - The `[CATALOG ERROR]` banner emitted by the matcher
+    (`src/claude_wayfinder/match/_catalog.py:_emit_catalog_error`)
+    now appends the canonical default path and a repair hint
+    (`/refresh-catalog`, or send any prompt to trigger
+    `refresh-catalog-on-stale.js`). Every catalog-error call site
+    benefits without threading a flag through.
+  - New test `test_catalog_error_message_names_canonical_default`
+    in `tests/test_match/test_catalog.py` locks in the canonical-path
+    substring assertion. Existing `_resolve_catalog_path` fail-loud
+    behavior (Issue #10) is preserved.
+
 ## [0.12.1] - 2026-05-26
 
 Patch release shipping a docs consistency sweep across the canonical
