@@ -222,6 +222,11 @@ The full CLI surface is documented via `python -m claude_wayfinder --help`. Key 
     ```
 - `catalog build` — scan skill sidecars and agent frontmatter and write a `dispatch-catalog.json`.
 - `audit-catalog` — catalog-wide static analysis (conflict pairs, structural checks, matcher-aware semantic rules). See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
+- `health` — router health report and observability drill-downs. Key subcommands (see [`skills/router-health/SKILL.md`](skills/router-health/SKILL.md) for the full playbook):
+  - `health --report` — print a full health summary covering dispatch invocation rate, bypass rate, advisory override rate, catalog availability, and catalog stability.
+  - `health drill --metric <name> --window <period>` — drill into a specific metric (e.g. `bypass`, `advisory-override`, `recent-drift`) to surface event distributions and top-offending sessions.
+  - `health top --kind <agents|skills> --window <period> --limit <n>` — list the most-dispatched agents or most-invoked skills over a time window.
+  - `health catalog-status` — report catalog entry counts (agents, skills, routable agents) and flag unexpected zeros.
 
 ## Bundled skills
 
