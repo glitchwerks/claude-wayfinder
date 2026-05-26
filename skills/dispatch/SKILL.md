@@ -46,14 +46,8 @@ to the matcher, and returns the matcher's decision JSON verbatim.
 is missing, unreadable, or contains invalid JSON, the skill emits a
 `[CATALOG ERROR]` banner on stderr and exits non-zero.  It does **not**
 fall back to demo mode — a broken catalog is surfaced immediately so the
-consumer knows routing is degraded.
-
-**If the `[CATALOG ERROR]` reports "file not found":** the most common
-cause is that `DISPATCH_CATALOG_PATH` was set to a path that doesn't
-exist (the canonical location is `~/.claude/state/dispatch-catalog.json`
-— see the next section). If the canonical path also doesn't exist, the
-catalog hasn't been built yet; running `/refresh-catalog` (or sending any
-prompt, which triggers `refresh-catalog-on-stale.js`) will rebuild it.
+consumer knows routing is degraded. The banner names the canonical
+default path and the repair hint inline.
 
 ## Dispatch context JSON (real-catalog mode)
 
@@ -139,21 +133,10 @@ matching plugin version into it.
 
 The live catalog is at **`~/.claude/state/dispatch-catalog.json`** (or
 `$CLAUDE_HOME/state/dispatch-catalog.json` when `$CLAUDE_HOME` is set).
-Router agents should set `DISPATCH_CATALOG_PATH` to that path unless they
-have a specific reason to override (e.g. a test fixture).
-
-The catalog lives outside `${CLAUDE_PLUGIN_DATA}` because it aggregates
-routing metadata from **all** installed plugins + the user-global
-`~/.claude/skills/` + the project-local `<repo>/.claude/skills/` —
-claude-wayfinder consumes those definitions, it doesn't own them. Storing
-the merged artifact in any single plugin's data dir would misrepresent
-ownership and disappear on plugin reinstall. See issue #281 for the full
-design rationale.
-
-The hooks shipped with this plugin (`refresh-catalog-on-stale.js`,
-`check-catalog-health.js`) already use this canonical path as their
-default — router agents that pass it through to the matcher will see the
-same file the hooks read and write.
+Set `DISPATCH_CATALOG_PATH` to that path unless you have a specific
+reason to override (e.g. a test fixture). The bundled hooks
+(`refresh-catalog-on-stale.js`, `check-catalog-health.js`) use the same
+default.
 
 ## Running
 
