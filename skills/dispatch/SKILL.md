@@ -48,6 +48,13 @@ is missing, unreadable, or contains invalid JSON, the skill emits a
 fall back to demo mode — a broken catalog is surfaced immediately so the
 consumer knows routing is degraded.
 
+**If the `[CATALOG ERROR]` reports "file not found":** the most common
+cause is that `DISPATCH_CATALOG_PATH` was set to a path that doesn't
+exist (the canonical location is `~/.claude/state/dispatch-catalog.json`
+— see the next section). If the canonical path also doesn't exist, the
+catalog hasn't been built yet; running `/refresh-catalog` (or sending any
+prompt, which triggers `refresh-catalog-on-stale.js`) will rebuild it.
+
 ## Dispatch context JSON (real-catalog mode)
 
 The consumer's router agent must compose a 5-field JSON object and pass
@@ -128,6 +135,26 @@ If `claude-wayfinder` is not installed yet, run `/setup-wayfinder` — that
 skill materializes the venv at the canonical location and pins the
 matching plugin version into it.
 
+## Canonical catalog path
+
+The live catalog is at **`~/.claude/state/dispatch-catalog.json`** (or
+`$CLAUDE_HOME/state/dispatch-catalog.json` when `$CLAUDE_HOME` is set).
+Router agents should set `DISPATCH_CATALOG_PATH` to that path unless they
+have a specific reason to override (e.g. a test fixture).
+
+The catalog lives outside `${CLAUDE_PLUGIN_DATA}` because it aggregates
+routing metadata from **all** installed plugins + the user-global
+`~/.claude/skills/` + the project-local `<repo>/.claude/skills/` —
+claude-wayfinder consumes those definitions, it doesn't own them. Storing
+the merged artifact in any single plugin's data dir would misrepresent
+ownership and disappear on plugin reinstall. See issue #281 for the full
+design rationale.
+
+The hooks shipped with this plugin (`refresh-catalog-on-stale.js`,
+`check-catalog-health.js`) already use this canonical path as their
+default — router agents that pass it through to the matcher will see the
+same file the hooks read and write.
+
 ## Running
 
 ```bash
@@ -137,8 +164,9 @@ PY="${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe"   # Windows
 # Demo mode (no catalog configured)
 "$PY" -m claude_wayfinder dispatch
 
-# Real-catalog mode
-export DISPATCH_CATALOG_PATH=/path/to/dispatch-catalog.json
+# Real-catalog mode — use the canonical catalog path above
+export DISPATCH_CATALOG_PATH="$HOME/.claude/state/dispatch-catalog.json"   # POSIX
+# $env:DISPATCH_CATALOG_PATH = "$env:USERPROFILE\.claude\state\dispatch-catalog.json"  # PowerShell
 echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
   | "$PY" -m claude_wayfinder dispatch
 ```
