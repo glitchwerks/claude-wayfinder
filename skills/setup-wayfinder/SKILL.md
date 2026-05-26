@@ -131,15 +131,34 @@ If this fails after a successful `pip install`, the wheel is corrupt:
 
 ## Step 7: Write the setup-state flag
 
-Create `$PLUGIN_DATA/setup-state.json` with exact shape:
+Always-wipe contract: the Write tool's read-before-overwrite invariant is hostile on re-setup, where the prior file exists but its contents are about to be discarded — use a shell heredoc instead.
 
-```json
+**Bash (Git Bash on Windows or POSIX):**
+
+```bash
+TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+cat > "$PLUGIN_DATA/setup-state.json" <<EOF
 {
-  "version": "<PLUGIN_VERSION>",
-  "venv_path": "<absolute path to $PLUGIN_DATA/venv>",
-  "interpreter": "<the candidate from Step 2 that worked>",
-  "installed_at": "<ISO-8601 UTC timestamp>"
+  "version": "$PLUGIN_VERSION",
+  "venv_path": "$PLUGIN_DATA/venv",
+  "interpreter": "$PYTHON",
+  "installed_at": "$TS"
 }
+EOF
+```
+
+**PowerShell:**
+
+```powershell
+$ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+@"
+{
+  "version": "$PluginVersion",
+  "venv_path": "$PluginData/venv",
+  "interpreter": "$Python",
+  "installed_at": "$ts"
+}
+"@ | Set-Content -Path "$PluginData/setup-state.json" -NoNewline
 ```
 
 If the write fails (disk full, permission), wipe the venv (otherwise orphaned), surface the write error.

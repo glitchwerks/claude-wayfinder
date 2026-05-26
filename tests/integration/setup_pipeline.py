@@ -263,9 +263,12 @@ def write_flag(
 ) -> Path:
     """Step 7: Write the setup-state.json flag file.
 
-    Creates ``$PLUGIN_DATA/setup-state.json`` with the canonical shape
-    required by hooks. The parent directory is created if it does not
-    exist.
+    Unconditionally overwrites ``$PLUGIN_DATA/setup-state.json`` with
+    the canonical shape required by hooks. The always-wipe contract
+    (spec § 2 D4) means the prior file's contents are irrelevant — this
+    mirrors the shell heredoc in the skill body, which uses ``cat >``
+    (Bash) or ``Set-Content`` (PowerShell) to overwrite without reading.
+    The parent directory is created if it does not exist.
 
     Args:
         plugin_data_dir: Plugin data directory as returned by
