@@ -80,7 +80,11 @@ The dispatcher reads a JSON object from stdin. This is the input shape the route
 | `tool_mentions` | `array[string]` | no | Tool names the user explicitly named (e.g. `"Bash"`, `"Grep"`). Matched against `triggers.tool_mentions`. Defaults to `[]` when absent. |
 | `command_prefix` | `string\|null` | no | The slash command the user typed, if any. E.g. `"/refactor"`. `null` or absent when no slash command was used. |
 
-**Minimum viable context:** the matcher requires at least 2 populated input dimensions before attempting to route. If fewer than 2 dimensions are populated, the matcher returns `needs_more_detail` regardless of catalog content. A `task_description` with at least one keyword counts as one dimension; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each count as one additional dimension when non-empty. For a conceptual explanation with good/sparse examples, see the [What is a dispatch context?](../README.md#what-is-a-dispatch-context) section in the README.
+**Minimum viable context:** the matcher requires at least 2 populated input dimensions before attempting to route. If fewer than 2 dimensions are populated, the matcher returns `needs_more_detail` regardless of catalog content. A `task_description` with at least one keyword counts as one dimension; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each count as one additional dimension when non-empty.
+
+**`extensions` — internally derived dimension.** When `file_paths` is non-empty, the matcher also derives an `extensions` dimension by extracting the file-extension suffix of each path (e.g. `"src/foo.py"` → `"py"`). This dimension is counted separately by `feature_count` — so a context with only `task_description` and `file_paths` yields `feature_count = 3` (keywords + paths + extensions), not 2. The `extensions` dimension is not a caller-supplied field; it is computed internally from `file_paths` and is transparent to callers composing context objects. It affects whether the density floor is cleared and contributes to per-entry scoring via the scoring formula in §4.
+
+For a conceptual explanation with good/sparse examples, see the [What is a dispatch context?](../README.md#what-is-a-dispatch-context) section in the README.
 
 Example:
 
