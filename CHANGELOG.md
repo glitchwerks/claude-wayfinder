@@ -6,6 +6,63 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-26
+
+Patch release shipping a docs consistency sweep across the canonical
+schema, authoring, and matcher-decision surfaces. No code, schema, or
+behavior changes — `dispatch/SKILL.md` and `dispatch-authoring/SKILL.md`
+ship in the plugin distribution and were updated to remove the stale
+`ambiguous` decision (removed in v0.9.0), add the `mixed_content`
+decision (added in v0.10.0), and correct decision-count verbiage from
+"6" to "7". Several canonical index/reference tables that had silently
+lagged behind shipped fields are now in sync with the runtime.
+
+### Fixed
+
+- **`docs/design/trigger-schema.md § 2d` field-reference table** (#268,
+  PR #269). Added the missing `keyword_groups` row. The field has been
+  shipped since v0.6.0 but the canonical field-enumeration table omitted
+  it, so authors scanning § 2d would conclude the field doesn't exist.
+- **Decision-ladder drift across canonical docs surfaces** (#270). The
+  `ambiguous` decision was removed in v0.9.0 and `mixed_content` was
+  added in v0.10.0, but multiple canonical docs still described the old
+  ladder. Sweep updates:
+  - `docs/schema.md` §3 "Decision types": `mixed_content` documented
+    with `lanes[]` / `unassigned_paths[]` output fields.
+  - `docs/schema.md` §4 decision-ladder table and pseudocode: now
+    reflect the current 6-active-branch ladder including step 3.5.
+  - `skills/dispatch-authoring/SKILL.md` §2: `ambiguous` removed,
+    `mixed_content` inserted at the correct step (between `self_handle`
+    and `advisory`); §5 footguns `ambiguous` references replaced with
+    `advisory` outcome for conflict pairs.
+  - `skills/dispatch/SKILL.md` frontmatter description and section
+    heading updated from "6-decision matcher" → "7-decision matcher";
+    decision-branch table extended with the `mixed_content` row.
+- **`applicable_agents_intentional` undocumented in canonical index
+  tables** (#271). Added rows in `docs/schema.md` §1 catalog-entry
+  schema table and `docs/design/trigger-schema.md` §2d field-reference
+  table. Field has been shipped since v0.8.0 but only the long-form
+  authoring guide documented it.
+- **`disposition_source` missing from `docs/schema.md` §3 common-fields
+  table** (#272). Added the row enumerating the two valid values
+  (`"scored"`, `"override"`) and cross-referencing
+  `docs/dispatch-overrides.md`. CHANGELOG for v0.11.0 had committed to
+  the field always being present; downstream consumers reading the
+  output schema would have missed it entirely.
+- **`extensions` dimension counted by `feature_count` but undocumented
+  in the dispatch-context schema** (#273). Updated `docs/schema.md` §2
+  and §4 plus `README.md` to acknowledge that `file_paths` internally
+  derives an `extensions` dimension counted separately from `paths`.
+  Affects the ≥ 2 density-floor edge cases; behavior unchanged.
+- **`keyword_groups` paragraph missing from the long-form authoring
+  guide** (#274). Added to `docs/dispatch-authoring-guide.md`
+  schema-reference section, adjacent to `keywords`, with cross-reference
+  to the worked example in `trigger-schema.md` §9.10.
+- **`health` CLI subcommand family missing from the README CLI
+  subcommands list** (#275). Added entries for `health --report`,
+  `health drill`, `health top`, `health catalog-status` with
+  cross-reference to `skills/router-health/SKILL.md`.
+
 ## [0.12.0] - 2026-05-26
 
 Minor release adding the `dispatch --batch` CLI surface for downstream
