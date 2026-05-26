@@ -286,6 +286,35 @@ class TestIssue10FailLoudCatalogPath:
             f"DISPATCH_CATALOG_PATH); got: {result.stderr!r}"
         )
 
+    def test_catalog_error_message_names_canonical_default(
+        self, tmp_path: Path
+    ) -> None:
+        """[CATALOG ERROR] message names the canonical default catalog path.
+
+        The error text must mention the canonical default path
+        ``~/.claude/state/dispatch-catalog.json`` so a router agent
+        that fabricated a bad path can self-correct without a
+        deletion misdiagnosis (Issue #281).
+        """
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"DISPATCH_CATALOG_PATH", "CLAUDE_HOME"}
+        }
+        result = subprocess.run(
+            [PYTHON, "-m", *_MATCH_MODULE],
+            input=json.dumps({"task_description": "implement a feature"}),
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            check=False,
+        )
+        assert ".claude/state/dispatch-catalog.json" in result.stderr, (
+            "Error message must name the canonical default path "
+            "(.claude/state/dispatch-catalog.json); "
+            f"got: {result.stderr!r}"
+        )
+
     def test_claude_home_env_var_is_ignored(self, tmp_path: Path) -> None:
         """CLAUDE_HOME env var no longer redirects catalog resolution.
 

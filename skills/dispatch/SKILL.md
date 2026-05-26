@@ -46,7 +46,8 @@ to the matcher, and returns the matcher's decision JSON verbatim.
 is missing, unreadable, or contains invalid JSON, the skill emits a
 `[CATALOG ERROR]` banner on stderr and exits non-zero.  It does **not**
 fall back to demo mode — a broken catalog is surfaced immediately so the
-consumer knows routing is degraded.
+consumer knows routing is degraded. The banner names the canonical
+default path and the repair hint inline.
 
 ## Dispatch context JSON (real-catalog mode)
 
@@ -128,6 +129,15 @@ If `claude-wayfinder` is not installed yet, run `/setup-wayfinder` — that
 skill materializes the venv at the canonical location and pins the
 matching plugin version into it.
 
+## Canonical catalog path
+
+The live catalog is at **`~/.claude/state/dispatch-catalog.json`** (or
+`$CLAUDE_HOME/state/dispatch-catalog.json` when `$CLAUDE_HOME` is set).
+Set `DISPATCH_CATALOG_PATH` to that path unless you have a specific
+reason to override (e.g. a test fixture). The bundled hooks
+(`refresh-catalog-on-stale.js`, `check-catalog-health.js`) use the same
+default.
+
 ## Running
 
 ```bash
@@ -137,8 +147,9 @@ PY="${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe"   # Windows
 # Demo mode (no catalog configured)
 "$PY" -m claude_wayfinder dispatch
 
-# Real-catalog mode
-export DISPATCH_CATALOG_PATH=/path/to/dispatch-catalog.json
+# Real-catalog mode — use the canonical catalog path above
+export DISPATCH_CATALOG_PATH="$HOME/.claude/state/dispatch-catalog.json"   # POSIX
+# $env:DISPATCH_CATALOG_PATH = "$env:USERPROFILE\.claude\state\dispatch-catalog.json"  # PowerShell
 echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
   | "$PY" -m claude_wayfinder dispatch
 ```
