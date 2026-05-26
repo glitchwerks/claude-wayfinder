@@ -70,7 +70,7 @@ Before using either path, it helps to understand what the matcher actually reads
 | `tool_mentions` | array of strings | Tool names the user explicitly named (e.g. `"Bash"`, `"Grep"`). |
 | `command_prefix` | string or null | The slash command the user typed, if any (e.g. `"/refactor"`). |
 
-**The ≥ 2 dimensions rule.** The matcher counts how many of these fields are populated — each non-empty field is one "input dimension". If fewer than 2 dimensions are populated, the matcher returns `needs_more_detail` without attempting to score any catalog entries. This is not an error; it means the context is too sparse to route reliably. A `task_description` with at least one keyword counts as one dimension; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each add one dimension when non-empty.
+**The ≥ 2 dimensions rule.** The matcher counts how many of these fields are populated — each non-empty field is one "input dimension". If fewer than 2 dimensions are populated, the matcher returns `needs_more_detail` without attempting to score any catalog entries. This is not an error; it means the context is too sparse to route reliably. A `task_description` with at least one keyword counts as one dimension; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each add one dimension when non-empty. In addition, when `file_paths` is non-empty the matcher internally derives an `extensions` dimension (file-suffix set from the provided paths) that counts as a separate populated dimension — so a context with only `task_description` and `file_paths` yields three dimensions (keywords + paths + extensions), not two. See `docs/schema.md §2` for details.
 
 **Good context** (2 dimensions — `task_description` + `file_paths`):
 
@@ -222,6 +222,11 @@ The full CLI surface is documented via `python -m claude_wayfinder --help`. Key 
     ```
 - `catalog build` — scan skill sidecars and agent frontmatter and write a `dispatch-catalog.json`.
 - `audit-catalog` — catalog-wide static analysis (conflict pairs, structural checks, matcher-aware semantic rules). See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
+- `health` — router health report and observability drill-downs. Key subcommands (see [`skills/router-health/SKILL.md`](skills/router-health/SKILL.md) for the full playbook):
+  - `health --report` — print a full health summary covering dispatch invocation rate, bypass rate, advisory override rate, catalog availability, and catalog stability.
+  - `health drill --metric <name> --window <period>` — drill into a specific metric (e.g. `bypass`, `advisory-override`, `recent-drift`) to surface event distributions and top-offending sessions.
+  - `health top --kind <agents|skills> --window <period> --limit <n>` — list the most-dispatched agents or most-invoked skills over a time window.
+  - `health catalog-status` — report catalog entry counts (agents, skills, routable agents) and flag unexpected zeros.
 
 ## Bundled skills
 

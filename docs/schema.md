@@ -36,6 +36,7 @@ Each object in the `entries` array of `dispatch-catalog.json` represents one age
 | `source` | `string` | yes | `"owned"` | Provenance tag. See source values table below. |
 | `triggers` | `object` | yes | empty trigger object | Trigger configuration. See [trigger-schema.md](design/trigger-schema.md) for the full field reference. |
 | `applicable_agents` | `array[string]` | skills only | `[]` | Hard allowlist of agent names that may receive this skill. `["*"]` = any agent. `[]` = no agent (skill is router-only or dormant). Present on skill entries; absent on agent entries. |
+| `applicable_agents_intentional` | `string` | skills only; optional | absent | Rationale string that suppresses the `empty-applicable-agents` audit NIT when `applicable_agents` is intentionally `[]`. Must be a non-empty string; an empty string does not suppress the NIT. See `docs/dispatch-authoring-guide.md:327–332` for a worked example. |
 | `applicable_skills` | `array[string]` | agents only | `[]` | Hard allowlist of skill names to attach when routing to this agent. `["*"]` = any. `[]` = no skills. Present on agent entries; absent on skill entries. |
 | `routable` | `boolean` | agents only; optional | `true` | When `false`, the entry is excluded from the scored-agent pool at dispatch time. Set to `false` on the router agent itself so it is never selected as a delegation target. Absent on skill entries. |
 
@@ -79,7 +80,11 @@ The dispatcher reads a JSON object from stdin. This is the input shape the route
 | `tool_mentions` | `array[string]` | no | Tool names the user explicitly named (e.g. `"Bash"`, `"Grep"`). Matched against `triggers.tool_mentions`. Defaults to `[]` when absent. |
 | `command_prefix` | `string\|null` | no | The slash command the user typed, if any. E.g. `"/refactor"`. `null` or absent when no slash command was used. |
 
-**Minimum viable context:** the matcher requires at least 2 populated input dimensions before attempting to route. If fewer than 2 dimensions are populated, the matcher returns `needs_more_detail` regardless of catalog content. A `task_description` with at least one keyword counts as one dimension; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each count as one additional dimension when non-empty. For a conceptual explanation with good/sparse examples, see the [What is a dispatch context?](../README.md#what-is-a-dispatch-context) section in the README.
+**Minimum viable context:** the matcher requires at least 2 populated input dimensions before attempting to route. If fewer than 2 dimensions are populated, the matcher returns `needs_more_detail` regardless of catalog content. A `task_description` with at least one keyword counts as one dimension; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each count as one additional dimension when non-empty.
+
+**`extensions` — internally derived dimension.** When `file_paths` is non-empty, the matcher also derives an `extensions` dimension by extracting the file-extension suffix of each path (e.g. `"src/foo.py"` → `"py"`). This dimension is counted separately by `feature_count` — so a context with only `task_description` and `file_paths` yields `feature_count = 3` (keywords + paths + extensions), not 2. The `extensions` dimension is not a caller-supplied field; it is computed internally from `file_paths` and is transparent to callers composing context objects. It affects whether the density floor is cleared and contributes to per-entry scoring via the scoring formula in §4.
+
+For a conceptual explanation with good/sparse examples, see the [What is a dispatch context?](../README.md#what-is-a-dispatch-context) section in the README.
 
 Example:
 
@@ -107,6 +112,7 @@ The matcher writes a JSON object to stdout. The `decision` field is always prese
 | `confidence` | `number` | yes | Float in `[0.0, 1.0]`. The score of the top-matched entry, rounded to 6 decimal places. `0.0` for `needs_more_detail` and `self_handle_unaided`. |
 | `rationale` | `string` | yes | Human-readable explanation of the decision. **Advisory** — contents may change across minor releases. Do not branch on rationale text. |
 | `alternatives` | `array` | yes | Top alternatives considered. Empty array when not applicable. Each element is `{"agent": string, "score": number}`. |
+| `disposition_source` | `string` | yes | Enum: `"scored"` or `"override"`. Indicates whether the decision came from the normal scoring pipeline or from a matched override rule. Always present on every return (shipped v0.11.0 — downstream tooling may rely on this field always being present). See `docs/dispatch-overrides.md` for override semantics. |
 
 ### Fields by decision type
 
@@ -168,6 +174,33 @@ No dominant agent, but at least one skill scored >= 0.5.
 ```
 
 **Handler guidance:** invoke the returned skills via the Skill tool and proceed without delegating to a sub-agent.
+
+#### `mixed_content`
+
+Two or more agents each scored at or near 1.0 (within the `_MIXED_CONTENT_SCORE_EPSILON` tolerance of 0.05) on path-disjoint lanes — every qualifying agent has at least one path-glob match, and no single input path is claimed by more than one agent. This fires after `self_handle` but before `advisory`, and only when the gap between the top two agents is < 0.2 (the advisory pre-condition). It represents a structurally split task where different parts of the input clearly belong to different specialists.
+
+```json
+{
+  "decision": "mixed_content",
+  "confidence": 1.0,
+  "rationale": "2 agents clamped at 1.0 on path-disjoint lanes; structural mixed-content task.",
+  "lanes": [
+    {"agent": "code-writer", "score": 1.0, "matched_paths": ["src/auth.py"], "skills": ["python"]},
+    {"agent": "doc-writer",  "score": 1.0, "matched_paths": ["docs/auth.md"], "skills": []}
+  ],
+  "unassigned_paths": [],
+  "alternatives": []
+}
+```
+
+**Additional output fields (present only on `mixed_content`):**
+
+| Field | Type | Notes |
+|---|---|---|
+| `lanes` | `array[object]` | One entry per qualifying agent. Each lane object has `agent` (string), `score` (number), `matched_paths` (array of strings from the input `file_paths` that matched this agent's path globs), and `skills` (array of skill names applicable to this agent). |
+| `unassigned_paths` | `array[string]` | Input paths not claimed by any qualifying lane. May be empty. |
+
+**Handler guidance:** dispatch each lane to its named agent independently. Pass `matched_paths` and `skills` from the lane into the sub-agent's context. Any `unassigned_paths` were not claimed by a specialist — handle them in the router or surface them to the user.
 
 #### `advisory`
 
@@ -258,6 +291,13 @@ def decide(scored_agents, scored_skills, features):
     if best_skills:
         return {"decision": "self_handle", "skills": [s.name for s in best_skills], ...}
 
+    # Step 3.5: mixed_content — fires when gap < 0.2 and >= 2 agents clamp
+    # at 1.0 on path-disjoint lanes (inserted between self_handle and advisory).
+    if best_agent and gap(scored_agents) < 0.2:
+        mixed = detect_mixed_content(scored_agents, scored_skills, features)
+        if mixed is not None:
+            return mixed  # {"decision": "mixed_content", "lanes": [...], "unassigned_paths": [...], ...}
+
     if best_agent and best_agent.score >= 0.5:
         return {"decision": "advisory", "agent": best_agent.name,
                 "skills": skills_for_agent(best_agent, features), ...}
@@ -265,17 +305,18 @@ def decide(scored_agents, scored_skills, features):
     return {"decision": "self_handle_unaided", ...}
 ```
 
-The router agent is excluded from the scored-agents pool via the `routable: false` flag. The `gap` function is the score difference between the top and second-place agent. `feature_count` counts populated input dimensions: `task_description` with at least one keyword = 1; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each add 1 when non-empty.
+The router agent is excluded from the scored-agents pool via the `routable: false` flag. The `gap` function is the score difference between the top and second-place agent. `feature_count` counts populated input dimensions: `task_description` with at least one keyword = 1; each of `file_paths`, `agent_mentions`, `tool_mentions`, and a non-null `command_prefix` each add 1 when non-empty. See also: `extensions` is an internally-derived dimension counted by `feature_count` — refer to the §2 dispatch context note for details.
 
 ### Decision ladder
 
-| Decision              | Condition                                                              | Confidence   |
-| --------------------- | ---------------------------------------------------------------------- | ------------ |
-| `needs_more_detail`   | Feature density < 2 populated dimensions                               | `0.0`        |
-| `delegate`            | Best agent score ≥ 0.85, gap ≥ 0.2                                     | best score   |
-| `self_handle`         | No dominant agent; ≥1 skill score ≥ 0.5                                | best score   |
-| `advisory`            | Best agent score ≥ 0.5 (gap-tied or below delegate threshold)          | best score   |
-| `self_handle_unaided` | No agent or skill above threshold                                      | `0.0`        |
+| Decision              | Condition                                                                                                                    | Confidence   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `needs_more_detail`   | Feature density < 2 populated dimensions                                                                                     | `0.0`        |
+| `delegate`            | Best agent score ≥ 0.85, gap ≥ 0.2                                                                                           | best score   |
+| `self_handle`         | No dominant agent; ≥1 skill score ≥ 0.5                                                                                      | best score   |
+| `mixed_content`       | Gap < 0.2; ≥ 2 agents clamped at 1.0 on path-disjoint lanes (fires after `self_handle`, before `advisory`)                  | best score   |
+| `advisory`            | Best agent score ≥ 0.5 (gap-tied or below delegate threshold); `mixed_content` conditions not met                           | best score   |
+| `self_handle_unaided` | No agent or skill above threshold                                                                                            | `0.0`        |
 
 `ask_user` is reserved and not produced by the current decision ladder.
 

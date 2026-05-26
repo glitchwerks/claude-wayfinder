@@ -103,17 +103,22 @@ first branch whose conditions are satisfied wins.
    the second-place agent is ≥ 0.2; high-confidence single winner,
    delegation is appropriate.
 
-3. **`ambiguous`** — the top routable agent scored ≥ 0.5 but the gap
-   between it and the second-place agent is < 0.2; two or more agents
-   are statistically tied and a tiebreak is needed.
-
-4. **`self_handle`** — no dominant agent, but at least one skill scored
+3. **`self_handle`** — no dominant agent, but at least one skill scored
    ≥ 0.5; the router handles the task itself with the matched skills
    attached.
 
-5. **`advisory`** — the best agent scored ≥ 0.5 with a gap ≥ 0.2 (so not
-   `ambiguous`) but below the `delegate` floor of 0.85; delegation is
-   suggested but not certain.
+4. **`mixed_content`** — the gap between the top two agents is < 0.2 and
+   ≥ 2 agents are each clamped at 1.0 on path-disjoint lanes (every
+   qualifying agent has at least one path-glob match, and no input path
+   is claimed by more than one agent). The decision carries a `lanes[]`
+   array (one entry per specialist, each with `agent`, `score`,
+   `matched_paths`, and `skills`) and an `unassigned_paths[]` list for
+   input paths not claimed by any lane. Fires after `self_handle` and
+   before `advisory`.
+
+5. **`advisory`** — the best agent scored ≥ 0.5 but the `delegate`
+   threshold was not met (gap < 0.2 or score < 0.85) and `mixed_content`
+   conditions were not satisfied; delegation is suggested but not certain.
 
 6. **`ask_user`** — reserved in v0.1 and v0.2; the current matcher never
    produces this decision. Include a handler for forward compatibility.
@@ -336,18 +341,21 @@ either side firing alone. Use `keyword_groups` to require co-occurrence:
 each `slot` carries one set of alternatives, and the group fires only
 when **all** slots are satisfied. See the §3 worked example.
 
-**Conflict pairs produce `ambiguous` decisions.** Two entries whose
+**Conflict pairs produce `advisory` decisions.** Two entries whose
 `keywords` lists share three or more overlapping case-insensitive terms,
 with no discriminating `path_globs`, `tool_mentions`, or
 `command_prefixes` to break the tie, will both score similarly on inputs
-that mention those shared terms. The result is an `ambiguous` decision
-that forces the router to ask the user to choose. Heavy keyword overlap is
-a design smell. The remedy is to introduce a discriminator: a `path_globs`
-entry that is unique to one of the two entries, a `tool_mentions` entry
-that only one of them legitimately fires on, or a `command_prefixes` entry
-that explicitly routes one of them. If the overlap is fundamental — the two
-entries genuinely do the same thing in the same context — consider whether
-they should be merged into one.
+that mention those shared terms. The gap falls below 0.2, so neither
+reaches the `delegate` floor, and the matcher emits `advisory` — the top
+agent is suggested but not confirmed. (Prior to v0.9.0 this scenario
+produced an `ambiguous` decision; that outcome was removed. The runtime
+now emits `advisory` for all gap-tied and below-threshold cases.) Heavy
+keyword overlap is a design smell. The remedy is to introduce a
+discriminator: a `path_globs` entry that is unique to one of the two
+entries, a `tool_mentions` entry that only one of them legitimately fires
+on, or a `command_prefixes` entry that explicitly routes one of them. If
+the overlap is fundamental — the two entries genuinely do the same thing
+in the same context — consider whether they should be merged into one.
 
 ---
 
@@ -447,9 +455,10 @@ and widens conflict-pair risk.
 Eyeball the catalog for other entries that share several of the same
 keywords. If two or more entries have three or more overlapping terms at
 `0.5` or `1.0` weight and no differentiating `path_globs` or
-`tool_mentions`, they will produce `ambiguous` decisions on the prompts
-where those terms overlap. Introduce a discriminator (see Section 5) or
-run `audit-catalog` (see Section 9) to surface all conflict pairs at once.
+`tool_mentions`, they will produce `advisory` decisions on the prompts
+where those terms overlap (the gap falls below 0.2, preventing `delegate`).
+Introduce a discriminator (see Section 5) or run `audit-catalog`
+(see Section 9) to surface all conflict pairs at once.
 
 **Step 6 — Check for structural violations.**
 Before committing, verify that:
