@@ -108,6 +108,7 @@ The matcher writes a JSON object to stdout. The `decision` field is always prese
 | `confidence` | `number` | yes | Float in `[0.0, 1.0]`. The score of the top-matched entry, rounded to 6 decimal places. `0.0` for `needs_more_detail` and `self_handle_unaided`. |
 | `rationale` | `string` | yes | Human-readable explanation of the decision. **Advisory** — contents may change across minor releases. Do not branch on rationale text. |
 | `alternatives` | `array` | yes | Top alternatives considered. Empty array when not applicable. Each element is `{"agent": string, "score": number}`. |
+| `disposition_source` | `string` | yes | Enum: `"scored"` or `"override"`. Indicates whether the decision came from the normal scoring pipeline or from a matched override rule. Always present on every return (shipped v0.11.0 — downstream tooling may rely on this field always being present). See `docs/dispatch-overrides.md` for override semantics. |
 
 ### Fields by decision type
 
