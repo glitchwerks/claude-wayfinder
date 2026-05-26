@@ -31,6 +31,26 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from claude_wayfinder.match import (
+    ScoredEntry,
+    build_features,
+    decide,
+    load_catalog,
+    score,
+)
+from claude_wayfinder.match._catalog import (
+    _compute_catalog_hash,
+    _resolve_log_path,
+    _resolve_overrides_path,
+    _write_log_entry,
+)
+from claude_wayfinder.match._overrides import (
+    OverridesError,
+    load_overrides,
+    resolve_override,
+)
+from claude_wayfinder.match_filters import is_agent_routable
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -285,6 +305,241 @@ def dispatch(
             f"stderr={_stderr_text!r}"
         )
     return json.loads(stdout_text)
+
+
+def run_batch_dispatch(
+    stdin_data: str | None = None,
+    out: Any = None,
+) -> int:
+    """Run the dispatch subcommand in batch (NDJSON) mode.
+
+    Reads one dispatch context JSON object per line from *stdin_data* (or
+    ``sys.stdin`` when ``None``).  Blank lines are silently skipped.
+    Malformed JSON lines produce an error record on stdout without aborting
+    the batch.  Decisions are written as NDJSON to *out*, one per input
+    line, in input order.
+
+    Each output line is the standard single-mode decision JSON with one
+    extra leading field:
+
+    - ``input_index`` (int, 0-based) — the position of the input line
+      among non-blank lines.  Present on both decision records and error
+      records.
+
+    Error record shape for malformed input lines::
+
+        {
+            "input_index": <int>,
+            "error": "<description>",
+            "input_line": "<raw text of the bad line>"
+        }
+
+    Mode detection follows the same rules as single-mode ``dispatch``:
+
+    - ``$DISPATCH_CATALOG_PATH`` absent → demo mode (banner + demo run).
+    - ``$DISPATCH_CATALOG_PATH`` present and valid → real-catalog mode.
+    - ``$DISPATCH_CATALOG_PATH`` present but invalid → hard error, non-zero
+      exit.
+
+    The catalog is loaded **once** per invocation, regardless of how many
+    input lines are present.
+
+    Args:
+        stdin_data: NDJSON string (one JSON object per line) to process.
+            Read from ``sys.stdin`` when ``None``.
+        out: File-like object for stdout.  Defaults to ``sys.stdout``.
+
+    Returns:
+        Exit code: 0 when all lines produced decisions or error records
+        (partial batch success counts as success).  Non-zero on hard
+        errors (no catalog, invalid catalog).
+    """
+    if out is None:
+        out = sys.stdout
+
+    catalog_env = os.environ.get("DISPATCH_CATALOG_PATH")
+
+    # ------------------------------------------------------------------
+    # Demo mode — env var absent
+    # ------------------------------------------------------------------
+    if not catalog_env:
+        from claude_wayfinder.cli import run_demo  # noqa: PLC0415
+
+        print(_DEMO_BANNER, file=out)
+        print("", file=out)
+        return run_demo(out=out)
+
+    # ------------------------------------------------------------------
+    # Real-catalog mode — env var present
+    # ------------------------------------------------------------------
+    catalog_path = Path(catalog_env)
+
+    error_detail = _validate_catalog_json(catalog_path)
+    if error_detail is not None:
+        banner = (
+            f"{_CATALOG_ERROR_PREFIX} Dispatch catalog is degraded: "
+            f"{error_detail}. Until restored, routing falls back to LLM "
+            "judgment per the legacy prose-policy."
+        )
+        print(banner, file=sys.stderr)
+        return 2
+
+    # Stale-mtime check (warn-only).
+    skills_dir_env = os.environ.get("DISPATCH_SKILLS_DIR")
+    agents_dir_env = os.environ.get("DISPATCH_AGENTS_DIR")
+    check_catalog_staleness(
+        catalog_path=catalog_path,
+        skills_dir=Path(skills_dir_env) if skills_dir_env else None,
+        agents_dir=Path(agents_dir_env) if agents_dir_env else None,
+    )
+
+    # Overrides-mtime check (warn-only).
+    overrides_env = os.environ.get("DISPATCH_OVERRIDES_PATH")
+    check_overrides_staleness(
+        catalog_path=catalog_path,
+        overrides_path=Path(overrides_env).expanduser() if overrides_env else None,
+    )
+
+    # Load catalog ONCE for the entire batch — this is the hot path that the
+    # test monkeypatches to verify catalog-once semantics.
+    try:
+        entries = load_catalog(catalog_path)
+    except Exception:
+        # load_catalog logs its own errors; the validate step above catches
+        # structural issues.  If we still fail here, propagate as hard error.
+        print(
+            f"{_CATALOG_ERROR_PREFIX} Failed to load catalog at "
+            f"{catalog_path}.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not entries:
+        print(
+            f"{_CATALOG_ERROR_PREFIX} Catalog at {catalog_path} contains "
+            "zero entries.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Pre-split entries into agent/skill pools (same as match._main does).
+    agent_entries = [
+        e
+        for e in entries
+        if e.kind == "agent"
+        and is_agent_routable(
+            name=e.name,
+            kind=e.kind,
+            source=e.source,
+            routable=e.routable,
+        )
+    ]
+    skill_entries = [e for e in entries if e.kind == "skill"]
+
+    # Compute catalog hash once for logging.
+    try:
+        catalog_raw_text = catalog_path.read_text(encoding="utf-8")
+        catalog_hash = _compute_catalog_hash(catalog_raw_text)
+    except OSError:
+        catalog_hash = ""
+
+    # Load overrides once (same as single-mode).
+    overrides_path = _resolve_overrides_path()
+    override_rules: list[Any] = []
+    if overrides_path is not None:
+        try:
+            override_rules = load_overrides(overrides_path)
+        except OverridesError as exc:
+            print(
+                f"[OVERRIDES ERROR] {exc}; proceeding with scored matching.",
+                file=sys.stderr,
+            )
+        print(
+            f"[dispatch] overrides: {len(override_rules)} rules loaded"
+            f" from {overrides_path}",
+            file=sys.stderr,
+        )
+
+    log_path = _resolve_log_path()
+
+    # Read all NDJSON input.
+    if stdin_data is None:
+        stdin_data = sys.stdin.read()
+
+    input_index = 0
+    for raw_line in stdin_data.splitlines():
+        # Skip blank lines silently.
+        if not raw_line.strip():
+            continue
+
+        # Parse the line — emit an error record on malformed JSON.
+        try:
+            context: dict[str, Any] = json.loads(raw_line)
+        except json.JSONDecodeError as exc:
+            error_record: dict[str, Any] = {
+                "input_index": input_index,
+                "error": f"malformed JSON: {exc}",
+                "input_line": raw_line,
+            }
+            print(
+                json.dumps(error_record, sort_keys=True),
+                file=out,
+                flush=True,
+            )
+            input_index += 1
+            continue
+
+        # Extract features and run the scoring/decision pipeline.
+        features = build_features(context)
+
+        # Override short-circuit (same logic as single-mode).
+        override_match = resolve_override(override_rules, features)
+        if override_match is not None:
+            rule = override_match.rule
+            decision_dict: dict[str, Any] = {
+                "decision": rule.decision,
+                "confidence": rule.confidence,
+                "rationale": rule.rationale,
+                "alternatives": [],
+                "disposition_source": "override",
+                "override_id": rule.id,
+            }
+            if rule.agent is not None:
+                decision_dict["agent"] = rule.agent
+            if rule.skills:
+                decision_dict["skills"] = list(rule.skills)
+            _write_log_entry(
+                context,
+                decision_dict,
+                catalog_hash,
+                log_path,
+                override_id=rule.id,
+            )
+            output: dict[str, Any] = {"input_index": input_index, **decision_dict}
+            print(json.dumps(output, sort_keys=True), file=out, flush=True)
+            input_index += 1
+            continue
+
+        # Score all entries.
+        scored_agents: list[Any] = sorted(
+            [ScoredEntry(entry=e, score=score(e, features)) for e in agent_entries],
+            key=lambda se: (-se.score, se.entry.name),
+        )
+        scored_skills: list[Any] = sorted(
+            [ScoredEntry(entry=e, score=score(e, features)) for e in skill_entries],
+            key=lambda se: (-se.score, se.entry.name),
+        )
+
+        decision_dict = decide(scored_agents, scored_skills, features, entries)
+        _write_log_entry(
+            context, decision_dict, catalog_hash, log_path, override_id=None
+        )
+
+        output = {"input_index": input_index, **decision_dict}
+        print(json.dumps(output, sort_keys=True), file=out, flush=True)
+        input_index += 1
+
+    return 0
 
 
 def run_dispatch(
