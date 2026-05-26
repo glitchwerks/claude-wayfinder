@@ -23,7 +23,7 @@ from typing import Any
 import claude_wayfinder._health as _health_mod
 import claude_wayfinder.audit_catalog as _audit_mod
 import claude_wayfinder.build_catalog as _build_catalog_mod
-from claude_wayfinder._dispatch import run_dispatch
+from claude_wayfinder._dispatch import run_batch_dispatch, run_dispatch
 from claude_wayfinder.match import (
     build_features,
     decide,
@@ -308,13 +308,29 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    sub.add_parser(
+    dispatch_parser = sub.add_parser(
         "dispatch",
         help=(
             "Mode-aware dispatch: demo mode when $DISPATCH_CATALOG_PATH is "
             "unset; real-catalog mode when the env var resolves to a valid "
             "catalog.  Reads dispatch context JSON from stdin; writes "
             "decision JSON to stdout."
+        ),
+    )
+    dispatch_parser.add_argument(
+        "--batch",
+        action="store_true",
+        default=False,
+        help=(
+            "Batch mode: read one dispatch context JSON object per line from "
+            "stdin (NDJSON) and write one decision JSON object per line to "
+            "stdout (NDJSON).  Blank lines are skipped; malformed lines "
+            "produce an error record without aborting the batch.  The catalog "
+            "is loaded once per invocation.  Each output line includes an "
+            "'input_index' field (0-based) so async consumers can correlate "
+            "decisions with inputs.  Example: "
+            "echo '{\"task_description\": \"...\"}' | "
+            "python -m claude_wayfinder dispatch --batch"
         ),
     )
 
@@ -382,6 +398,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_demo()
 
     if args.command == "dispatch":
+        if getattr(args, "batch", False):
+            return run_batch_dispatch()
         return run_dispatch()
 
     if args.command == "catalog":

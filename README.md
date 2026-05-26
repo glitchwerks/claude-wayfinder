@@ -215,6 +215,11 @@ The full CLI surface is documented via `python -m claude_wayfinder --help`. Key 
 
 - `demo` — run the matcher against bundled demo fixtures; covers all seven decision branches.
 - `dispatch` — run the matcher against a live catalog; reads dispatch context JSON from stdin.
+  - `--batch` — NDJSON batch mode: read one context object per line from stdin, write one decision per line to stdout. Each output line includes an `"input_index"` field (0-based). Blank lines are skipped; malformed lines produce an error record without aborting the batch. The catalog is loaded once per invocation. Example:
+    ```bash
+    printf '{"task_description":"implement auth","file_paths":["src/auth.py"]}\n{"task_description":"fix css bug"}\n' \
+      | python -m claude_wayfinder dispatch --batch
+    ```
 - `catalog build` — scan skill sidecars and agent frontmatter and write a `dispatch-catalog.json`.
 - `audit-catalog` — catalog-wide static analysis (conflict pairs, structural checks, matcher-aware semantic rules). See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
 
