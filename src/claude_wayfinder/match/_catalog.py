@@ -32,6 +32,10 @@ def _emit_catalog_error(details: str) -> NoReturn:
     """
     banner = (
         f"{_CATALOG_ERROR_PREFIX} Dispatch catalog is degraded: {details}. "
+        "Canonical default: ~/.claude/state/dispatch-catalog.json "
+        "(refreshed automatically by refresh-catalog-on-stale.js). "
+        "If the canonical default also doesn't exist, send any prompt "
+        "(UserPromptSubmit triggers a rebuild) or run /refresh-catalog. "
         "Until restored, routing falls back to LLM judgment per the "
         "legacy prose-policy."
     )
