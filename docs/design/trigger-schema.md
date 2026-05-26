@@ -232,6 +232,7 @@ sort order); the flag on each entry is authoritative for that entry.
 | `triggers.tool_mentions`            | `list[str]`            | no       | `features.tool_mentions` (set, exact, case-insensitive)                          | `[]`               |
 | `triggers.excludes`                 | `list[str]`            | no       | `features.keywords` (same matching as `keywords`)                                | `[]`               |
 | `applicable_agents` _(skills only)_ | `list[str]`            | no       | hard allowlist of agent names; `["*"]` = any                                     | `[]` (= **none**) |
+| `applicable_agents_intentional` _(skills only)_ | `string` | no  | non-empty rationale string; suppresses the `empty-applicable-agents` audit NIT when `applicable_agents` is intentionally `[]`. See `docs/dispatch-authoring-guide.md:327–332`. | absent |
 | `applicable_skills` _(agents only)_ | `list[str]`            | no       | hard allowlist of skill names; `["*"]` = any                                     | `[]` (= **none**) |
 
 > **Removed field:** `triggers.file_extensions` was present in an earlier version of this schema but is **removed**. Use `triggers.path_globs` instead (e.g. `"**/*.py"` instead of `["py"]` in `file_extensions`). Sidecars that still declare `file_extensions` will receive a **warning** from the catalog generator and the field will be dropped.

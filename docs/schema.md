@@ -36,6 +36,7 @@ Each object in the `entries` array of `dispatch-catalog.json` represents one age
 | `source` | `string` | yes | `"owned"` | Provenance tag. See source values table below. |
 | `triggers` | `object` | yes | empty trigger object | Trigger configuration. See [trigger-schema.md](design/trigger-schema.md) for the full field reference. |
 | `applicable_agents` | `array[string]` | skills only | `[]` | Hard allowlist of agent names that may receive this skill. `["*"]` = any agent. `[]` = no agent (skill is router-only or dormant). Present on skill entries; absent on agent entries. |
+| `applicable_agents_intentional` | `string` | skills only; optional | absent | Rationale string that suppresses the `empty-applicable-agents` audit NIT when `applicable_agents` is intentionally `[]`. Must be a non-empty string; an empty string does not suppress the NIT. See `docs/dispatch-authoring-guide.md:327–332` for a worked example. |
 | `applicable_skills` | `array[string]` | agents only | `[]` | Hard allowlist of skill names to attach when routing to this agent. `["*"]` = any. `[]` = no skills. Present on agent entries; absent on skill entries. |
 | `routable` | `boolean` | agents only; optional | `true` | When `false`, the entry is excluded from the scored-agent pool at dispatch time. Set to `false` on the router agent itself so it is never selected as a delegation target. Absent on skill entries. |
 
