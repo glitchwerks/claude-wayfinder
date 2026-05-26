@@ -228,6 +228,7 @@ sort order); the flag on each entry is authoritative for that entry.
 | `triggers.path_globs`               | `list[str]`            | no       | each glob matched via `fnmatch.fnmatch` against any element of `features.paths`  | `[]`               |
 | `triggers.path_globs_excluded`      | `list[str]`            | no       | each glob matched via `fnmatch.fnmatch` against any element of `features.paths`; if any matches, the entry is dropped from the scored pool before additive scoring. Exclusion wins over `path_globs`. | `[]` |
 | `triggers.keywords`                 | `list[{term, weight}]` | no       | `features.keywords` (set, case-insensitive exact token)                          | `[]`               |
+| `triggers.keyword_groups`           | `list[{slots: list, weight: float}]` | no | each slot matched against `features.keywords`; group fires only when **every** slot has ≥ 1 matching term. See § 2i for shape, § 4 for matching rules, § 6 for validation. | `[]` |
 | `triggers.tool_mentions`            | `list[str]`            | no       | `features.tool_mentions` (set, exact, case-insensitive)                          | `[]`               |
 | `triggers.excludes`                 | `list[str]`            | no       | `features.keywords` (same matching as `keywords`)                                | `[]`               |
 | `applicable_agents` _(skills only)_ | `list[str]`            | no       | hard allowlist of agent names; `["*"]` = any                                     | `[]` (= **none**) |
