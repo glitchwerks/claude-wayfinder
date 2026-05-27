@@ -2,11 +2,13 @@
 
 Verifies the mode-detection contract for the dispatch skill:
 
-- Demo mode (``$DISPATCH_CATALOG_PATH`` unset) — banner appears, demo runs.
+- Demo mode (``--demo`` flag) — banner appears, demo runs; ignores env/catalog.
 - Real-catalog mode (env set, valid catalog) — matcher decision JSON returned.
 - Hard-error mode (env set, missing file) — ``[CATALOG ERROR]`` propagates,
   no demo fallback.
 - Hard-error mode (env set, invalid JSON) — same.
+- Canonical-default fallback — when neither ``--demo`` nor
+  ``$DISPATCH_CATALOG_PATH`` is set, the canonical path is resolved.
 - Stale-mtime warning fires when catalog mtime is older than source files.
 """
 
@@ -53,6 +55,7 @@ _VALID_CONTEXT: dict[str, Any] = {
 def _run_dispatch(
     env_overrides: dict[str, str | None] | None = None,
     stdin_data: str | None = None,
+    extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``python -m claude_wayfinder dispatch`` and return the result.
 
@@ -61,6 +64,8 @@ def _run_dispatch(
             unset a variable) to layer on top of the current environment.
         stdin_data: JSON string to pass on stdin.  Defaults to the minimal
             valid dispatch context.
+        extra_args: Additional CLI arguments to append after ``dispatch``
+            (e.g. ``["--demo"]``).
 
     Returns:
         A ``CompletedProcess`` with ``stdout`` and ``stderr`` captured as
@@ -69,8 +74,11 @@ def _run_dispatch(
     env = os.environ.copy()
 
     # Always remove DISPATCH_CATALOG_PATH from the base env so tests that
-    # want demo mode are not polluted by the caller's environment.
+    # rely on canonical-fallback or demo mode are not polluted by the
+    # caller's environment.
     env.pop("DISPATCH_CATALOG_PATH", None)
+    # Also remove CLAUDE_HOME so canonical-path tests can redirect it cleanly.
+    env.pop("CLAUDE_HOME", None)
 
     if env_overrides:
         for key, val in env_overrides.items():
@@ -82,8 +90,12 @@ def _run_dispatch(
     if stdin_data is None:
         stdin_data = json.dumps(_VALID_CONTEXT)
 
+    cmd = [sys.executable, "-m", "claude_wayfinder", "dispatch"]
+    if extra_args:
+        cmd.extend(extra_args)
+
     return subprocess.run(
-        [sys.executable, "-m", "claude_wayfinder", "dispatch"],
+        cmd,
         input=stdin_data,
         capture_output=True,
         text=True,
@@ -92,33 +104,33 @@ def _run_dispatch(
 
 
 # ---------------------------------------------------------------------------
-# Demo mode (DISPATCH_CATALOG_PATH unset)
+# Demo mode (--demo flag)
 # ---------------------------------------------------------------------------
 
 
 class TestDemoMode:
-    """When ``$DISPATCH_CATALOG_PATH`` is absent, demo mode must activate."""
+    """When ``--demo`` is passed, demo mode must activate regardless of env."""
 
-    def test_demo_mode_exits_zero(self) -> None:
-        """Dispatch with no env var set exits 0 (demo mode)."""
-        result = _run_dispatch()
+    def test_demo_flag_exits_zero(self) -> None:
+        """Dispatch with ``--demo`` exits 0."""
+        result = _run_dispatch(extra_args=["--demo"])
         assert result.returncode == 0, (
             f"dispatch exited {result.returncode} in demo mode.\n"
             f"stdout: {result.stdout}\n"
             f"stderr: {result.stderr}"
         )
 
-    def test_demo_mode_banner_on_stdout(self) -> None:
-        """Demo mode emits the 'no catalog configured' banner on stdout."""
-        result = _run_dispatch()
+    def test_demo_flag_banner_on_stdout(self) -> None:
+        """``--demo`` emits the 'no catalog configured' banner on stdout."""
+        result = _run_dispatch(extra_args=["--demo"])
         assert _DEMO_MODE_BANNER in result.stdout, (
             f"Expected banner '{_DEMO_MODE_BANNER}' not found in stdout.\n"
             f"stdout: {result.stdout}"
         )
 
-    def test_demo_mode_no_catalog_error(self) -> None:
-        """Demo mode must NOT emit ``[CATALOG ERROR]``."""
-        result = _run_dispatch()
+    def test_demo_flag_no_catalog_error(self) -> None:
+        """``--demo`` must NOT emit ``[CATALOG ERROR]``."""
+        result = _run_dispatch(extra_args=["--demo"])
         assert _CATALOG_ERROR_PREFIX not in result.stderr, (
             f"Unexpected [CATALOG ERROR] in stderr during demo mode.\n"
             f"stderr: {result.stderr}"
@@ -549,4 +561,135 @@ class TestOverridesStalenessWarning:
             "Unexpected '[DISPATCH WARNING]' in stderr when overrides is "
             "newer than catalog.\n"
             f"stderr: {result.stderr!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# --demo flag contract
+# ---------------------------------------------------------------------------
+
+
+class TestDemoFlagContract:
+    """``--demo`` must win regardless of what env vars are set."""
+
+    def test_demo_flag_overrides_catalog_env_var(self) -> None:
+        """``--demo`` activates demo mode even when DISPATCH_CATALOG_PATH is set.
+
+        With both ``--demo`` and a valid ``$DISPATCH_CATALOG_PATH``, demo mode
+        must win: banner present, no decision JSON on stdout.
+        """
+        result = _run_dispatch(
+            env_overrides={
+                "DISPATCH_CATALOG_PATH": str(_DEMO_CATALOG_PATH),
+            },
+            extra_args=["--demo"],
+        )
+        assert result.returncode == 0, (
+            f"dispatch exited {result.returncode} with --demo + valid catalog.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert _DEMO_MODE_BANNER in result.stdout, (
+            "Expected demo banner when --demo is set alongside valid catalog.\n"
+            f"stdout: {result.stdout}"
+        )
+        assert _CATALOG_ERROR_PREFIX not in result.stderr, (
+            "Unexpected [CATALOG ERROR] when --demo is set.\n"
+            f"stderr: {result.stderr}"
+        )
+
+    def test_demo_flag_in_dispatch_help(self) -> None:
+        """``python -m claude_wayfinder dispatch --help`` must mention --demo."""
+        import subprocess as _sp
+
+        result = _sp.run(
+            [sys.executable, "-m", "claude_wayfinder", "dispatch", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert "--demo" in result.stdout, (
+            "--demo flag not found in dispatch --help output.\n"
+            f"stdout: {result.stdout}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Canonical-default fallback (no --demo, no DISPATCH_CATALOG_PATH)
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalDefaultFallback:
+    """When neither ``--demo`` nor ``$DISPATCH_CATALOG_PATH`` is set, dispatch
+    must resolve the canonical default path and use it if it exists."""
+
+    def test_canonical_path_exists_activates_real_catalog_mode(
+        self, tmp_path: Path
+    ) -> None:
+        """When canonical default catalog exists, real-catalog mode activates.
+
+        Sets ``$CLAUDE_HOME`` to a tmpdir and places a copy of the demo
+        catalog at ``state/dispatch-catalog.json`` within it.  With no
+        ``--demo`` and no ``$DISPATCH_CATALOG_PATH``, dispatch must find the
+        canonical catalog and return decision JSON (not a demo banner).
+        """
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        canonical = state_dir / "dispatch-catalog.json"
+        canonical.write_text(
+            _DEMO_CATALOG_PATH.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        result = _run_dispatch(
+            env_overrides={"CLAUDE_HOME": str(tmp_path)},
+        )
+        assert result.returncode == 0, (
+            "dispatch failed when canonical catalog exists at $CLAUDE_HOME.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert _DEMO_MODE_BANNER not in result.stdout, (
+            "Demo banner appeared even though canonical catalog was present.\n"
+            f"stdout: {result.stdout}"
+        )
+        assert _CATALOG_ERROR_PREFIX not in result.stderr, (
+            "Unexpected [CATALOG ERROR] when canonical catalog is present.\n"
+            f"stderr: {result.stderr}"
+        )
+        try:
+            decision = result.stdout.strip()
+            assert decision, "stdout was empty — expected decision JSON."
+            parsed = json.loads(decision)
+        except json.JSONDecodeError as exc:
+            pytest.fail(
+                f"stdout is not valid JSON after canonical-fallback: {exc}\n"
+                f"stdout: {result.stdout!r}"
+            )
+        assert "decision" in parsed, (
+            f"'decision' key missing from canonical-fallback output.\n"
+            f"output: {parsed}"
+        )
+
+    def test_canonical_path_absent_emits_catalog_error(
+        self, tmp_path: Path
+    ) -> None:
+        """When canonical catalog is absent, [CATALOG ERROR] is emitted.
+
+        Sets ``$CLAUDE_HOME`` to an empty tmpdir so the canonical path does
+        not exist.  With no ``--demo`` and no ``$DISPATCH_CATALOG_PATH``,
+        dispatch must emit ``[CATALOG ERROR]`` and exit non-zero.
+        """
+        result = _run_dispatch(
+            env_overrides={"CLAUDE_HOME": str(tmp_path)},
+        )
+        assert result.returncode != 0, (
+            "dispatch should exit non-zero when canonical catalog is absent.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert _CATALOG_ERROR_PREFIX in result.stderr, (
+            "Expected [CATALOG ERROR] when canonical catalog is absent.\n"
+            f"stderr: {result.stderr}"
+        )
+        assert _DEMO_MODE_BANNER not in result.stdout, (
+            "Demo banner appeared silently when canonical catalog is absent — "
+            "violates the new contract (only --demo opts into demo mode).\n"
+            f"stdout: {result.stdout}"
         )

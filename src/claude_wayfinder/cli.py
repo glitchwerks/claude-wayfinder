@@ -311,10 +311,24 @@ def _build_parser() -> argparse.ArgumentParser:
     dispatch_parser = sub.add_parser(
         "dispatch",
         help=(
-            "Mode-aware dispatch: demo mode when $DISPATCH_CATALOG_PATH is "
-            "unset; real-catalog mode when the env var resolves to a valid "
-            "catalog.  Reads dispatch context JSON from stdin; writes "
+            "Mode-aware dispatch: real-catalog mode by default when a "
+            "catalog exists at the canonical path "
+            "($CLAUDE_HOME/state/dispatch-catalog.json or "
+            "~/.claude/state/dispatch-catalog.json) or when "
+            "$DISPATCH_CATALOG_PATH is set; use --demo to opt into bundled "
+            "fixtures.  Reads dispatch context JSON from stdin; writes "
             "decision JSON to stdout."
+        ),
+    )
+    dispatch_parser.add_argument(
+        "--demo",
+        action="store_true",
+        default=False,
+        help=(
+            "Demo mode: run the bundled fixture prompts and ignore any "
+            "catalog configuration.  Overrides $DISPATCH_CATALOG_PATH and "
+            "the canonical-default lookup.  Useful for testing the dispatch "
+            "pipeline without a real catalog."
         ),
     )
     dispatch_parser.add_argument(
@@ -398,9 +412,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_demo()
 
     if args.command == "dispatch":
+        demo_flag = getattr(args, "demo", False)
         if getattr(args, "batch", False):
-            return run_batch_dispatch()
-        return run_dispatch()
+            return run_batch_dispatch(demo=demo_flag)
+        return run_dispatch(demo=demo_flag)
 
     if args.command == "catalog":
         if getattr(args, "catalog_command", None) == "build":

@@ -81,6 +81,7 @@ def _ndjson(*contexts: dict[str, Any]) -> str:
 def _run_batch(
     stdin_data: str,
     env_overrides: dict[str, str | None] | None = None,
+    extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``python -m claude_wayfinder dispatch --batch`` and return result.
 
@@ -88,15 +89,19 @@ def _run_batch(
         stdin_data: NDJSON string to pass on stdin.
         env_overrides: Mapping of env var names to values (or ``None`` to
             unset a variable) to layer on top of the current environment.
+        extra_args: Additional CLI arguments to append after ``--batch``
+            (e.g. ``["--demo"]``).
 
     Returns:
         A ``CompletedProcess`` with ``stdout`` and ``stderr`` captured as
         strings.
     """
     env = os.environ.copy()
-    # Always strip DISPATCH_CATALOG_PATH so tests that want demo mode
-    # are not polluted by the caller's environment.
+    # Always strip DISPATCH_CATALOG_PATH and CLAUDE_HOME so tests that want
+    # demo mode or canonical-fallback mode are not polluted by the caller's
+    # environment.
     env.pop("DISPATCH_CATALOG_PATH", None)
+    env.pop("CLAUDE_HOME", None)
 
     if env_overrides:
         for key, val in env_overrides.items():
@@ -105,8 +110,12 @@ def _run_batch(
             else:
                 env[key] = val
 
+    cmd = [sys.executable, "-m", "claude_wayfinder", "dispatch", "--batch"]
+    if extra_args:
+        cmd.extend(extra_args)
+
     return subprocess.run(
-        [sys.executable, "-m", "claude_wayfinder", "dispatch", "--batch"],
+        cmd,
         input=stdin_data,
         capture_output=True,
         text=True,
@@ -535,3 +544,71 @@ def _real_load_catalog(path: Path) -> Any:
     from claude_wayfinder.match import load_catalog as _lc
 
     return _lc(path)
+
+
+# ---------------------------------------------------------------------------
+# --demo flag in batch mode
+# ---------------------------------------------------------------------------
+
+
+class TestBatchDemoFlag:
+    """``--demo`` must activate demo mode in batch mode too."""
+
+    def test_batch_demo_flag_exits_zero(self) -> None:
+        """``dispatch --batch --demo`` exits 0 with demo banner."""
+        result = _run_batch(
+            _ndjson(_CONTEXT_A),
+            extra_args=["--demo"],
+        )
+        assert result.returncode == 0, (
+            f"dispatch --batch --demo exited {result.returncode}.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_batch_demo_flag_overrides_catalog_env_var(self) -> None:
+        """``--demo`` wins even when ``$DISPATCH_CATALOG_PATH`` is also set."""
+        result = _run_batch(
+            _ndjson(_CONTEXT_A),
+            env_overrides={"DISPATCH_CATALOG_PATH": str(_DEMO_CATALOG_PATH)},
+            extra_args=["--demo"],
+        )
+        assert result.returncode == 0, (
+            f"dispatch --batch --demo exited {result.returncode} with "
+            f"valid catalog set.\nstdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+        assert _CATALOG_ERROR_PREFIX not in result.stderr, (
+            "Unexpected [CATALOG ERROR] when --demo overrides catalog env.\n"
+            f"stderr: {result.stderr}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Canonical-default fallback in batch mode
+# ---------------------------------------------------------------------------
+
+
+class TestBatchCanonicalDefaultFallback:
+    """Without ``--demo`` or ``$DISPATCH_CATALOG_PATH``, batch must resolve
+    the canonical default path."""
+
+    def test_batch_canonical_path_absent_emits_catalog_error(
+        self, tmp_path: Path
+    ) -> None:
+        """With empty ``$CLAUDE_HOME`` and no flags, batch emits catalog error.
+
+        This ensures that "no env var, no --demo" does NOT silently demo-mode
+        in batch; instead it resolves canonical and emits [CATALOG ERROR].
+        """
+        result = _run_batch(
+            _ndjson(_CONTEXT_A),
+            env_overrides={"CLAUDE_HOME": str(tmp_path)},
+        )
+        assert result.returncode != 0, (
+            "batch should exit non-zero when canonical catalog is absent.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert _CATALOG_ERROR_PREFIX in result.stderr, (
+            "Expected [CATALOG ERROR] when canonical catalog is absent.\n"
+            f"stderr: {result.stderr}"
+        )

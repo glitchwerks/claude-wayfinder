@@ -1,10 +1,9 @@
 """Mode-switching logic for the ``dispatch`` CLI subcommand.
 
-Implements the three-outcome mode-detection contract from
-docs/design/2026-05-14-v0.2-integration-design.md § 2.1:
+Implements the four-outcome mode-detection contract (Issue #284):
 
-- **Demo mode** — ``$DISPATCH_CATALOG_PATH`` is absent.  Runs the bundled
-  demo fixtures with a "no catalog configured" banner.
+- **Demo mode** — ``--demo`` flag is passed.  Runs the bundled demo fixtures
+  with a "no catalog configured" banner.  Ignores env vars and catalog files.
 - **Real-catalog mode** — ``$DISPATCH_CATALOG_PATH`` is set and resolves to
   a readable, valid JSON catalog.  Passes the context JSON to
   ``claude_wayfinder.match.main()`` in-process and returns the matcher's
@@ -13,6 +12,12 @@ docs/design/2026-05-14-v0.2-integration-design.md § 2.1:
   missing, unreadable, or contains invalid/schema-invalid JSON.  Propagates
   the ``[CATALOG ERROR]`` banner from ``match.py`` and exits non-zero.
   **Never falls back to demo mode silently.**
+- **Canonical-default mode** — neither ``--demo`` nor
+  ``$DISPATCH_CATALOG_PATH`` is set.  Resolves the canonical default path
+  (``$CLAUDE_HOME/state/dispatch-catalog.json`` or
+  ``~/.claude/state/dispatch-catalog.json``).  If the canonical file exists
+  → real-catalog mode; if absent → ``[CATALOG ERROR]`` and non-zero exit.
+  Demo mode is **never** the implicit default.
 
 Stale-mtime behavior (design § 2.1 last paragraph):
   When ``$DISPATCH_SKILLS_DIR`` and/or ``$DISPATCH_AGENTS_DIR`` are set and
@@ -72,6 +77,69 @@ _STALE_WARNING = (
     "Consider running `claude-wayfinder catalog build` to refresh. "
     "Proceeding with stale catalog."
 )
+
+
+# ---------------------------------------------------------------------------
+# Mode-detection helpers
+# ---------------------------------------------------------------------------
+
+
+def _canonical_catalog_path() -> Path:
+    """Return the canonical default dispatch-catalog path.
+
+    Resolution order:
+
+    1. ``$CLAUDE_HOME/state/dispatch-catalog.json`` when ``$CLAUDE_HOME`` is
+       set.
+    2. ``~/.claude/state/dispatch-catalog.json`` otherwise.
+
+    This mirrors the logic in ``audit_catalog._resolve_catalog_path`` and
+    ``build_catalog._discover._resolve_catalog_build_defaults``.  The
+    canonical path is publicly documented and stable as of Issue #284.
+
+    Returns:
+        The canonical ``Path`` (may or may not exist on disk).
+    """
+    claude_home_env = os.environ.get("CLAUDE_HOME")
+    if claude_home_env:
+        base = Path(claude_home_env)
+    else:
+        base = Path.home() / ".claude"
+    return base / "state" / "dispatch-catalog.json"
+
+
+def _resolve_mode(demo: bool) -> tuple[str, Path | None]:
+    """Determine the dispatch mode and catalog path for one invocation.
+
+    Decision tree (Issue #284):
+
+    1. If *demo* is ``True`` → ``("demo", None)``.
+    2. Else if ``$DISPATCH_CATALOG_PATH`` is set → ``("real", path)``.
+    3. Else resolve the canonical default.  If it exists on disk →
+       ``("real", canonical_path)``; if absent →
+       ``("error", canonical_path)`` so the caller can emit a helpful
+       error naming the missing path.
+
+    Args:
+        demo: ``True`` when the ``--demo`` flag was passed by the caller.
+
+    Returns:
+        A 2-tuple ``(mode, path)`` where *mode* is one of
+        ``"demo"``, ``"real"``, or ``"error"``; and *path* is the resolved
+        catalog ``Path`` (or ``None`` when *mode* is ``"demo"``).
+    """
+    if demo:
+        return "demo", None
+
+    catalog_env = os.environ.get("DISPATCH_CATALOG_PATH")
+    if catalog_env:
+        return "real", Path(catalog_env)
+
+    # Neither --demo nor the env var — fall back to the canonical default.
+    canonical = _canonical_catalog_path()
+    if canonical.exists():
+        return "real", canonical
+    return "error", canonical
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +378,7 @@ def dispatch(
 def run_batch_dispatch(
     stdin_data: str | None = None,
     out: Any = None,
+    demo: bool = False,
 ) -> int:
     """Run the dispatch subcommand in batch (NDJSON) mode.
 
@@ -334,12 +403,13 @@ def run_batch_dispatch(
             "input_line": "<raw text of the bad line>"
         }
 
-    Mode detection follows the same rules as single-mode ``dispatch``:
+    Mode detection (Issue #284):
 
-    - ``$DISPATCH_CATALOG_PATH`` absent → demo mode (banner + demo run).
-    - ``$DISPATCH_CATALOG_PATH`` present and valid → real-catalog mode.
-    - ``$DISPATCH_CATALOG_PATH`` present but invalid → hard error, non-zero
-      exit.
+    - ``demo=True`` → demo mode (banner + demo run).
+    - ``$DISPATCH_CATALOG_PATH`` set and valid → real-catalog mode.
+    - ``$DISPATCH_CATALOG_PATH`` set but invalid → hard error, non-zero exit.
+    - Neither set, no ``demo`` → resolve canonical default; real-catalog if
+      present, ``[CATALOG ERROR]`` and non-zero exit if absent.
 
     The catalog is loaded **once** per invocation, regardless of how many
     input lines are present.
@@ -348,6 +418,8 @@ def run_batch_dispatch(
         stdin_data: NDJSON string (one JSON object per line) to process.
             Read from ``sys.stdin`` when ``None``.
         out: File-like object for stdout.  Defaults to ``sys.stdout``.
+        demo: When ``True`` activate demo mode unconditionally, ignoring
+            env vars and catalog files.
 
     Returns:
         Exit code: 0 when all lines produced decisions or error records
@@ -357,12 +429,12 @@ def run_batch_dispatch(
     if out is None:
         out = sys.stdout
 
-    catalog_env = os.environ.get("DISPATCH_CATALOG_PATH")
+    mode, catalog_path = _resolve_mode(demo)
 
     # ------------------------------------------------------------------
-    # Demo mode — env var absent
+    # Demo mode — --demo flag passed
     # ------------------------------------------------------------------
-    if not catalog_env:
+    if mode == "demo":
         from claude_wayfinder.cli import run_demo  # noqa: PLC0415
 
         print(_DEMO_BANNER, file=out)
@@ -370,9 +442,25 @@ def run_batch_dispatch(
         return run_demo(out=out)
 
     # ------------------------------------------------------------------
-    # Real-catalog mode — env var present
+    # Error mode — no env var and canonical catalog absent
     # ------------------------------------------------------------------
-    catalog_path = Path(catalog_env)
+    if mode == "error":
+        banner = (
+            f"{_CATALOG_ERROR_PREFIX} No catalog configured. "
+            f"Expected at {catalog_path} "
+            "(canonical default: $CLAUDE_HOME/state/dispatch-catalog.json "
+            "or ~/.claude/state/dispatch-catalog.json). "
+            "Run `claude-wayfinder catalog build` or set "
+            "$DISPATCH_CATALOG_PATH to point to a valid catalog, "
+            "or pass --demo to run bundled fixtures."
+        )
+        print(banner, file=sys.stderr)
+        return 2
+
+    # ------------------------------------------------------------------
+    # Real-catalog mode — catalog_path is resolved
+    # ------------------------------------------------------------------
+    assert catalog_path is not None  # mode == "real" guarantees this
 
     error_detail = _validate_catalog_json(catalog_path)
     if error_detail is not None:
@@ -545,22 +633,24 @@ def run_batch_dispatch(
 def run_dispatch(
     stdin_data: str | None = None,
     out: Any = None,
+    demo: bool = False,
 ) -> int:
     """Run the dispatch subcommand with mode-detection.
 
-    Mode is determined by the presence/absence of ``$DISPATCH_CATALOG_PATH``:
+    Mode is determined by ``_resolve_mode`` (Issue #284):
 
-    - **Absent** → demo mode: print banner + run bundled demo fixtures.
-    - **Present, valid** → real-catalog mode: call
-      ``claude_wayfinder.match.main()`` in-process with redirected streams
-      and return the decision JSON verbatim.
-    - **Present, invalid** → hard error: propagate ``[CATALOG ERROR]``
-      and return non-zero exit code.
+    - ``demo=True`` → demo mode: print banner + run bundled demo fixtures.
+    - ``$DISPATCH_CATALOG_PATH`` set, valid → real-catalog mode.
+    - ``$DISPATCH_CATALOG_PATH`` set, invalid → hard error, non-zero exit.
+    - Neither set, no ``demo`` → resolve canonical default; real-catalog if
+      present, ``[CATALOG ERROR]`` and non-zero exit if absent.
 
     Args:
         stdin_data: JSON string with dispatch context (5-field shape from
             design § 2.2).  Read from ``sys.stdin`` when ``None``.
         out: File-like object for stdout.  Defaults to ``sys.stdout``.
+        demo: When ``True`` activate demo mode unconditionally, ignoring
+            env vars and catalog files.
 
     Returns:
         Exit code: 0 on success, non-zero on error.
@@ -568,12 +658,12 @@ def run_dispatch(
     if out is None:
         out = sys.stdout
 
-    catalog_env = os.environ.get("DISPATCH_CATALOG_PATH")
+    mode, catalog_path = _resolve_mode(demo)
 
     # ------------------------------------------------------------------
-    # Demo mode — env var absent
+    # Demo mode — --demo flag passed
     # ------------------------------------------------------------------
-    if not catalog_env:
+    if mode == "demo":
         # Late import to avoid a circular dependency (cli → _dispatch → cli).
         from claude_wayfinder.cli import run_demo  # noqa: PLC0415
 
@@ -582,9 +672,25 @@ def run_dispatch(
         return run_demo(out=out)
 
     # ------------------------------------------------------------------
-    # Real-catalog mode — env var present
+    # Error mode — no env var and canonical catalog absent
     # ------------------------------------------------------------------
-    catalog_path = Path(catalog_env)
+    if mode == "error":
+        banner = (
+            f"{_CATALOG_ERROR_PREFIX} No catalog configured. "
+            f"Expected at {catalog_path} "
+            "(canonical default: $CLAUDE_HOME/state/dispatch-catalog.json "
+            "or ~/.claude/state/dispatch-catalog.json). "
+            "Run `claude-wayfinder catalog build` or set "
+            "$DISPATCH_CATALOG_PATH to point to a valid catalog, "
+            "or pass --demo to run bundled fixtures."
+        )
+        print(banner, file=sys.stderr)
+        return 2
+
+    # ------------------------------------------------------------------
+    # Real-catalog mode — catalog_path is resolved
+    # ------------------------------------------------------------------
+    assert catalog_path is not None  # mode == "real" guarantees this
 
     # Pre-validate so we can emit a meaningful error before spawning a
     # subprocess.  match.py does its own validation too, but returns exit
