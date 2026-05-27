@@ -6,6 +6,34 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`--demo` flag** for `python -m claude_wayfinder dispatch` (and
+  `dispatch --batch`). Passing `--demo` opts into the bundled fixture
+  prompts and ignores any catalog configuration. This is the only way
+  to activate demo mode from Issue #284 onward.
+
+### Changed
+
+- **`dispatch` mode-detection contract** (#284). **Behavior-changing
+  for any caller that relied on "no `$DISPATCH_CATALOG_PATH` → demo
+  mode".** The new contract:
+  - `--demo` passed → demo mode (bundled fixtures, ignores env/catalog).
+  - `$DISPATCH_CATALOG_PATH` set and valid → real-catalog mode
+    (unchanged).
+  - `$DISPATCH_CATALOG_PATH` set but invalid → hard error (unchanged).
+  - Neither set, no `--demo` → resolve canonical default
+    (`$CLAUDE_HOME/state/dispatch-catalog.json` or
+    `~/.claude/state/dispatch-catalog.json`); if it exists →
+    real-catalog mode; if absent → `[CATALOG ERROR]` and exit 2.
+  - **Demo mode is no longer the implicit default.** Callers that
+    depended on the old "no env var → silent demo" path will now see
+    `[CATALOG ERROR]` until they either build a catalog at the
+    canonical path or pass `--demo`.
+  - The internal subprocess entry point
+    (`python -m claude_wayfinder.match`) is unaffected — it retains
+    the Issue #10 fail-loud contract.
+
 ## [0.12.2] - 2026-05-26
 
 Patch release shipping two operator-ergonomics fixes for the

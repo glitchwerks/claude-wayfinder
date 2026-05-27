@@ -2,19 +2,13 @@
 name: dispatch
 description: >
   Mode-aware dispatch skill for the claude-wayfinder deterministic 7-decision
-  matcher. Operates in one of two modes depending on whether
-  $DISPATCH_CATALOG_PATH is set in the environment:
-
-    - Demo mode (env var absent): runs the matcher against bundled demo
-      fixtures and returns decision output for all 7 routing branches.
-      Use this to evaluate the matcher before integrating into your router.
-
-    - Real-catalog mode (env var set to a valid catalog): reads a dispatch
-      context JSON from stdin, runs the matcher against your live catalog,
-      and returns the decision JSON verbatim. Use this in your router agent.
-
-  The mode is implicit — detected by the presence of $DISPATCH_CATALOG_PATH.
-  The caller never passes a mode flag.
+  matcher. Real-catalog mode is the default — the skill reads dispatch context
+  JSON from stdin, runs the matcher against your live catalog, and returns
+  the decision JSON verbatim. Pass --demo to opt into bundled fixtures
+  instead. Catalog path resolution: --catalog-path flag > $DISPATCH_CATALOG_PATH
+  env var > canonical default (~/.claude/state/dispatch-catalog.json). If
+  neither --demo nor a resolvable catalog is present the skill emits a
+  [CATALOG ERROR] and exits non-zero.
 triggers:
   command_prefixes:
     - /dispatch
@@ -23,31 +17,37 @@ triggers:
 # Dispatch Skill
 
 The `/dispatch` skill is a mode-aware wrapper around the
-**claude-wayfinder** deterministic 6-decision matcher.  The active mode is
-determined by the environment — not by any flag the caller supplies.
+**claude-wayfinder** deterministic 7-decision matcher.
 
 ## Modes
 
-### Demo mode (default — no catalog configured)
+### Real-catalog mode (default)
 
-When `$DISPATCH_CATALOG_PATH` is **not** set, the skill runs the matcher
-against bundled demo fixtures.  A `no catalog configured — running in demo
-mode` banner is printed first so the output is clearly labelled.  This
-mode is useful for evaluating the matcher before integrating it into a
-live router.
+The skill reads a dispatch context JSON from stdin, runs the matcher
+against your live catalog, and returns the decision JSON verbatim. This
+is the default — no flag required. Catalog path resolution:
 
-### Real-catalog mode
+1. `--catalog-path <path>` CLI flag.
+2. `$DISPATCH_CATALOG_PATH` env var.
+3. **Canonical default** — `$CLAUDE_HOME/state/dispatch-catalog.json` or
+   `~/.claude/state/dispatch-catalog.json` (see "Canonical catalog path"
+   below).
 
-When `$DISPATCH_CATALOG_PATH` is set and resolves to a readable, valid
-catalog, the skill reads a dispatch context JSON from stdin, passes it
-to the matcher, and returns the matcher's decision JSON verbatim.
+### Demo mode (`--demo` flag)
 
-**Hard-error guarantee:** If `$DISPATCH_CATALOG_PATH` is set but the path
-is missing, unreadable, or contains invalid JSON, the skill emits a
-`[CATALOG ERROR]` banner on stderr and exits non-zero.  It does **not**
-fall back to demo mode — a broken catalog is surfaced immediately so the
-consumer knows routing is degraded. The banner names the canonical
-default path and the repair hint inline.
+Pass `--demo` to run the matcher against bundled demo fixtures instead
+of the live catalog. Returns decision output for all 7 routing branches
+so you can evaluate the matcher before integrating it into your router.
+`--demo` wins over `--catalog-path` and `$DISPATCH_CATALOG_PATH` — if
+both are present, demo mode runs and the catalog inputs are ignored.
+
+**Hard-error guarantee:** Without `--demo`, if no catalog can be
+resolved (no flag, no env var, no file at the canonical path), or if
+the resolved file is missing/unreadable/malformed, the skill emits a
+`[CATALOG ERROR]` banner on stderr and exits non-zero. It does **not**
+silently fall back to demo mode — a broken or missing catalog is
+surfaced immediately so the consumer knows routing is degraded. The
+banner names the canonical default path and the repair hint inline.
 
 ## Dispatch context JSON (real-catalog mode)
 
@@ -133,8 +133,9 @@ matching plugin version into it.
 
 The live catalog is at **`~/.claude/state/dispatch-catalog.json`** (or
 `$CLAUDE_HOME/state/dispatch-catalog.json` when `$CLAUDE_HOME` is set).
-Set `DISPATCH_CATALOG_PATH` to that path unless you have a specific
-reason to override (e.g. a test fixture). The bundled hooks
+This is the default real-catalog mode resolves to when neither
+`--catalog-path` nor `$DISPATCH_CATALOG_PATH` is supplied. Override only
+for test fixtures or unusual deployments. The bundled hooks
 (`refresh-catalog-on-stale.js`, `check-catalog-health.js`) use the same
 default.
 
@@ -144,14 +145,17 @@ default.
 PY="${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe"   # Windows
 # PY="${CLAUDE_PLUGIN_DATA}/venv/bin/python"          # POSIX
 
-# Demo mode (no catalog configured)
-"$PY" -m claude_wayfinder dispatch
-
-# Real-catalog mode — use the canonical catalog path above
-export DISPATCH_CATALOG_PATH="$HOME/.claude/state/dispatch-catalog.json"   # POSIX
-# $env:DISPATCH_CATALOG_PATH = "$env:USERPROFILE\.claude\state\dispatch-catalog.json"  # PowerShell
+# Real-catalog mode — default; resolves to the canonical catalog
 echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
   | "$PY" -m claude_wayfinder dispatch
+
+# Demo mode — opt in with --demo
+"$PY" -m claude_wayfinder dispatch --demo
+
+# Explicit catalog override (e.g. test fixture)
+export DISPATCH_CATALOG_PATH=/path/to/test-catalog.json   # POSIX
+# $env:DISPATCH_CATALOG_PATH = "C:\path\to\test-catalog.json"  # PowerShell
+echo '{...}' | "$PY" -m claude_wayfinder dispatch
 ```
 
 ## Stale-catalog warning

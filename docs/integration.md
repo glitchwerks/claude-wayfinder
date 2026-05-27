@@ -98,18 +98,36 @@ claude-wayfinder catalog build \
 
 ---
 
-### 2. Configure `$DISPATCH_CATALOG_PATH`
+### 2. Catalog path — canonical default and `$DISPATCH_CATALOG_PATH`
 
-The `/dispatch` skill reads this environment variable to locate your catalog. Without it, the skill runs in demo mode against bundled fixtures — that is not routing your tasks.
+The `/dispatch` skill resolves the catalog path in this order (Issue #284):
+
+1. **`$DISPATCH_CATALOG_PATH`** — if set, used directly (invalid path is a
+   hard error).
+2. **Canonical default** — `$CLAUDE_HOME/state/dispatch-catalog.json` (or
+   `~/.claude/state/dispatch-catalog.json` when `$CLAUDE_HOME` is unset).
+   If the file exists, real-catalog mode activates automatically.
+3. **`[CATALOG ERROR]`** — if neither resolves to an existing file, the
+   skill exits non-zero.  Demo mode is **never** the implicit fallback.
+
+If you build your catalog with `catalog build --out ~/.claude/state/dispatch-catalog.json` (the default output path), the skill picks it up automatically — no env var needed.
+
+To override the path explicitly:
 
 ```bash
-export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
+export DISPATCH_CATALOG_PATH=~/.claude/state/dispatch-catalog.json
 ```
 
-Add this to your shell profile or Claude Code environment configuration so it is available in every session. On PowerShell:
+On PowerShell:
 
 ```powershell
-$env:DISPATCH_CATALOG_PATH = "$env:USERPROFILE\.claude\dispatch-catalog.json"
+$env:DISPATCH_CATALOG_PATH = "$env:USERPROFILE\.claude\state\dispatch-catalog.json"
+```
+
+To run the bundled fixture demos instead of real-catalog routing, pass `--demo` explicitly:
+
+```bash
+python -m claude_wayfinder dispatch --demo
 ```
 
 ---
@@ -179,10 +197,12 @@ Pass the JSON on stdin to `/dispatch`:
 echo '<dispatch-context-json>' | /dispatch
 ```
 
-The skill reads `$DISPATCH_CATALOG_PATH` from the environment to locate your
-catalog. With the env var set and a valid catalog present, it returns the
-matcher's decision JSON on stdout. If `$DISPATCH_CATALOG_PATH` is not set,
-the skill runs in demo mode (bundled fixtures) — that is not routing your task.
+The skill resolves the catalog path automatically: it checks
+`$DISPATCH_CATALOG_PATH` first, then the canonical default
+(`~/.claude/state/dispatch-catalog.json`). With a valid catalog present
+it returns the matcher's decision JSON on stdout. If no catalog is found,
+the skill emits `[CATALOG ERROR]` and exits non-zero — demo mode requires
+passing `--demo` explicitly.
 
 ### Step 3 — Parse the decision JSON
 
@@ -268,15 +288,24 @@ in the session transcript so operators can replay and inspect routing choices.
 
 **Symptom:** The skill emits a `[CATALOG ERROR]` banner on stderr and exits non-zero. The decision JSON is not produced. Routing falls back to LLM judgment.
 
-**Cause — env var not set:** `$DISPATCH_CATALOG_PATH` is absent from the environment. The skill runs in demo mode (bundled fixtures) instead of routing your task. Demo mode prints `no catalog configured — running in demo mode` to stdout.
+**Cause — no catalog at the canonical path and no env var:** Neither
+`$DISPATCH_CATALOG_PATH` nor `$CLAUDE_HOME/state/dispatch-catalog.json`
+(or `~/.claude/state/dispatch-catalog.json`) points to an existing file.
+As of Issue #284, demo mode is **no longer** the implicit fallback — the
+skill emits `[CATALOG ERROR]` and exits non-zero.
 
-Fix: set the env var before starting Claude Code:
+Fix: build a catalog at the canonical default path:
 
 ```bash
-export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
+claude-wayfinder catalog build \
+  --skills-dir ~/.claude/skills \
+  --agents-dir ~/.claude/agents \
+  --out ~/.claude/state/dispatch-catalog.json \
+  --log ~/.claude/state/catalog-generation.log
 ```
 
-Or add it to your shell profile / Claude Code env configuration so it is available in every session.
+Or set `$DISPATCH_CATALOG_PATH` explicitly. To run demo fixtures
+intentionally, pass `--demo` to the dispatch command.
 
 **Cause — env var set but file is missing:** `$DISPATCH_CATALOG_PATH` points to a path that does not exist. The skill pre-validates the path and emits `[CATALOG ERROR] ... file not found at <path>`.
 
