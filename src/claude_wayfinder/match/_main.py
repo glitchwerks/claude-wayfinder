@@ -64,7 +64,10 @@ def main(argv: list[str] | None = None) -> None:
             "file_paths":       ["..."],   # optional
             "agent_mentions":   ["..."],   # optional
             "tool_mentions":    ["..."],   # optional
-            "command_prefix":   null       # optional
+            "command_prefix":   null,      # optional
+            "session_id":       "..."      # optional — fix #294; written
+                                           # verbatim into matcher_decision
+                                           # log entry when present
         }
 
     Output JSON shape (stdout)::

@@ -351,7 +351,9 @@ def dispatch(
         catalog_path: Path to the dispatch catalog JSON file.
         context: Dispatch context dict matching the runtime contract:
             ``{task_description, file_paths?, agent_mentions?,
-            tool_mentions?, command_prefix?}``.
+            tool_mentions?, command_prefix?, session_id?}``.
+            ``session_id`` (fix #294) is written verbatim into the
+            ``matcher_decision`` log entry when supplied.
 
     Returns:
         Parsed decision dict with keys: ``decision``, ``confidence``,

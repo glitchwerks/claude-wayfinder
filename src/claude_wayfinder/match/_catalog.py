@@ -189,7 +189,9 @@ def _write_log_entry(
     immediately without writing or emitting any message.
 
     Args:
-        input_dict: The parsed dispatch context (stdin JSON).
+        input_dict: The parsed dispatch context (stdin JSON).  When
+            this dict includes a ``session_id`` key, that value is used
+            verbatim in the log entry (highest precedence — fix #294).
         output_dict: The matcher decision (stdout JSON).
         catalog_hash: SHA-256 digest of the catalog used, from
             ``_compute_catalog_hash``.
@@ -201,10 +203,20 @@ def _write_log_entry(
     """
     if log_path is None:
         return
+    # session_id precedence (fix #294):
+    #   1. Caller-supplied value in input_dict["session_id"] — the router
+    #      passes this from the live Claude Code session context.
+    #   2. CLAUDE_SESSION_ID env var — legacy / direct-invocation path.
+    #   3. Empty string — preserves pre-fix behavior when nothing provides it.
+    session_id: str = (
+        input_dict.get("session_id")
+        or os.environ.get("CLAUDE_SESSION_ID")
+        or ""
+    )
     entry: dict[str, Any] = {
         "type": "matcher_decision",
         "ts": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
-        "session_id": os.environ.get("CLAUDE_SESSION_ID", ""),
+        "session_id": session_id,
         "input": input_dict,
         "output": output_dict,
         "catalog_hash": catalog_hash,

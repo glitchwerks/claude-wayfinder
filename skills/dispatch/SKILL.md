@@ -51,8 +51,8 @@ banner names the canonical default path and the repair hint inline.
 
 ## Dispatch context JSON (real-catalog mode)
 
-The consumer's router agent must compose a 5-field JSON object and pass
-it on stdin:
+The consumer's router agent must compose a JSON object and pass it on
+stdin. `task_description` is the only required field:
 
 ```json
 {
@@ -60,12 +60,21 @@ it on stdin:
   "file_paths": ["..."],
   "agent_mentions": ["..."],
   "tool_mentions": ["..."],
-  "command_prefix": "..."
+  "command_prefix": "...",
+  "session_id": "..."
 }
 ```
 
 All fields except `task_description` are optional; omit or pass `null`
 for fields that are not applicable.
+
+`session_id` (optional string, added in fix #294) — the Claude Code
+session identifier for the calling session. When present, this value is
+written verbatim into the `matcher_decision` log entry, enabling
+per-session attribution in the dispatch log. When absent, the matcher
+falls back to the `CLAUDE_SESSION_ID` environment variable, then to an
+empty string. Router agents should populate this field from their session
+context so log entries carry accurate session attribution.
 
 ## Output schema (both modes)
 
