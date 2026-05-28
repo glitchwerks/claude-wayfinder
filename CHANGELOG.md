@@ -6,6 +6,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`path_globs_excluded` per-path-subtractive semantics** (#287).
+  Previously, if **any** input path matched an excluded glob the entire
+  agent's score was zeroed (hard-exclude).  Under the new semantics, a
+  matching path simply contributes **0** to that agent's path score;
+  other paths in the same input are unaffected.  An agent with five
+  input paths, one of which is excluded, now scores on the remaining
+  four.  Catalogue authors who need hard-exclude ("never route if ANY
+  docs/ path is present") can use a follow-up field in a future release.
+
 ### Added
 
 - **`--demo` flag** for `python -m claude_wayfinder dispatch` (and

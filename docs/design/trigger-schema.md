@@ -226,7 +226,7 @@ sort order); the flag on each entry is authoritative for that entry.
 | `triggers.command_prefixes`         | `list[str]`            | no       | `features.command_prefix` (single value, exact, case-insensitive)                | `[]`               |
 | `triggers.agent_mentions`           | `list[str]`            | no       | `features.agent_mentions` (set, exact, case-insensitive)                         | `[]`               |
 | `triggers.path_globs`               | `list[str]`            | no       | each glob matched via `fnmatch.fnmatch` against any element of `features.paths`  | `[]`               |
-| `triggers.path_globs_excluded`      | `list[str]`            | no       | each glob matched via `fnmatch.fnmatch` against any element of `features.paths`; if any matches, the entry is dropped from the scored pool before additive scoring. Exclusion wins over `path_globs`. | `[]` |
+| `triggers.path_globs_excluded`      | `list[str]`            | no       | each glob matched via `fnmatch.fnmatch` against elements of `features.paths`; a path matching any excluded glob contributes 0 to this agent's path score — other paths in the same input are unaffected (#287). | `[]` |
 | `triggers.keywords`                 | `list[{term, weight}]` | no       | `features.keywords` (set, case-insensitive exact token)                          | `[]`               |
 | `triggers.keyword_groups`           | `list[{slots: list, weight: float}]` | no | each slot matched against `features.keywords`; group fires only when **every** slot has ≥ 1 matching term. See § 2i for shape, § 4 for matching rules, § 6 for validation. | `[]` |
 | `triggers.tool_mentions`            | `list[str]`            | no       | `features.tool_mentions` (set, exact, case-insensitive)                          | `[]`               |
@@ -557,24 +557,29 @@ Authoritative pseudocode: `docs/superpowers/specs/2026-05-18-and-groups-design.m
 
 ---
 
-## 4a. `path_globs_excluded` — path-glob exclusion
+## 4a. `path_globs_excluded` — per-path-subtractive exclusion (#287)
 
 `path_globs_excluded` is the path-level analog of `excludes`. Where `excludes` operates on
-keyword tokens, `path_globs_excluded` operates on file paths. If **any** glob in the list
-matches **any** candidate file path, the entire entry is **dropped from the scored pool
-before additive scoring begins** — not scored to `0.0` and left in, but removed entirely.
-This means an entry excluded by `path_globs_excluded` contributes nothing to an
-`ambiguous` decision, score ties, or alternative lists.
+keyword tokens, `path_globs_excluded` operates on file paths. A path matching any glob in
+the list contributes **0** to that agent's path score. Other paths in the same input are
+unaffected — their positive contributions remain intact. (#287)
 
-**Exclusion wins over inclusion.** An entry with both `path_globs: ["**/*.md"]` and
-`path_globs_excluded: ["agents/**/*.md"]` will be dropped for `agents/foo.md` even
-though the broad `**/*.md` glob would otherwise match it.
+**Semantics:** per-path-subtractive. Each path is evaluated independently against the
+exclusion globs. A matching path is skipped when tallying glob hits; a non-matching path
+scores normally. This is distinct from a hard-exclude: an agent with five input paths, one
+of which is excluded, still scores on the remaining four.
+
+**Exclusion wins over inclusion per path.** An entry with both `path_globs: ["**/*.md"]`
+and `path_globs_excluded: ["agents/**/*.md"]` will assign zero path-score contribution to
+`agents/foo.md` even though the broad `**/*.md` glob would otherwise match it. Paths that
+do not match any exclusion glob are unaffected.
 
 **Use case: "applies everywhere except X" patterns.** The canonical use-case is an
 agent with broad path coverage that must not activate for a specific sub-tree. Instead
 of omitting that sub-tree from `path_globs` (fragile; must be re-verified when globs
 change), authors can add the sub-tree to `path_globs_excluded` and get explicit,
-auditable, self-documenting exclusion.
+auditable, self-documenting exclusion. Other files in the same task (outside the excluded
+sub-tree) still contribute to the score normally.
 
 ```yaml
 # doc-writer: catches broad **/*.md but excludes harness files
