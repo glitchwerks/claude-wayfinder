@@ -102,9 +102,9 @@ For the full field-level reference and the decision-composition rules, see [`doc
 
 ### Try the demo without integrating
 
-`/dispatch` ships with bundled demo fixtures (a small pre-built catalog of sample agents and skills) so you can see all seven decision branches in action without touching your own agents or building a catalog. This is called **demo mode** — the matcher runs against the bundled fixtures, not your live session traffic. It does not intercept your session or route your tasks automatically. After running it, you decide whether to wire the matcher into your own router agent.
+`/dispatch` ships with bundled demo fixtures (a small pre-built catalog of sample agents and skills) so you can see all seven decision branches in action without touching your own agents or building a catalog. Pass `--demo` to activate this mode — the matcher runs against the bundled fixtures, not your live session traffic. It does not intercept your session or route your tasks automatically. After running it, you decide whether to wire the matcher into your own router agent.
 
-When invoked in demo mode, the skill runs the matcher against the bundled demo catalog and returns all seven decision branches with inputs, decisions, confidence scores, and rationale. A single decision block looks like this:
+When invoked with `--demo`, the skill runs the matcher against the bundled demo catalog and returns all seven decision branches with inputs, decisions, confidence scores, and rationale. A single decision block looks like this:
 
 ```
 # illustrative — agent names and rationale text will differ in your catalog
@@ -120,9 +120,9 @@ When invoked in demo mode, the skill runs the matcher against the bundled demo c
 
 **How you know it's working:** the decision field contains one of the seven typed strings; confidence is a float between 0 and 1; rationale names the specific triggers that fired. An `ask_user` result is valid in the contract but reserved in v0.1 — the matcher will not produce it against real input.
 
-#### Difference between `/dispatch` and `python -m claude_wayfinder demo`
+#### Difference between `/dispatch --demo` and `python -m claude_wayfinder demo`
 
-| | `/dispatch` (in Claude Code) | `python -m claude_wayfinder demo` (CLI) |
+| | `/dispatch --demo` (in Claude Code) | `python -m claude_wayfinder demo` (CLI) |
 |---|---|---|
 | Catalog | Bundled demo fixtures | Bundled demo fixtures |
 | Invocation | Skill triggered by router agent | Direct CLI invocation |
@@ -133,7 +133,7 @@ Both run the same matcher against the same bundled fixtures. The CLI path is the
 
 ### Integrate into your router
 
-Once you have seen demo mode and want the matcher routing your real tasks, you need to build a **real catalog** (a `dispatch-catalog.json` generated from your own agent and skill frontmatter) and point the plugin at it via an environment variable. Until `$DISPATCH_CATALOG_PATH` is set, `/dispatch` stays in demo mode — no real routing happens.
+Once you have seen demo mode and want the matcher routing your real tasks, you need to build a **real catalog** (a `dispatch-catalog.json` generated from your own agent and skill frontmatter). By default, `/dispatch` resolves the catalog from the canonical path (`~/.claude/state/dispatch-catalog.json`, or `$CLAUDE_HOME/state/dispatch-catalog.json` when `$CLAUDE_HOME` is set) — real routing is the default behavior. If no catalog exists at that path, the skill emits `[CATALOG ERROR]` and exits non-zero. Set `$DISPATCH_CATALOG_PATH` to override the canonical default with a custom path.
 
 **Feature density** — the number of populated input dimensions in a dispatch context — determines whether the matcher attempts scoring. Provide at least two dimensions (for example, a `task_description` plus `file_paths`) or the matcher returns `needs_more_detail` without scoring.
 
@@ -151,7 +151,7 @@ Minimum path from zero to a working real-catalog `/dispatch`:
 
 Each skill or agent you want the matcher to consider needs a `triggers.yml` sidecar declaring at least one of: `keywords`, `path_globs`, `agent_names`, `tool_names`, or `command_prefixes`. See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md) for field definitions and worked examples of adding triggers to existing skills and agents.
 
-If you do not have any trigger frontmatter yet, skip ahead and run `/dispatch` in demo mode — it runs against bundled fixtures so you can see all seven decision branches in action without a real catalog. Come back to this step once you have added triggers.
+If you do not have any trigger frontmatter yet, skip ahead and run `/dispatch --demo` — it runs against bundled fixtures so you can see all seven decision branches in action without a real catalog. Come back to this step once you have added triggers.
 
 **3. Build a catalog** — run this console script once (and again whenever your skill or agent frontmatter changes):
 
@@ -165,13 +165,13 @@ claude-wayfinder catalog build \
 
 On success, this writes `~/.claude/dispatch-catalog.json` — a JSON file listing every skill and agent entry the matcher will score.
 
-**4. Set `$DISPATCH_CATALOG_PATH`** — in your shell profile:
+**4. (Optional) Set `$DISPATCH_CATALOG_PATH`** — if your catalog lives somewhere other than the canonical default (`~/.claude/state/dispatch-catalog.json`), point to it explicitly in your shell profile:
 
 ```bash
 export DISPATCH_CATALOG_PATH=~/.claude/dispatch-catalog.json
 ```
 
-Without this env var, `/dispatch` runs in demo mode against bundled fixtures and does not route your tasks.
+Without this env var, `/dispatch` resolves to the canonical default (`~/.claude/state/dispatch-catalog.json`). If that file exists, real routing proceeds. If it does not, the skill emits `[CATALOG ERROR]` — build the catalog first (step 3) or pass `--demo` to run against bundled fixtures instead.
 
 **5. Add `Skill` to your router agent's `tools:` frontmatter** — `/dispatch` is invoked as a skill, so the router must have `Skill` in its tool list. See [`docs/integration.md`](docs/integration.md) for the full router-agent prompt snippet and catalog refresh patterns.
 
@@ -232,7 +232,7 @@ The full CLI surface is documented via `python -m claude_wayfinder --help`. Key 
 
 The plugin ships two skills usable inside Claude Code:
 
-- `claude-wayfinder:dispatch` — runs the matcher in demo mode (bundled fixtures) or against your live catalog when `$DISPATCH_CATALOG_PATH` is set. See the [Try the demo](#try-the-demo-without-integrating) section above.
+- `claude-wayfinder:dispatch` — runs the matcher against your live catalog by default (canonical path: `~/.claude/state/dispatch-catalog.json`; override with `$DISPATCH_CATALOG_PATH`). Pass `--demo` to run against bundled fixtures instead. Emits `[CATALOG ERROR]` and exits non-zero if no catalog is found and `--demo` is not passed. See the [Try the demo](#try-the-demo-without-integrating) section above.
 - `claude-wayfinder:dispatch-authoring` — matcher-aware authoring and troubleshooting knowledge for the full dispatch authoring surface (trigger frontmatter, applicable_agents, applicable_skills, routable). Covers the seven-decision ladder, scoring math, weight ladder, path-glob footguns, conflict-pair detection, and the audit-catalog CLI pointer. See [`docs/dispatch-authoring-guide.md`](docs/dispatch-authoring-guide.md).
 
 ## Dispatch overrides
