@@ -19,6 +19,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Platform agents `Explore` and `Plan` are now in-package fixtures**
+  (#286). `claude_wayfinder/fixtures/builtin/` ships `Explore.yml` and
+  `Plan.yml` so a fresh install includes both agents in the dispatch
+  catalog with no operator configuration. The builtin-agents resolver now
+  follows a three-level cascade: explicit `--builtin-agents-dir` flag →
+  user directory `~/.claude/triggers/builtin/` (when it exists on disk)
+  → bundled fixtures. See `docs/schema.md §8` for trigger weights and
+  the conflict-avoidance note on the bare `plan` keyword.
+
 - **`--demo` flag** for `python -m claude_wayfinder dispatch` (and
   `dispatch --batch`). Passing `--demo` opts into the bundled fixture
   prompts and ignores any catalog configuration. This is the only way

@@ -1,0 +1,26 @@
+name: Explore
+kind: agent
+description: >
+  Read-only search agent for navigating codebases. Use when the task
+  is to locate files, find code patterns, or search across the
+  repository without making changes — file-pattern matching, grep-style
+  content search, and directory exploration. Do NOT use for review,
+  audit, or analysis tasks that require understanding behaviour.
+min_claude_version: "2.1"
+triggers:
+  keywords:
+    - { term: "locate", weight: 1.0 }
+    - { term: "find_files", weight: 1.0 }
+    - { term: "where_is", weight: 1.0 }
+    - { term: "grep", weight: 0.5 }
+    - { term: "search_for", weight: 0.5 }
+    - { term: "find", weight: 0.25 }
+    - { term: "search", weight: 0.25 }
+    - { term: "codebase", weight: 0.25 }
+    - { term: "explore", weight: 0.5 }
+  path_globs: []
+  command_prefixes: []
+  agent_mentions: ["Explore"]
+  tool_mentions: []
+  excludes: []
+applicable_skills: ["*"]

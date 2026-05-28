@@ -1,0 +1,26 @@
+name: Plan
+kind: agent
+description: >
+  Implementation strategy agent. Use when the task is to design an
+  approach, produce a step-by-step plan, evaluate architectural
+  trade-offs, or identify the critical files and touch-points for a
+  change — without writing production code.
+min_claude_version: "2.1"
+triggers:
+  keywords:
+    - { term: "design_strategy", weight: 1.0 }
+    - { term: "implementation_plan", weight: 1.0 }
+    - { term: "architect", weight: 0.5 }
+    - { term: "strategy", weight: 1.0 }
+    - { term: "design", weight: 0.5 }
+    - { term: "architecture", weight: 0.5 }
+    - { term: "approach", weight: 0.5 }
+    - { term: "tradeoffs", weight: 0.5 }
+    - { term: "outline", weight: 0.5 }
+    - { term: "breakdown", weight: 0.25 }
+  path_globs: []
+  command_prefixes: []
+  agent_mentions: ["Plan"]
+  tool_mentions: []
+  excludes: []
+applicable_skills: ["*"]

@@ -505,3 +505,60 @@ Key points illustrated by this example:
 - `python` is a skill; it has `applicable_agents` (not `applicable_skills`) and no `routable` field.
 - `superpowers:brainstorming` has `source: "plugin-override"` with a command-prefix trigger and `applicable_agents: ["*"]`.
 - `debugger` has `source: "project"` — it was scanned from the repo's `.claude/agents/` directory and overrides any user-global entry with the same name.
+
+---
+
+## 8. Platform agents (Explore and Plan)
+
+Claude Code ships two built-in agents, `Explore` and `Plan`, that can be
+invoked by the router as `delegate` targets alongside user-authored agents.
+Unlike owned or project agents, they have no backing `.md` file in `agents/`
+— their trigger configuration is provided by sidecar files. See §2h for the
+`source="builtin"` source value and the `min_claude_version` / `max_claude_version`
+version-pinning requirements.
+
+### In-package fixtures (Issue #286)
+
+`claude_wayfinder` ships `Explore.yml` and `Plan.yml` as **in-package fixtures**
+at `claude_wayfinder/fixtures/builtin/`. These files are the default builtin-
+agent source on a fresh install, so platform agents appear in the catalog
+automatically without any operator configuration.
+
+The resolver follows a **three-level cascade** (implemented in
+`build_catalog._discover._resolve_catalog_build_defaults`):
+
+1. **Explicit `--builtin-agents-dir` argument** — always wins.
+2. **User directory `~/.claude/triggers/builtin/`** (or `$CLAUDE_HOME/triggers/builtin/`)
+   when it exists on disk — the operator has placed custom sidecars there.
+3. **Bundled in-package fixtures** — `claude_wayfinder/fixtures/builtin/` — used
+   when neither of the above is available.
+
+Operators who want to override the bundled trigger weights (e.g. to increase
+`locate` to weight `1.0` after observing calibration data) can create
+`~/.claude/triggers/builtin/Explore.yml` with their own content. The user
+directory takes precedence over the bundled defaults once it exists.
+
+### Bundled trigger weights
+
+The bundled fixtures ship a reasonable starting set of trigger weights
+calibrated against code-recon and strategy prompts. These are intentionally
+conservative first-guess values; the calibration note in Issue #286 says
+"ship a reasonable starting set; calibration can come later from telemetry."
+
+**Explore** — read-only code reconnaissance:
+- `locate: 1.0`, `find_files: 1.0`, `where_is: 1.0` (primary signals)
+- `grep: 0.5`, `search_for: 0.5` (secondary signals)
+- `find: 0.25`, `search: 0.25`, `codebase: 0.25`, `explore: 0.5`
+- `agent_mentions: ["Explore"]` — explicit `@Explore` routes immediately
+
+**Plan** — architecture and strategy design:
+- `design_strategy: 1.0`, `implementation_plan: 1.0`, `strategy: 1.0` (primary)
+- `architect: 0.5`, `design: 0.5`, `architecture: 0.5`, `approach: 0.5`,
+  `tradeoffs: 0.5`, `outline: 0.5`
+- `breakdown: 0.25`
+- `agent_mentions: ["Plan"]` — explicit `@Plan` routes immediately
+
+Note: `plan` (the bare word) is intentionally absent from Plan's keywords to
+avoid conflict with the `project-planner` agent, which owns `plan: 1.0`. The
+`@Plan` agent mention is the primary routing signal for the built-in Plan agent;
+strategy/architecture keywords are the secondary signals.
