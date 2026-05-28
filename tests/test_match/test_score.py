@@ -3,7 +3,7 @@
 Covers:
 - Per-entry scoring rules (command_prefix, agent_mention, excludes,
   path_glob, keyword_weight, tool_mention, score_cap)
-- path_globs_excluded: path-glob-based exclusion (issue #24)
+- path_globs_excluded: per-path-subtractive exclusion (issue #24, #287)
 - General-purpose / routable=False exclusion from agent pool
 - Feature density gate (needs_more_detail threshold)
 - Issue #425 keyword-multiplier regression (multiplier raised 0.3→0.5)
@@ -432,24 +432,25 @@ class TestIssue425KeywordMultiplier:
 
 
 # ===========================================================================
-# Issue #24: path_globs_excluded — path-glob-based exclusion
+# Issue #24 / #287: path_globs_excluded — per-path-subtractive exclusion
 # ===========================================================================
 
 
 class TestPathGlobsExcluded:
-    """path_globs_excluded drops an entry from scoring when any glob matches.
+    """path_globs_excluded uses per-path-subtractive semantics (#287).
 
-    Exclusion takes precedence over path_globs inclusion — an entry
-    that matches both path_globs AND path_globs_excluded is dropped.
-    Issue #24.
+    An excluded path contributes 0 to the agent's path score.  Other
+    paths in the same input are unaffected — they still contribute
+    normally.  Issue #24 (original field), #287 (semantic change).
     """
 
-    def test_excluded_path_drops_entry(self) -> None:
-        """Entry with matching path_globs_excluded pattern is dropped.
+    def test_excluded_path_contributes_zero(self) -> None:
+        """A path matching path_globs_excluded contributes 0 to score.
 
-        An agent that matches ``agents/**/*.py`` via path_globs but has
-        ``agents/*.py`` in path_globs_excluded must score 0.0 when the
-        candidate path is ``agents/foo.py``.
+        An agent with ``path_globs: ['**/*.py']`` and
+        ``path_globs_excluded: ['agents/**/*.py', 'agents/*.py']`` must
+        score 0.0 when the only input path is ``agents/foo.py`` —
+        excluded path contributes nothing, non-excluded paths are absent.
 
         Uses the raw ``score()`` function to isolate matcher logic from
         the decision layer.
@@ -479,8 +480,9 @@ class TestPathGlobsExcluded:
         )
         raw_score = mod.score(entry, features)
         assert raw_score == 0.0, (
-            f"score() returned {raw_score!r} for an excluded path — "
-            "path_globs_excluded must drop the entry to 0.0 (#24)"
+            f"score() returned {raw_score!r} for an excluded-only input — "
+            "excluded path must contribute 0; with no other paths score "
+            "should be 0.0 (#287)"
         )
 
     def test_non_excluded_path_is_scored_normally(self) -> None:
@@ -520,12 +522,16 @@ class TestPathGlobsExcluded:
             "does NOT match the candidate path (#24)"
         )
 
-    def test_exclusion_wins_over_inclusion(self) -> None:
-        """Exclusion wins even when path_globs would fully match.
+    def test_excluded_only_path_yields_zero_score(self) -> None:
+        """An entry whose only input path is excluded scores 0.0.
 
         An entry with ``path_globs: ['**/*']`` (match everything) and
-        ``path_globs_excluded: ['secret.py']`` must be dropped when the
-        candidate is ``secret.py``, despite the broad inclusion glob.
+        ``path_globs_excluded: ['secret.py']`` must score 0.0 when the
+        only candidate is ``secret.py`` — the excluded path contributes
+        nothing, leaving the total at 0.0.
+
+        This is the per-path-subtractive equivalent of the old
+        "exclusion wins over inclusion" hard-exclude test (#287).
         """
         mod = _match_mod
 
@@ -552,8 +558,9 @@ class TestPathGlobsExcluded:
         )
         raw_score = mod.score(entry, features)
         assert raw_score == 0.0, (
-            f"score() returned {raw_score!r} for an excluded path — "
-            "exclusion must win over broad path_globs inclusion (#24)"
+            f"score() returned {raw_score!r} for an excluded-only path — "
+            "excluded path contributes 0; with no other paths total "
+            "must be 0.0 (#287)"
         )
 
     def test_empty_path_globs_excluded_has_no_effect(self) -> None:
@@ -589,4 +596,179 @@ class TestPathGlobsExcluded:
         assert raw_score == pytest.approx(0.4, abs=1e-6), (
             f"score() returned {raw_score!r} — "
             "empty path_globs_excluded must not affect scoring (#24)"
+        )
+
+
+# ===========================================================================
+# Issue #287: per-path-subtractive semantics for path_globs_excluded
+# ===========================================================================
+
+
+class TestPathGlobsExcludedPerPathSubtractive:
+    """path_globs_excluded is per-path-subtractive, not a hard-exclude (#287).
+
+    An excluded path contributes 0 to this agent's path score.
+    Other paths in the same input are unaffected — positive contributions
+    from non-excluded paths remain intact.
+
+    The old hard-exclude zeroed the whole agent when ANY path matched an
+    excluded glob.  The new semantic only zeroes the contribution of the
+    matched path; other paths continue to score normally.
+    """
+
+    def test_mixed_paths_excluded_path_does_not_zero_agent(self) -> None:
+        """Excluded path contributes 0; other paths still raise the score.
+
+        An agent with ``path_globs: ['**/*.py']`` and
+        ``path_globs_excluded: ['agents/*.py']`` presented with two
+        paths — one excluded (``agents/foo.py``) and one not
+        (``src/main.py``) — must score 0.4 (the non-excluded path
+        contributes one matched glob) rather than 0.0 (old hard-exclude).
+
+        This directly tests the per-path-subtractive semantic: the
+        excluded path's contribution is suppressed, but the other path's
+        contribution is unaffected (#287).
+        """
+        mod = _match_mod
+
+        entry = mod.CatalogEntry(
+            name="test-agent",
+            kind="agent",
+            triggers=mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("**/*.py",),
+                keywords=(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                path_globs_excluded=("agents/**/*.py", "agents/*.py"),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = mod.build_features(
+            {
+                "task_description": "update the module",
+                "file_paths": ["agents/foo.py", "src/main.py"],
+            }
+        )
+        raw_score = mod.score(entry, features)
+        # agents/foo.py is excluded → contributes 0.
+        # src/main.py matches **/*.py → contributes 0.4 (one glob).
+        # Total: 0.4, not 0.0 (old hard-exclude would have given 0.0).
+        assert raw_score == pytest.approx(0.4, abs=1e-6), (
+            f"score() returned {raw_score!r} — expected 0.4 from the "
+            "non-excluded path; excluded path must not zero the agent "
+            "under per-path-subtractive semantics (#287)"
+        )
+
+    def test_all_excluded_paths_yields_zero_score(self) -> None:
+        """When all paths are excluded, path contribution is 0.0.
+
+        An agent whose every input path matches an excluded glob gets
+        zero path contribution.  Combined with no keyword/tool matches
+        this yields 0.0 overall — the same observable result as the old
+        hard-exclude, but for a structurally different reason (#287).
+        """
+        mod = _match_mod
+
+        entry = mod.CatalogEntry(
+            name="test-agent",
+            kind="agent",
+            triggers=mod.Triggers(
+                command_prefixes=frozenset(),
+                agent_mentions=frozenset(),
+                path_globs=("**/*.py",),
+                keywords=(),
+                tool_mentions=frozenset(),
+                excludes=frozenset(),
+                path_globs_excluded=("agents/**/*.py", "agents/*.py"),
+            ),
+            applicable_agents=(),
+            applicable_skills=(),
+        )
+        features = mod.build_features(
+            {
+                "task_description": "update the agent",
+                "file_paths": ["agents/foo.py", "agents/bar.py"],
+            }
+        )
+        raw_score = mod.score(entry, features)
+        assert raw_score == pytest.approx(0.0, abs=1e-6), (
+            f"score() returned {raw_score!r} — all paths excluded must "
+            "yield 0.0 path contribution (#287)"
+        )
+
+    def test_issue_287_reproducer_code_writer_wins_with_mixed_paths(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #287 exact reproducer: code-writer must win via delegate.
+
+        Catalog has ``code-writer`` with broad ``**/*.py`` globs and
+        ``path_globs_excluded: ['docs/skills/**/*.md', 'docs/skills/*.md']``.
+        Input has 5 paths: 3 code paths (.py, .yml) and 2 doc paths
+        (one of which matches the excluded glob).
+
+        With OLD hard-exclude semantics, presence of
+        ``docs/skills/link-lint.md`` zeroed code-writer's path score → it
+        dropped to ``self_handle_unaided``.
+
+        With NEW per-path-subtractive semantics, only
+        ``docs/skills/link-lint.md`` contributes 0; the remaining 4 paths
+        (3 code + 1 non-skills doc) each contribute normally → code-writer
+        scores high enough for ``delegate``.
+        """
+        catalog = _catalog(
+            [
+                _make_agent(
+                    "code-writer",
+                    keywords=[
+                        {"term": "implement", "weight": 1.0},
+                        {"term": "issue", "weight": 0.25},
+                        {"term": "integration", "weight": 0.5},
+                    ],
+                    path_globs=[
+                        "**/*.py",
+                        "*.py",
+                        "**/*.yml",
+                        "*.yml",
+                        "**/*.md",
+                        "*.md",
+                    ],
+                    path_globs_excluded=[
+                        "docs/skills/**/*.md",
+                        "docs/skills/*.md",
+                    ],
+                ),
+            ]
+        )
+        stdin_obj = {
+            "task_description": (
+                "Implement issue #211 cross-skill link lint integration"
+            ),
+            "file_paths": [
+                "scripts/lint_skill_links.py",
+                "scripts/tests/test_lint_skill_links.py",
+                "src/lint/core.py",
+                "docs/skills/link-lint.md",
+                "hooks/pre-commit-link-lint.yml",
+            ],
+            "agent_mentions": [],
+            "tool_mentions": [],
+            "command_prefix": None,
+        }
+        result = _run(stdin_obj, catalog, tmp_path=tmp_path)
+        assert result.returncode == 0, (
+            f"matcher exited {result.returncode}:\n{result.stderr}"
+        )
+        output = json.loads(result.stdout)
+        assert output["decision"] == "delegate", (
+            f"expected decision='delegate' but got {output['decision']!r}; "
+            "code-writer must win despite docs/skills/link-lint.md being "
+            "excluded — excluded paths are per-path-subtractive (#287)\n"
+            f"full output: {output}"
+        )
+        assert output.get("agent") == "code-writer", (
+            f"expected agent='code-writer' but got {output.get('agent')!r}; "
+            f"full output: {output}"
         )

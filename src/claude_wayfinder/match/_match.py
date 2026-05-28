@@ -271,18 +271,31 @@ def score(entry: CatalogEntry, features: Features) -> float:
     if any(x in features.keywords for x in t.excludes):
         return 0.0
 
-    # Hard zero: any feature path matches a path_globs_excluded pattern.
-    # Exclusion wins over inclusion — checked before path_globs scoring.
-    if t.path_globs_excluded and features.paths:
-        for excl_glob in t.path_globs_excluded:
-            for path in features.paths:
-                normalised = path.replace("\\", "/")
-                if fnmatch.fnmatch(normalised, excl_glob):
-                    return 0.0
-
     s = 0.0
     # Path glob contributions: 0.4 per matched glob (each counted once).
-    s += 0.4 * _matched_glob_count(entry, features)
+    # Per-path-subtractive semantics (#287): paths matching
+    # path_globs_excluded contribute 0 to path score; other paths are
+    # unaffected.  Build a filtered Features view that excludes those
+    # paths before delegating to _matched_glob_count.
+    if t.path_globs_excluded and features.paths:
+        included_paths = tuple(
+            p for p in features.paths
+            if not any(
+                fnmatch.fnmatch(p.replace("\\", "/"), excl)
+                for excl in t.path_globs_excluded
+            )
+        )
+        filtered = Features(
+            command_prefix=features.command_prefix,
+            agent_mentions=features.agent_mentions,
+            keywords=features.keywords,
+            paths=included_paths,
+            extensions=features.extensions,
+            tool_mentions=features.tool_mentions,
+        )
+        s += 0.4 * _matched_glob_count(entry, filtered)
+    else:
+        s += 0.4 * _matched_glob_count(entry, features)
     # Tool mention contributions: 0.5 per matched tool.
     s += 0.5 * len(
         [t_name for t_name in t.tool_mentions if t_name in features.tool_mentions]
