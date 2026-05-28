@@ -4,7 +4,19 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-05-28
+
+This is the first stable release of `claude-wayfinder`. The deterministic
+7-decision matcher and the dispatch catalog schema are now considered stable
+contracts — consumers can rely on the decision surface, scoring pipeline, and
+catalog fields without expecting breaking changes outside of a future major
+version. The headline change motivating the major-version bump is the
+`dispatch` mode-detection contract overhaul (#284): `--demo` is now required to
+activate fixture mode; the default resolves to the canonical catalog path and
+emits `[CATALOG ERROR]` rather than silently falling back to demo output. This
+release also ships the `Explore` and `Plan` platform agents as in-package
+fixtures (#286) and corrects `path_globs_excluded` to subtractive semantics
+(#287).
 
 ### Fixed
 

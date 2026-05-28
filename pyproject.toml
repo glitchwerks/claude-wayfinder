@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-wayfinder"
-version = "0.12.2"
+version = "1.0.0"
 description = "Helps Claude make deterministic, auditable choices about which agent and skills to use for a given task — replacing prose-scanning agent/skill selection with a typed scoring kernel."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Christopher Beaulieu" }]
 requires-python = ">=3.11"
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
