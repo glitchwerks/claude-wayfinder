@@ -393,7 +393,10 @@ class TestCatalogBuildPluginDiscoveryDefaults:
     flags added in issue #124:
       - ``--plugin-overrides-dir`` → ``${CLAUDE_HOME}/triggers``
       - ``--plugins-dir``          → ``${CLAUDE_HOME}/plugins``
-      - ``--builtin-agents-dir``   → ``${CLAUDE_HOME}/triggers/builtin``
+      - ``--builtin-agents-dir``   → three-level cascade (Issue #286):
+          1. Explicit arg wins.
+          2. ``${CLAUDE_HOME}/triggers/builtin`` when it exists on disk.
+          3. Bundled in-package fixtures fallback.
 
     All three previously defaulted to ``None``, silently disabling Pass 2.5
     (plugin discovery), Pass 2.6 (builtin agents), and trigger-override
@@ -403,12 +406,17 @@ class TestCatalogBuildPluginDiscoveryDefaults:
     def test_plugin_dirs_default_when_claude_home_unset(
         self, tmp_path: Path
     ) -> None:
-        """With ``CLAUDE_HOME`` unset, all three plugin paths default under ``~/.claude``.
+        """With CLAUDE_HOME unset and no user builtin dir, bundled path is returned.
+
+        The user builtin dir (fake_home/.claude/triggers/builtin) does not
+        exist on disk, so the resolver falls back to the in-package fixtures.
+        Only plugin_overrides_dir and plugins_dir default under ~/.claude.
 
         Args:
             tmp_path: Pytest-provided temporary directory used as a fake
                 ``HOME`` so the test is hermetic.
         """
+        import claude_wayfinder.fixtures as _fixtures_pkg
         from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
 
         fake_home = tmp_path / "fake_home"
@@ -436,20 +444,26 @@ class TestCatalogBuildPluginDiscoveryDefaults:
             f"Expected plugins_dir={expected_base / 'plugins'}, "
             f"got {defaults.get('plugins_dir')}"
         )
-        assert defaults["builtin_agents_dir"] == (
-            expected_base / "triggers" / "builtin"
-        ), (
-            f"Expected builtin_agents_dir={expected_base / 'triggers' / 'builtin'}, "
-            f"got {defaults.get('builtin_agents_dir')}"
+        # builtin_agents_dir: user dir does not exist → bundled fallback
+        bundled_dir = Path(_fixtures_pkg.__file__).parent / "builtin"
+        assert defaults["builtin_agents_dir"] == bundled_dir, (
+            f"Expected bundled fallback {bundled_dir}, "
+            f"got {defaults.get('builtin_agents_dir')}. "
+            "Issue #286: resolver must fall back to bundled fixtures when "
+            "user directory is absent."
         )
 
     def test_plugin_dirs_default_when_claude_home_set(self, tmp_path: Path) -> None:
-        """With ``CLAUDE_HOME`` set, all three plugin paths default under ``$CLAUDE_HOME``.
+        """With CLAUDE_HOME set but no user builtin dir, bundled path is returned.
+
+        The CLAUDE_HOME-derived builtin dir does not exist on disk, so the
+        resolver falls back to the in-package fixtures.
 
         Args:
             tmp_path: Pytest-provided temporary directory used as a fake
                 ``CLAUDE_HOME``.
         """
+        import claude_wayfinder.fixtures as _fixtures_pkg
         from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
 
         fake_claude_home = tmp_path / "custom_claude"
@@ -472,11 +486,48 @@ class TestCatalogBuildPluginDiscoveryDefaults:
             f"Expected plugins_dir={fake_claude_home / 'plugins'}, "
             f"got {defaults.get('plugins_dir')}"
         )
-        assert defaults["builtin_agents_dir"] == (
-            fake_claude_home / "triggers" / "builtin"
-        ), (
-            f"Expected builtin_agents_dir={fake_claude_home / 'triggers' / 'builtin'}, "
-            f"got {defaults.get('builtin_agents_dir')}"
+        # builtin_agents_dir: user dir (fake_claude_home/triggers/builtin)
+        # does not exist on disk → bundled fallback
+        bundled_dir = Path(_fixtures_pkg.__file__).parent / "builtin"
+        assert defaults["builtin_agents_dir"] == bundled_dir, (
+            f"Expected bundled fallback {bundled_dir}, "
+            f"got {defaults.get('builtin_agents_dir')}. "
+            "Issue #286: resolver must fall back to bundled fixtures when "
+            "user directory is absent."
+        )
+
+    def test_plugin_dirs_default_when_user_builtin_dir_exists(
+        self, tmp_path: Path
+    ) -> None:
+        """When CLAUDE_HOME builtin dir exists on disk, it is preferred over bundled.
+
+        Creates the user-side builtin directory, confirms the resolver
+        returns it rather than the bundled fallback.
+
+        Args:
+            tmp_path: Pytest-provided temporary directory.
+        """
+        from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
+
+        fake_claude_home = tmp_path / "custom_claude"
+        user_builtin = fake_claude_home / "triggers" / "builtin"
+        user_builtin.mkdir(parents=True)
+
+        with patch.dict(os.environ, {"CLAUDE_HOME": str(fake_claude_home)}):
+            defaults = _resolve_catalog_build_defaults(
+                skills_dir=None,
+                agents_dir=None,
+                out=None,
+                log=None,
+                plugin_overrides_dir=None,
+                plugins_dir=None,
+                builtin_agents_dir=None,
+            )
+
+        assert defaults["builtin_agents_dir"] == user_builtin, (
+            f"Expected user dir {user_builtin}, "
+            f"got {defaults.get('builtin_agents_dir')}. "
+            "User-side builtin dir must take precedence over bundled fallback."
         )
 
     def test_explicit_plugin_overrides_dir_wins_over_default(
@@ -488,6 +539,7 @@ class TestCatalogBuildPluginDiscoveryDefaults:
             tmp_path: Pytest-provided temporary directory; its
                 ``my_triggers`` subdirectory is used as the explicit value.
         """
+        import claude_wayfinder.fixtures as _fixtures_pkg
         from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
 
         explicit_overrides = tmp_path / "my_triggers"
@@ -509,8 +561,11 @@ class TestCatalogBuildPluginDiscoveryDefaults:
         )
         # The other two plugin-discovery dirs should still default.
         assert defaults["plugins_dir"] == fake_claude_home / "plugins"
-        assert defaults["builtin_agents_dir"] == (
-            fake_claude_home / "triggers" / "builtin"
+        # builtin_agents_dir: user dir absent → bundled fallback
+        bundled_dir = Path(_fixtures_pkg.__file__).parent / "builtin"
+        assert defaults["builtin_agents_dir"] == bundled_dir, (
+            f"Expected bundled fallback {bundled_dir}, "
+            f"got {defaults.get('builtin_agents_dir')}"
         )
 
     def test_explicit_plugins_dir_wins_over_default(self, tmp_path: Path) -> None:
@@ -520,6 +575,7 @@ class TestCatalogBuildPluginDiscoveryDefaults:
             tmp_path: Pytest-provided temporary directory; its
                 ``my_plugins`` subdirectory is used as the explicit value.
         """
+        import claude_wayfinder.fixtures as _fixtures_pkg
         from claude_wayfinder.build_catalog import _resolve_catalog_build_defaults
 
         explicit_plugins = tmp_path / "my_plugins"
@@ -540,8 +596,11 @@ class TestCatalogBuildPluginDiscoveryDefaults:
             f"Got {defaults.get('plugins_dir')}"
         )
         assert defaults["plugin_overrides_dir"] == fake_claude_home / "triggers"
-        assert defaults["builtin_agents_dir"] == (
-            fake_claude_home / "triggers" / "builtin"
+        # builtin_agents_dir: user dir absent → bundled fallback
+        bundled_dir = Path(_fixtures_pkg.__file__).parent / "builtin"
+        assert defaults["builtin_agents_dir"] == bundled_dir, (
+            f"Expected bundled fallback {bundled_dir}, "
+            f"got {defaults.get('builtin_agents_dir')}"
         )
 
     def test_explicit_builtin_agents_dir_wins_over_default(

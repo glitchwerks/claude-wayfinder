@@ -572,6 +572,27 @@ def discover_plugin_entries(
 # ---------------------------------------------------------------------------
 
 
+def _bundled_builtin_agents_dir() -> Path:
+    """Return the path to the in-package builtin-agent sidecar fixtures.
+
+    The bundled fixtures live at ``claude_wayfinder/fixtures/builtin/``
+    inside the installed package.  They provide Explore.yml and Plan.yml
+    as a zero-configuration default so a fresh install immediately includes
+    platform agents in the dispatch catalog without requiring the operator
+    to author sidecars manually (Issue #286).
+
+    Returns:
+        Absolute path to the ``fixtures/builtin/`` directory inside the
+        installed ``claude_wayfinder`` package.
+    """
+    # fixtures/ is a sibling of build_catalog/ under claude_wayfinder/.
+    # Path(__file__) → …/claude_wayfinder/build_catalog/_discover.py
+    # .parent → …/claude_wayfinder/build_catalog/
+    # .parent → …/claude_wayfinder/
+    # / "fixtures" / "builtin" → …/claude_wayfinder/fixtures/builtin/
+    return Path(__file__).parent.parent / "fixtures" / "builtin"
+
+
 def _resolve_catalog_build_defaults(
     skills_dir: Path | None,
     agents_dir: Path | None,
@@ -587,6 +608,21 @@ def _resolve_catalog_build_defaults(
     otherwise ``Path.home() / ".claude"``.  Individual args that were supplied
     explicitly (non-None) are returned unchanged; only ``None`` entries are
     filled from the defaults.
+
+    For ``builtin_agents_dir`` the resolution follows a three-level cascade
+    (Issue #286):
+
+    1. **Explicit argument** — an explicitly supplied ``builtin_agents_dir``
+       value is returned unchanged regardless of filesystem state.
+    2. **User directory** — ``<base>/triggers/builtin`` when it exists on
+       disk (the operator has placed custom sidecars there).
+    3. **Bundled fallback** — ``claude_wayfinder/fixtures/builtin/`` inside
+       the installed package, which ships ``Explore.yml`` and ``Plan.yml``
+       so platform agents are available on a fresh install with zero
+       operator configuration.
+
+    All other path args follow a simpler two-level cascade: explicit value
+    wins; absent explicit value falls back to the ``<base>/...`` default.
 
     This helper is the single source of truth for the default-resolution
     logic, called both from :func:`run_catalog_build` and directly by the
@@ -606,7 +642,7 @@ def _resolve_catalog_build_defaults(
         plugins_dir: Explicit ``--plugins-dir`` value, or ``None`` to
             use the default (``<base>/plugins``).
         builtin_agents_dir: Explicit ``--builtin-agents-dir`` value, or
-            ``None`` to use the default (``<base>/triggers/builtin``).
+            ``None`` to trigger the three-level cascade described above.
 
     Returns:
         A dict with keys ``"skills_dir"``, ``"agents_dir"``, ``"out"``,
@@ -620,6 +656,19 @@ def _resolve_catalog_build_defaults(
         base = Path(claude_home_env)
     else:
         base = Path.home() / ".claude"
+
+    # Three-level cascade for builtin_agents_dir (Issue #286):
+    #   1. Explicit arg → use as-is.
+    #   2. User directory exists on disk → use it.
+    #   3. Fallback to in-package bundled fixtures.
+    if builtin_agents_dir is not None:
+        resolved_builtin: Path = builtin_agents_dir
+    else:
+        user_builtin = base / "triggers" / "builtin"
+        if user_builtin.is_dir():
+            resolved_builtin = user_builtin
+        else:
+            resolved_builtin = _bundled_builtin_agents_dir()
 
     return {
         "skills_dir": (
@@ -643,8 +692,5 @@ def _resolve_catalog_build_defaults(
         "plugins_dir": (
             plugins_dir if plugins_dir is not None else base / "plugins"
         ),
-        "builtin_agents_dir": (
-            builtin_agents_dir if builtin_agents_dir is not None
-            else base / "triggers" / "builtin"
-        ),
+        "builtin_agents_dir": resolved_builtin,
     }
