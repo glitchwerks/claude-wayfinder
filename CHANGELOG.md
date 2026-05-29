@@ -4,6 +4,56 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-05-29
+
+Minor release adding auto-population of the matcher's `session_id` field in
+`matcher_decision` log entries. Prior to this release, `session_id` was empty
+on 100% of dispatched decisions because the field had no populated source.
+v1.1.0 ships a three-tier source-of-truth chain (dispatch input JSON →
+`CLAUDE_SESSION_ID` env → PID-keyed session file → `""`) and a new SessionStart
+/ SessionEnd hook pair that writes per-CC-PID session files so the matcher can
+walk its process tree to find the correct session ID even when no env var is
+set. Concurrent Claude Code sessions are safe. Adds `psutil` as a runtime
+dependency (already present in `pyproject.toml` since v1.0.0, now actively
+used by the session-file walker).
+
+Users tracking anthropics/claude-code#59216 (a first-class `CLAUDE_SESSION_ID`
+env var) may be able to drop tier 3 (the PID-keyed file approach) once that
+issue lands — the tier 2 env-var fallback in this release's chain will pick it
+up automatically without any wayfinder update.
+
+### Fixed
+
+- **`session_id` always-empty in `matcher_decision` log entries** (#294,
+  PR #295). The matcher's `session_id` field was `""` on every one of 24k+
+  logged decisions because `CLAUDE_SESSION_ID` was never set in the matcher
+  subprocess environment. Introduces a three-tier resolution chain: dispatch
+  input JSON `session_id` field (tier 1, highest priority) → `CLAUDE_SESSION_ID`
+  env var (tier 2) → `""` sentinel (tier 3 placeholder, replaced by PR #297).
+  Backward-compatible — callers not yet passing `session_id` in dispatch input
+  see no change except the field is now populated when the env var is set.
+  +7 tests.
+
+### Added
+
+- **SessionStart / SessionEnd hooks write per-CC-PID session files; matcher
+  walks process tree to find its CC ancestor** (#296, PR #297). Adds a
+  `SessionStart` hook that writes a small JSON file keyed on the Claude Code
+  process PID (e.g. `~/.claude/state/sessions/<pid>.json`) containing the
+  session ID. The matcher uses `psutil` to walk its own process ancestry until
+  it finds a Claude Code PID, then reads the corresponding session file. This
+  inserts as tier 3 in the chain established by PR #295 (between the env-var
+  tier and the `""` sentinel), so `session_id` is now populated for all
+  dispatch decisions in normal operation. Concurrent Claude Code sessions are
+  safe because each PID maps to exactly one session. `SessionEnd` hook removes
+  the file to avoid unbounded accumulation. Upstream anthropics/claude-code#59216
+  (a first-class `CLAUDE_SESSION_ID` env var) is the long-term alternative —
+  once that lands, users can skip tier 3 and rely on tier 2 alone. +12 tests.
+
+- **`psutil>=5.9` runtime dependency** (already declared in `pyproject.toml`
+  since v1.0.0; this release is its first active consumer — the process-tree
+  walker in the session-file resolver).
+
 ## [1.0.0] - 2026-05-28
 
 This is the first stable release of `claude-wayfinder`. The deterministic
