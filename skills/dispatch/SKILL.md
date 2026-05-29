@@ -68,13 +68,28 @@ stdin. `task_description` is the only required field:
 All fields except `task_description` are optional; omit or pass `null`
 for fields that are not applicable.
 
-`session_id` (optional string, added in fix #294) — the Claude Code
-session identifier for the calling session. When present, this value is
-written verbatim into the `matcher_decision` log entry, enabling
-per-session attribution in the dispatch log. When absent, the matcher
-falls back to the `CLAUDE_SESSION_ID` environment variable, then to an
-empty string. Router agents should populate this field from their session
-context so log entries carry accurate session attribution.
+`session_id` (optional string, added in fix #294, auto-populated in
+#296) — the Claude Code session identifier for the calling session.
+When present, this value is written verbatim into the `matcher_decision`
+log entry, enabling per-session attribution in the dispatch log.
+
+**Auto-population (issue #296):** when `session_id` is absent from the
+input JSON and the `CLAUDE_SESSION_ID` env var is not set, the matcher
+automatically walks its ancestor process chain looking for a PID-keyed
+state file written by the `session-start-record-session` hook. The hook
+fires at SessionStart, captures the CC process's PID and start time
+(`psutil.Process(ppid).create_time()`), and writes
+`~/.claude/state/wayfinder-sessions/<ppid>-<create_time_int>.txt`. The
+matcher finds its own CC ancestor's file and reads the session_id from
+it. The result is cached for the matcher process's lifetime.
+
+**Concurrent-session safety:** each CC session gets a unique file keyed
+by both PID and integer create_time. Two concurrent CC sessions write
+two separate files; the matcher's process-tree walk reaches only its own
+CC ancestor's PID, so there is no cross-contamination. Do **not**
+simplify this to a single shared file — a shared file is broken under
+concurrent sessions (each SessionStart overwrites the prior session's
+ID). The per-file-per-session design is load-bearing.
 
 ## Output schema (both modes)
 
