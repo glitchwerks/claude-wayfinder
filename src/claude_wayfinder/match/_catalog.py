@@ -4,6 +4,14 @@ Handles catalog path resolution, SHA hashing, dispatch log writing,
 and loading the compiled catalog JSON into typed ``CatalogEntry``
 objects.  Also owns the catalog-degraded error banner (``_emit_catalog_error``)
 so callers never need to reach back into ``__init__`` for it.
+
+Session ID resolution (issue #296) uses a four-tier precedence chain:
+  1. Caller-supplied ``session_id`` in the dispatch input JSON.
+  2. ``CLAUDE_SESSION_ID`` env var.
+  3. PID-keyed state file ``~/.claude/state/wayfinder-sessions/<pid>-<ct>.txt``
+     written by the SessionStart hook.  The matcher walks its ancestor
+     process chain to find the file that belongs to its own CC session.
+  4. Empty string (no attribution available).
 """
 
 from __future__ import annotations
@@ -19,6 +27,146 @@ from typing import Any, NoReturn
 
 from claude_wayfinder.match._parse import _parse_triggers
 from claude_wayfinder.match._types import CatalogEntry
+
+# ---------------------------------------------------------------------------
+# Session-ID auto-population via PID-keyed state files (issue #296)
+# ---------------------------------------------------------------------------
+
+#: Directory where SessionStart hook writes per-session PID files.
+#: Overridden by tests via ``patch("claude_wayfinder.match._catalog._WAYFINDER_SESSION_DIR", …)``.
+_WAYFINDER_SESSION_DIR: Path = (
+    Path(os.environ.get("HOME") or os.environ.get("USERPROFILE") or "~").expanduser()
+    / ".claude"
+    / "state"
+    / "wayfinder-sessions"
+)
+
+#: Module-level cache for the resolved tier-3 session_id.  ``None`` means
+#: "not yet resolved"; ``""`` means "resolved but nothing found".
+#: Set to ``None`` between tests via ``_reset_session_id_cache()``.
+_SESSION_ID_CACHE: str | None = None
+
+
+def _resolve_session_id_from_pidfile() -> str:
+    """Walk this process's ancestor chain looking for a PID-keyed session file.
+
+    Each ancestor's ``<pid>-<int(create_time)>.txt`` is looked up in
+    ``_WAYFINDER_SESSION_DIR``.  The first file whose PID and integer
+    create_time both match the live ancestor is read and returned.
+
+    Files whose PID no longer appears in ``psutil.pids()`` are deleted
+    opportunistically (orphan prune).
+
+    On ANY error (psutil unavailable, permission denied, file I/O error)
+    the function silently returns ``""`` — attribution lookup must never
+    crash a log write.
+
+    Returns:
+        The session_id string from the matched state file, or ``""``
+        if no match is found or any error occurs.
+    """
+    # Broad guard: this is logging infra — never let it crash the caller.
+    try:
+        import psutil  # noqa: PLC0415 — intentional late import for fault isolation
+
+        state_dir = _WAYFINDER_SESSION_DIR
+        if not state_dir.is_dir():
+            return ""
+
+        live_pids: set[int] | None = None  # lazy-load once for orphan prune
+
+        for ancestor in psutil.Process().parents():
+            ancestor_pid = ancestor.pid
+            try:
+                ancestor_ct = int(ancestor.create_time())
+            except Exception:
+                continue
+
+            expected_file = state_dir / f"{ancestor_pid}-{ancestor_ct}.txt"
+            if expected_file.exists():
+                try:
+                    return expected_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    continue
+
+            # Opportunistic orphan prune: if a file exists for this PID with
+            # a *different* create_time, and the PID is dead, remove it.
+            if live_pids is None:
+                try:
+                    live_pids = set(psutil.pids())
+                except Exception:
+                    live_pids = set()
+
+            for candidate in state_dir.glob(f"{ancestor_pid}-*.txt"):
+                if candidate != expected_file and ancestor_pid not in live_pids:
+                    try:
+                        candidate.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        # Prune files for fully dead PIDs (not in the ancestor chain at all).
+        if live_pids is None:
+            try:
+                live_pids = set(psutil.pids())
+            except Exception:
+                live_pids = set()
+
+        for state_file in state_dir.iterdir():
+            if not state_file.suffix == ".txt":
+                continue
+            try:
+                file_pid = int(state_file.stem.split("-")[0])
+            except (ValueError, IndexError):
+                continue
+            if file_pid not in live_pids:
+                try:
+                    state_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    except Exception:
+        # Any error in psutil or I/O — silently fall through to tier 4.
+        pass
+
+    return ""
+
+
+def _resolve_session_id(input_dict: dict[str, Any]) -> str:
+    """Return the best available session_id using the four-tier chain.
+
+    Precedence:
+      1. ``session_id`` key in ``input_dict`` (caller-supplied).
+      2. ``CLAUDE_SESSION_ID`` env var.
+      3. PID-keyed state file walk (``_resolve_session_id_from_pidfile``).
+         Result is cached for the matcher process's lifetime.
+      4. ``""`` — no attribution available.
+
+    Args:
+        input_dict: The parsed dispatch context (stdin JSON).
+
+    Returns:
+        The resolved session_id string (may be empty).
+    """
+    global _SESSION_ID_CACHE
+
+    # Tier 1 — explicit caller-supplied value.
+    if input_dict.get("session_id"):
+        return str(input_dict["session_id"])
+
+    # Tier 2 — env var (e.g. set by the CC shell or direct invocation).
+    env_val = os.environ.get("CLAUDE_SESSION_ID")
+    if env_val:
+        return env_val
+
+    # Tier 3 — PID-keyed state file (cached).
+    if _SESSION_ID_CACHE is None:
+        _SESSION_ID_CACHE = _resolve_session_id_from_pidfile()
+    if _SESSION_ID_CACHE:
+        return _SESSION_ID_CACHE
+
+    # Tier 4 — no info available.
+    return ""
+
 
 # Catalog error banner prefix (v5 §3.1.6).
 _CATALOG_ERROR_PREFIX = "[CATALOG ERROR]"
@@ -203,16 +351,12 @@ def _write_log_entry(
     """
     if log_path is None:
         return
-    # session_id precedence (fix #294):
-    #   1. Caller-supplied value in input_dict["session_id"] — the router
-    #      passes this from the live Claude Code session context.
-    #   2. CLAUDE_SESSION_ID env var — legacy / direct-invocation path.
-    #   3. Empty string — preserves pre-fix behavior when nothing provides it.
-    session_id: str = (
-        input_dict.get("session_id")
-        or os.environ.get("CLAUDE_SESSION_ID")
-        or ""
-    )
+    # session_id precedence (issue #294 + #296):
+    #   1. Caller-supplied value in input_dict["session_id"].
+    #   2. CLAUDE_SESSION_ID env var.
+    #   3. PID-keyed state file from the SessionStart hook (tier 3, #296).
+    #   4. Empty string — no attribution available.
+    session_id: str = _resolve_session_id(input_dict)
     entry: dict[str, Any] = {
         "type": "matcher_decision",
         "ts": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
