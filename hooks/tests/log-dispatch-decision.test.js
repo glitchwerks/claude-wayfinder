@@ -2,23 +2,60 @@
  * Tests for hooks/log-dispatch-decision.js
  *
  * Covers:
- *   - parseDecisionFromOutput: JSON extraction from tool_output
+ *   - isDispatchCommand: command filter (accept/reject)
+ *   - extractInputFromCommand: echo JSON extraction from command string
+ *   - parseDecisionFromOutput: JSON extraction from tool_response
  *   - buildLogEntry: entry type selection (matcher_decision vs matcher_session_id)
- *   - tryParseArgs: tool_input.args parsing
- *   - Hook subprocess integration: session_id flows from payload to log entry
+ *   - Hook subprocess integration: session_id flows from Bash PostToolUse payload
  *
  * ## Contract-testing note (hook-authoring discipline §1)
  *
- * This hook's correctness depends on the PostToolUse `tool_output` field shape
- * for Skill(dispatch) calls, which is not formally documented. Per hook-authoring
- * §1, this requires a live integration test. The subprocess tests below are the
- * closest approximation to a live CC session achievable in a test runner:
- * they run the actual hook script as a child process with realistic payloads.
+ * This hook's correctness depends on two PostToolUse(Bash) payload fields:
+ *   - tool_input.command — the Bash command string (sync, reliable)
+ *   - tool_response — the tool's result text (field name derived from the
+ *     documented CC hook contract; not yet confirmed against a live payload
+ *     in a non-interactive context)
  *
- * What is NOT verified here (requires a real CC session):
- *   The actual `tool_output` field shape Claude Code sends in PostToolUse for
- *   Skill(dispatch) calls. The hook handles both "pure JSON" and "JSON embedded
- *   in text" cases, and falls back to `matcher_session_id` when neither matches.
+ * Per hook-authoring §1, the real field name and shape MUST be confirmed
+ * in a live CC session. Mechanism:
+ *   1. Set DISPATCH_HOOK_DEBUG=1 in the CC session env.
+ *   2. Run a real dispatch (invoke the /dispatch skill from the router).
+ *   3. cat $TMPDIR/dispatch-hook-payload-*.json to see the actual payload.
+ *   4. Confirm "tool_response" is the field that contains the decision JSON.
+ *   5. If the field name differs, update tool_response references in
+ *      log-dispatch-decision.js accordingly.
+ *
+ * ## Wiring assumption verified by these tests
+ *
+ * The hook is wired to PostToolUse(Bash) via hooks.json. Tests simulate
+ * the correct Bash payload shape: { tool_name: "Bash", tool_input: {
+ * command: "..." }, tool_response: "<decision_json>", session_id: "..." }.
+ *
+ * ## Breaking-test discipline (hook-authoring §1)
+ *
+ * Each critical behaviour has a corresponding negative test (or comment
+ * noting which positive test would fail if the behaviour regressed):
+ *   - "Bash tool filter" positive test FAILS if tool_name check removed.
+ *   - "non-dispatch Bash" negative test FAILS if isDispatchCommand returns true.
+ *   - "tool_response field" test FAILS if field is read as tool_output.
+ *   - "no-duplicate invariant" test FAILS if hook writes more than one entry.
+ *
+ * ## De-duplication design (documented here per requirement)
+ *
+ * The Python matcher _write_log_entry also appends a matcher_decision entry
+ * (with session_id="") when DISPATCH_LOG_PATH is set. This hook writes a
+ * second entry with:
+ *   - session_id: populated from the CC hook payload
+ *   - attribution_source: "post_tool_use_hook"
+ *
+ * Log consumers MUST prefer entries with attribution_source: "post_tool_use_hook"
+ * over entries without it (the Python-written entries). This design keeps both
+ * writers because the hook cannot suppress the Python write retroactively —
+ * the Python subprocess completes before the PostToolUse hook fires.
+ *
+ * The "exactly one attributed entry per dispatch" invariant is encoded in the
+ * "no-duplicate invariant" test below: a single dispatch Bash payload must
+ * produce exactly one log entry from the hook.
  */
 
 const { test } = require("node:test");
@@ -30,12 +67,19 @@ const { spawnSync } = require("node:child_process");
 
 const HOOKS_DIR = path.resolve(__dirname, "..");
 
-// Lazy-load hook module — fails clearly if the file doesn't exist.
 function loadHook() {
   return require("../log-dispatch-decision.js");
 }
 
-// Run the hook script as a real subprocess with the given payload.
+/**
+ * Run the hook script as a real subprocess with the given payload.
+ *
+ * Simulates a PostToolUse(Bash) CC hook invocation. The payload shape
+ * mirrors what CC sends: { tool_name, tool_input, tool_response, session_id }.
+ * NOTE: tool_response is the documented CC PostToolUse result field.
+ * This is the field name the hook depends on; if a live payload dump
+ * shows a different field, update here and in the hook.
+ */
 function runHook(payload, env = {}) {
   const scriptPath = path.join(HOOKS_DIR, "log-dispatch-decision.js");
   const result = spawnSync(process.execPath, [scriptPath], {
@@ -51,6 +95,12 @@ function runHook(payload, env = {}) {
   };
 }
 
+// Canonical Bash command for a real-catalog dispatch call.
+// Matches the pattern the router generates: echo '<json>' | <python> -m claude_wayfinder dispatch
+const DISPATCH_COMMAND =
+  "echo '{\"task_description\": \"implement auth\", \"file_paths\": [\"src/auth.py\"]}'" +
+  " | \"C:/venv/Scripts/python.exe\" -m claude_wayfinder dispatch";
+
 const SAMPLE_DECISION = {
   decision: "delegate",
   agent: "code-writer",
@@ -62,7 +112,97 @@ const SAMPLE_DECISION = {
 const SAMPLE_SESSION_ID = "test-session-abc-123";
 
 // ---------------------------------------------------------------------------
-// parseDecisionFromOutput — pure JSON path
+// isDispatchCommand — command filter
+// ---------------------------------------------------------------------------
+
+test("isDispatchCommand: null returns false", () => {
+  const { isDispatchCommand } = loadHook();
+  assert.equal(isDispatchCommand(null), false);
+});
+
+test("isDispatchCommand: empty string returns false", () => {
+  const { isDispatchCommand } = loadHook();
+  assert.equal(isDispatchCommand(""), false);
+});
+
+test("isDispatchCommand: real dispatch command returns true", () => {
+  const { isDispatchCommand } = loadHook();
+  assert.equal(isDispatchCommand(DISPATCH_COMMAND), true);
+});
+
+test("isDispatchCommand: --help form excluded", () => {
+  const { isDispatchCommand } = loadHook();
+  assert.equal(
+    isDispatchCommand("python -m claude_wayfinder dispatch --help"),
+    false
+  );
+});
+
+test("isDispatchCommand: --demo form excluded", () => {
+  const { isDispatchCommand } = loadHook();
+  assert.equal(
+    isDispatchCommand("python -m claude_wayfinder dispatch --demo"),
+    false
+  );
+});
+
+test("isDispatchCommand: catalog build form excluded", () => {
+  const { isDispatchCommand } = loadHook();
+  assert.equal(
+    isDispatchCommand("python -m claude_wayfinder catalog build"),
+    false
+  );
+});
+
+test("isDispatchCommand: unrelated Bash command returns false", () => {
+  const { isDispatchCommand } = loadHook();
+  assert.equal(isDispatchCommand("git status"), false);
+  assert.equal(isDispatchCommand("ls -la"), false);
+  assert.equal(isDispatchCommand("node --test hooks/tests/*.test.js"), false);
+});
+
+// ---------------------------------------------------------------------------
+// extractInputFromCommand — echo JSON extraction
+// ---------------------------------------------------------------------------
+
+test("extractInputFromCommand: single-quote echo form returns parsed JSON", () => {
+  const { extractInputFromCommand } = loadHook();
+  const ctx = { task_description: "implement auth", file_paths: ["src/auth.py"] };
+  const cmd = `echo '${JSON.stringify(ctx)}' | python -m claude_wayfinder dispatch`;
+  const result = extractInputFromCommand(cmd);
+  assert.ok(result !== null);
+  assert.equal(result.task_description, "implement auth");
+  assert.deepEqual(result.file_paths, ["src/auth.py"]);
+});
+
+test("extractInputFromCommand: double-quote echo form returns parsed JSON", () => {
+  const { extractInputFromCommand } = loadHook();
+  const ctx = { task_description: "fix bug" };
+  const cmd = `echo "${JSON.stringify(ctx)}" | python -m claude_wayfinder dispatch`;
+  const result = extractInputFromCommand(cmd);
+  assert.ok(result !== null);
+  assert.equal(result.task_description, "fix bug");
+});
+
+test("extractInputFromCommand: command without echo returns null", () => {
+  const { extractInputFromCommand } = loadHook();
+  const result = extractInputFromCommand(
+    "python -m claude_wayfinder dispatch"
+  );
+  assert.equal(result, null);
+});
+
+test("extractInputFromCommand: null input returns null", () => {
+  const { extractInputFromCommand } = loadHook();
+  assert.equal(extractInputFromCommand(null), null);
+});
+
+// ---------------------------------------------------------------------------
+// parseDecisionFromOutput — reads tool_response (not tool_output)
+//
+// CONTRACT ASSUMPTION: CC PostToolUse sends the tool result in tool_response.
+// These tests verify the hook parses that field correctly. A live payload
+// dump (via DISPATCH_HOOK_DEBUG=1) must confirm the field name.
 // ---------------------------------------------------------------------------
 
 test("parseDecisionFromOutput: null input returns null", () => {
@@ -111,26 +251,6 @@ test("parseDecisionFromOutput: malformed JSON returns null", () => {
 });
 
 // ---------------------------------------------------------------------------
-// tryParseArgs
-// ---------------------------------------------------------------------------
-
-test("tryParseArgs: null returns empty object", () => {
-  const { tryParseArgs } = loadHook();
-  assert.deepEqual(tryParseArgs(null), {});
-});
-
-test("tryParseArgs: tool_input.args parsed as dispatch context JSON", () => {
-  const { tryParseArgs } = loadHook();
-  const context = { task_description: "implement auth" };
-  assert.deepEqual(tryParseArgs({ skill: "dispatch", args: JSON.stringify(context) }), context);
-});
-
-test("tryParseArgs: non-JSON args returns empty object", () => {
-  const { tryParseArgs } = loadHook();
-  assert.deepEqual(tryParseArgs({ skill: "dispatch", args: "--demo --verbose" }), {});
-});
-
-// ---------------------------------------------------------------------------
 // buildLogEntry
 // ---------------------------------------------------------------------------
 
@@ -140,13 +260,14 @@ test("buildLogEntry: decision provided writes matcher_decision entry", () => {
     sessionId: SAMPLE_SESSION_ID,
     ts: "2026-05-30T00:00:00.000Z",
     decision: SAMPLE_DECISION,
-    toolInput: {},
+    inputContext: { task_description: "test" },
     pluginVersion: "1.1.0",
   });
   assert.equal(entry.type, "matcher_decision");
   assert.equal(entry.session_id, SAMPLE_SESSION_ID);
   assert.equal(entry.output.decision, "delegate");
   assert.equal(entry.attribution_source, "post_tool_use_hook");
+  assert.deepEqual(entry.input, { task_description: "test" });
 });
 
 test("buildLogEntry: null decision writes matcher_session_id entry", () => {
@@ -155,12 +276,16 @@ test("buildLogEntry: null decision writes matcher_session_id entry", () => {
     sessionId: SAMPLE_SESSION_ID,
     ts: "2026-05-30T00:00:00.000Z",
     decision: null,
-    toolInput: {},
+    inputContext: null,
     pluginVersion: "1.1.0",
   });
   assert.equal(entry.type, "matcher_session_id");
   assert.equal(entry.session_id, SAMPLE_SESSION_ID);
   assert.ok(typeof entry.note === "string");
+  assert.ok(
+    entry.note.indexOf("tool_response") !== -1,
+    "fallback note must reference tool_response field name"
+  );
 });
 
 test("buildLogEntry: empty session_id is written as-is", () => {
@@ -169,52 +294,117 @@ test("buildLogEntry: empty session_id is written as-is", () => {
     sessionId: "",
     ts: "2026-05-30T00:00:00.000Z",
     decision: SAMPLE_DECISION,
-    toolInput: {},
+    inputContext: null,
     pluginVersion: "1.1.0",
   });
   assert.equal(entry.session_id, "");
 });
 
+test("buildLogEntry: null inputContext written as empty object", () => {
+  const { buildLogEntry } = loadHook();
+  const entry = buildLogEntry({
+    sessionId: SAMPLE_SESSION_ID,
+    ts: "2026-05-30T00:00:00.000Z",
+    decision: SAMPLE_DECISION,
+    inputContext: null,
+    pluginVersion: "1.1.0",
+  });
+  assert.deepEqual(entry.input, {});
+});
+
 // ---------------------------------------------------------------------------
-// Hook subprocess integration tests
+// Hook subprocess integration tests — Bash PostToolUse wiring
 //
-// These run the actual hook script as a subprocess with realistic PostToolUse
-// payloads. This is the closest approximation to a live CC session achievable
-// in a test runner.
+// These tests verify:
+//   1. The hook fires correctly on Bash(dispatch) payloads.
+//   2. The hook reads session_id from the payload.
+//   3. The hook reads tool_response (not tool_output) for the decision.
+//   4. The hook does NOT fire on Skill payloads (wrong event — old wiring).
+//   5. The hook does NOT fire on non-dispatch Bash commands.
+//   6. Exactly ONE log entry per dispatch (no-duplicate invariant).
 //
-// Breaking-test discipline (hook-authoring §1):
-// - "session_id written" FAILS if skill filter is removed or inverted.
-// - "non-dispatch skill no log" FAILS if all skills are handled.
-// Combined, they verify the skill filter is exercised both ways.
+// Breaking-test targets:
+//   Test "Bash dispatch: session_id in log when tool_response has JSON"
+//     → FAILS if hook reads tool_output (always undefined) instead of tool_response
+//     → FAILS if Bash tool_name check removed (hook would also fire on non-Bash)
+//   Test "Skill payload: no log write (old wiring regression)"
+//     → FAILS if hook is re-wired back to Skill
+//   Test "no-duplicate invariant: exactly one hook entry per dispatch"
+//     → FAILS if hook writes more than one entry per invocation
 // ---------------------------------------------------------------------------
 
-test("hook subprocess: session_id in log when Skill(dispatch) with JSON output", () => {
+test("Bash dispatch: session_id in log when tool_response has JSON output", () => {
+  // CONTRACT: tool_response field carries the decision JSON in a Bash PostToolUse.
+  // If a live payload dump shows a different field name, update tool_response
+  // in log-dispatch-decision.js and this test.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
-    tool_name: "Skill",
-    tool_input: { skill: "dispatch", args: JSON.stringify({ task_description: "test" }) },
-    tool_output: JSON.stringify(SAMPLE_DECISION),
+    tool_name: "Bash",
+    tool_input: { command: DISPATCH_COMMAND },
+    // tool_response is the CC documented PostToolUse result field.
+    tool_response: JSON.stringify(SAMPLE_DECISION),
     session_id: SAMPLE_SESSION_ID,
-    conversation_history: [],
   };
   const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
   assert.equal(result.status, 0, "exit 0: " + result.stderr);
   assert.ok(fs.existsSync(logPath), "log file created");
   const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
   assert.equal(entry.type, "matcher_decision");
-  assert.equal(entry.session_id, SAMPLE_SESSION_ID,
-    "session_id must be populated from CC payload, not empty");
+  assert.equal(
+    entry.session_id,
+    SAMPLE_SESSION_ID,
+    "session_id must be populated from CC payload, not empty"
+  );
   assert.equal(entry.attribution_source, "post_tool_use_hook");
+  // Verify the fallback field (tool_output) was NOT used — if it were,
+  // decision would be null and type would be matcher_session_id.
+  assert.equal(
+    entry.type,
+    "matcher_decision",
+    "decision must parse from tool_response; if type is matcher_session_id " +
+    "the hook is reading tool_output (undefined) instead of tool_response"
+  );
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("hook subprocess: session_id in log when tool_output absent (fallback path)", () => {
+test("Bash dispatch: tool_output field (wrong field) produces no decision — regression guard", () => {
+  // This test verifies what happens when the WRONG field is read.
+  // A payload with tool_output but NO tool_response should produce
+  // a matcher_session_id entry (decision=null fallback), not a matcher_decision.
+  // This confirms parseDecisionFromOutput correctly reads tool_response.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
-    tool_name: "Skill",
-    tool_input: { skill: "dispatch" },
+    tool_name: "Bash",
+    tool_input: { command: DISPATCH_COMMAND },
+    // Intentionally put decision in tool_output (wrong field), not tool_response.
+    tool_output: JSON.stringify(SAMPLE_DECISION),
+    // tool_response is absent — hook should read undefined → null decision.
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0);
+  assert.ok(fs.existsSync(logPath), "log file created (fallback path)");
+  const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
+  // With tool_response absent, decision is null → fallback entry type.
+  assert.equal(
+    entry.type,
+    "matcher_session_id",
+    "when tool_response is absent the hook must use the fallback path, " +
+    "not silently read tool_output"
+  );
+  assert.equal(entry.session_id, SAMPLE_SESSION_ID);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Bash dispatch: tool_response absent (null) writes matcher_session_id fallback", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: DISPATCH_COMMAND },
+    // tool_response not present
     session_id: SAMPLE_SESSION_ID,
   };
   const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
@@ -226,32 +416,135 @@ test("hook subprocess: session_id in log when tool_output absent (fallback path)
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("hook subprocess: non-dispatch Skill produces no log write", () => {
+test("Skill payload: no log write (old wiring regression guard)", () => {
+  // BREAKING TEST: if hook is re-wired back to Skill(dispatch), this test fails.
+  // The hook must now filter on Bash — Skill payloads must produce no log entry.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
+    // Old (broken) wiring: Skill tool with dispatch skill name.
     tool_name: "Skill",
-    tool_input: { skill: "python" },
-    tool_output: "skill output",
+    tool_input: { skill: "dispatch" },
+    tool_response: JSON.stringify(SAMPLE_DECISION),
     session_id: SAMPLE_SESSION_ID,
   };
   const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
   assert.equal(result.status, 0);
-  assert.ok(!fs.existsSync(logPath), "no log for non-dispatch skill");
+  assert.ok(
+    !fs.existsSync(logPath),
+    "no log for Skill(dispatch) payload — hook must only fire on Bash; " +
+    "if this fails the hook was re-wired to the wrong event (old bug #299)"
+  );
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("hook subprocess: non-Skill tool produces no log write", () => {
+test("non-dispatch Bash command: no log write", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: "git status" },
+    tool_response: "On branch main",
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0);
+  assert.ok(!fs.existsSync(logPath), "no log for non-dispatch bash command");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("--demo dispatch command: no log write (excluded form)", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: "python -m claude_wayfinder dispatch --demo" },
+    tool_response: "demo mode output",
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0);
+  assert.ok(!fs.existsSync(logPath), "no log for --demo dispatch");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("--help dispatch command: no log write (excluded form)", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: "python -m claude_wayfinder dispatch --help" },
+    tool_response: "usage: ...",
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0);
+  assert.ok(!fs.existsSync(logPath), "no log for --help dispatch");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Agent payload: no log write (wrong tool)", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
     tool_name: "Agent",
     tool_input: { subagent_type: "code-writer" },
+    tool_response: "agent output",
     session_id: SAMPLE_SESSION_ID,
   };
   const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
   assert.equal(result.status, 0);
-  assert.ok(!fs.existsSync(logPath), "no log for non-Skill tool");
+  assert.ok(!fs.existsSync(logPath), "no log for non-Bash tool");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("no-duplicate invariant: exactly one hook entry per dispatch call", () => {
+  // De-duplication design: the hook writes exactly ONE entry per invocation.
+  // The Python matcher may also write an entry (with session_id="", no
+  // attribution_source). Log consumers prefer the hook entry.
+  // This test verifies the hook itself does not write multiple entries.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: DISPATCH_COMMAND },
+    tool_response: JSON.stringify(SAMPLE_DECISION),
+    session_id: SAMPLE_SESSION_ID,
+  };
+  runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.ok(fs.existsSync(logPath), "log file created");
+  const lines = fs.readFileSync(logPath, "utf8")
+    .split("\n")
+    .filter((l) => l.trim() !== "");
+  assert.equal(
+    lines.length,
+    1,
+    "exactly one entry per dispatch — hook must not write duplicate entries; " +
+    "if this fails the hook is writing multiple entries per invocation"
+  );
+  const entry = JSON.parse(lines[0]);
+  assert.equal(entry.attribution_source, "post_tool_use_hook");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("input_context extracted from echo command appears in log entry", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const inputCtx = { task_description: "implement auth", file_paths: ["src/auth.py"] };
+  const command =
+    `echo '${JSON.stringify(inputCtx)}' | "C:/venv/Scripts/python.exe" -m claude_wayfinder dispatch`;
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command },
+    tool_response: JSON.stringify(SAMPLE_DECISION),
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0);
+  const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
+  assert.equal(entry.type, "matcher_decision");
+  assert.equal(entry.input.task_description, "implement auth");
+  assert.deepEqual(entry.input.file_paths, ["src/auth.py"]);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
