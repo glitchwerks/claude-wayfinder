@@ -196,11 +196,16 @@ function parseDecisionFromOutput(toolResponse) {
     if (parsed && typeof parsed === "object" && typeof parsed.decision === "string") {
       return parsed;
     }
+    // Direct parse succeeded but no decision field — the input is pure JSON
+    // without a decision. Scanning substrings would find the same object again
+    // (since the outermost { is at position 0), producing an infinite loop.
+    return null;
   } catch (_) {
     // Not pure JSON — try to extract JSON substring below.
   }
 
   // Scan for JSON objects embedded in mixed text (e.g. preamble + JSON).
+  // Only reached when the full string is NOT valid JSON (catch above fired).
   const text = toolResponse.trim();
   let start = text.lastIndexOf("{");
   while (start >= 0) {
@@ -213,6 +218,10 @@ function parseDecisionFromOutput(toolResponse) {
     } catch (_) {
       // Not valid JSON from this position — try earlier.
     }
+    // Guard: when start is 0, start-1 is -1. lastIndexOf("{", -1) returns 0
+    // (not -1) on strings that begin with "{", creating an infinite loop.
+    // Explicitly break when we have already tried position 0.
+    if (start === 0) break;
     start = text.lastIndexOf("{", start - 1);
   }
 
