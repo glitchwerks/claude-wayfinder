@@ -12,24 +12,29 @@
  *
  * This hook's correctness depends on two PostToolUse(Bash) payload fields:
  *   - tool_input.command — the Bash command string (sync, reliable)
- *   - tool_response — the tool's result text (field name derived from the
- *     documented CC hook contract; not yet confirmed against a live payload
- *     in a non-interactive context)
+ *   - tool_response — an OBJECT { stdout, stderr, interrupted, isImage,
+ *     noOutputExpected } in the live CC PostToolUse(Bash) payload.
+ *     The decision JSON lives at tool_response.stdout.
  *
- * Per hook-authoring §1, the real field name and shape MUST be confirmed
- * in a live CC session. Mechanism:
- *   1. Set DISPATCH_HOOK_DEBUG=1 in the CC session env.
- *   2. Run a real dispatch (invoke the /dispatch skill from the router).
- *   3. cat $TMPDIR/dispatch-hook-payload-*.json to see the actual payload.
- *   4. Confirm "tool_response" is the field that contains the decision JSON.
- *   5. If the field name differs, update tool_response references in
- *      log-dispatch-decision.js accordingly.
+ * VERIFIED LIVE SHAPE (issue #299 — live payload captured via DISPATCH_HOOK_DEBUG):
+ *   tool_response: {
+ *     stdout: "<decision JSON string>",
+ *     stderr: "",
+ *     interrupted: false,
+ *     isImage: false,
+ *     noOutputExpected: false
+ *   }
+ *
+ * The hook extracts: typeof tr === "string" ? tr : (tr?.stdout ?? null)
+ * so it handles both the live object shape (primary) and the legacy string
+ * shape (fallback, kept for safety).
  *
  * ## Wiring assumption verified by these tests
  *
- * The hook is wired to PostToolUse(Bash) via hooks.json. Tests simulate
- * the correct Bash payload shape: { tool_name: "Bash", tool_input: {
- * command: "..." }, tool_response: "<decision_json>", session_id: "..." }.
+ * The hook is wired to PostToolUse(Bash) via hooks.json. Integration tests
+ * use the REAL object shape for tool_response (see makeToolResponse helper).
+ * The legacy string fallback is covered by one dedicated test labeled
+ * "legacy string fallback path".
  *
  * ## Breaking-test discipline (hook-authoring §1)
  *
@@ -37,7 +42,7 @@
  * noting which positive test would fail if the behaviour regressed):
  *   - "Bash tool filter" positive test FAILS if tool_name check removed.
  *   - "non-dispatch Bash" negative test FAILS if isDispatchCommand returns true.
- *   - "tool_response field" test FAILS if field is read as tool_output.
+ *   - "object-shape tool_response" test FAILS if hook reads object directly instead of .stdout.
  *   - "no-duplicate invariant" test FAILS if hook writes more than one entry.
  *
  * ## De-duplication design (documented here per requirement)
@@ -75,10 +80,12 @@ function loadHook() {
  * Run the hook script as a real subprocess with the given payload.
  *
  * Simulates a PostToolUse(Bash) CC hook invocation. The payload shape
- * mirrors what CC sends: { tool_name, tool_input, tool_response, session_id }.
- * NOTE: tool_response is the documented CC PostToolUse result field.
- * This is the field name the hook depends on; if a live payload dump
- * shows a different field, update here and in the hook.
+ * mirrors the VERIFIED live CC PostToolUse(Bash) contract:
+ *   { tool_name, tool_input, tool_response: { stdout, stderr, ... }, session_id }
+ *
+ * Callers should build tool_response using makeToolResponse() to ensure
+ * the correct object shape. String values are accepted as the legacy
+ * fallback path — only use them in tests explicitly labeled "legacy string".
  */
 function runHook(payload, env = {}) {
   const scriptPath = path.join(HOOKS_DIR, "log-dispatch-decision.js");
@@ -110,6 +117,30 @@ const SAMPLE_DECISION = {
   disposition_source: "scored",
 };
 const SAMPLE_SESSION_ID = "test-session-abc-123";
+
+/**
+ * Build a tool_response object matching the VERIFIED live CC PostToolUse(Bash)
+ * payload shape: { stdout, stderr, interrupted, isImage, noOutputExpected }.
+ *
+ * The decision JSON lives at .stdout. This is the primary fixture shape for
+ * all integration tests. The legacy string fallback is tested separately.
+ *
+ * CONTRACT ASSUMPTION verified live (issue #299):
+ *   tool_response is an object, not a plain string. The hook reads .stdout.
+ *
+ * @param {string} stdout - Content for stdout (typically the decision JSON).
+ * @param {string} [stderr] - Content for stderr (default "").
+ * @returns {{ stdout: string, stderr: string, interrupted: boolean, isImage: boolean, noOutputExpected: boolean }}
+ */
+function makeToolResponse(stdout, stderr = "") {
+  return {
+    stdout,
+    stderr,
+    interrupted: false,
+    isImage: false,
+    noOutputExpected: false,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // isDispatchCommand — command filter
@@ -318,14 +349,14 @@ test("buildLogEntry: null inputContext written as empty object", () => {
 // These tests verify:
 //   1. The hook fires correctly on Bash(dispatch) payloads.
 //   2. The hook reads session_id from the payload.
-//   3. The hook reads tool_response (not tool_output) for the decision.
+//   3. The hook reads tool_response.stdout (object shape) for the decision.
 //   4. The hook does NOT fire on Skill payloads (wrong event — old wiring).
 //   5. The hook does NOT fire on non-dispatch Bash commands.
 //   6. Exactly ONE log entry per dispatch (no-duplicate invariant).
 //
 // Breaking-test targets:
-//   Test "Bash dispatch: session_id in log when tool_response has JSON"
-//     → FAILS if hook reads tool_output (always undefined) instead of tool_response
+//   Test "Bash dispatch: object-shape tool_response produces matcher_decision"
+//     → FAILS if hook reads tool_response as-is (object) instead of .stdout
 //     → FAILS if Bash tool_name check removed (hook would also fire on non-Bash)
 //   Test "Skill payload: no log write (old wiring regression)"
 //     → FAILS if hook is re-wired back to Skill
@@ -333,38 +364,66 @@ test("buildLogEntry: null inputContext written as empty object", () => {
 //     → FAILS if hook writes more than one entry per invocation
 // ---------------------------------------------------------------------------
 
-test("Bash dispatch: session_id in log when tool_response has JSON output", () => {
-  // CONTRACT: tool_response field carries the decision JSON in a Bash PostToolUse.
-  // If a live payload dump shows a different field name, update tool_response
-  // in log-dispatch-decision.js and this test.
+test("Bash dispatch: object-shape tool_response produces matcher_decision with session_id", () => {
+  // PRIMARY CONTRACT TEST: tool_response is an OBJECT in the live CC payload.
+  // The decision JSON lives at tool_response.stdout.
+  // VERIFIED LIVE (issue #299): { stdout: "<json>", stderr: "", interrupted: false, ... }
+  //
+  // BREAKING BEHAVIOR: if this test produces type=matcher_session_id, the hook
+  // is reading tool_response directly (object) instead of tool_response.stdout.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
     tool_name: "Bash",
     tool_input: { command: DISPATCH_COMMAND },
-    // tool_response is the CC documented PostToolUse result field.
-    tool_response: JSON.stringify(SAMPLE_DECISION),
+    // Real CC PostToolUse(Bash) object shape — decision JSON is at .stdout.
+    tool_response: makeToolResponse(JSON.stringify(SAMPLE_DECISION)),
     session_id: SAMPLE_SESSION_ID,
   };
   const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
   assert.equal(result.status, 0, "exit 0: " + result.stderr);
   assert.ok(fs.existsSync(logPath), "log file created");
   const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
-  assert.equal(entry.type, "matcher_decision");
-  assert.equal(
-    entry.session_id,
-    SAMPLE_SESSION_ID,
-    "session_id must be populated from CC payload, not empty"
-  );
-  assert.equal(entry.attribution_source, "post_tool_use_hook");
-  // Verify the fallback field (tool_output) was NOT used — if it were,
-  // decision would be null and type would be matcher_session_id.
   assert.equal(
     entry.type,
     "matcher_decision",
-    "decision must parse from tool_response; if type is matcher_session_id " +
-    "the hook is reading tool_output (undefined) instead of tool_response"
+    "object-shape tool_response: decision must parse from .stdout; " +
+    "if type is matcher_session_id the hook is reading the object directly"
   );
+  assert.equal(
+    entry.session_id,
+    SAMPLE_SESSION_ID,
+    "session_id must be populated from CC payload, not empty string"
+  );
+  assert.equal(entry.attribution_source, "post_tool_use_hook");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Bash dispatch: legacy string tool_response fallback path still parses decision", () => {
+  // FALLBACK PATH (not the primary live shape): if tool_response arrives as a
+  // plain string (legacy or non-Bash tool), the hook must still extract the
+  // decision JSON from the string directly. This is a safety fallback — the
+  // primary live shape is the object (see test above).
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: DISPATCH_COMMAND },
+    // Legacy string shape — not the live CC shape, kept as a fallback guard.
+    tool_response: JSON.stringify(SAMPLE_DECISION),
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0, "exit 0 on legacy string shape: " + result.stderr);
+  assert.ok(fs.existsSync(logPath), "log file created for legacy string path");
+  const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
+  assert.equal(
+    entry.type,
+    "matcher_decision",
+    "legacy string fallback: decision must parse from the string directly"
+  );
+  assert.equal(entry.session_id, SAMPLE_SESSION_ID);
+  assert.equal(entry.attribution_source, "post_tool_use_hook");
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -372,7 +431,7 @@ test("Bash dispatch: tool_output field (wrong field) produces no decision — re
   // This test verifies what happens when the WRONG field is read.
   // A payload with tool_output but NO tool_response should produce
   // a matcher_session_id entry (decision=null fallback), not a matcher_decision.
-  // This confirms parseDecisionFromOutput correctly reads tool_response.
+  // This confirms parseDecisionFromOutput correctly reads tool_response, not tool_output.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
@@ -399,12 +458,13 @@ test("Bash dispatch: tool_output field (wrong field) produces no decision — re
 });
 
 test("Bash dispatch: tool_response absent (null) writes matcher_session_id fallback", () => {
+  // Graceful/partial path: tool_response not present at all → decision=null fallback.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
     tool_name: "Bash",
     tool_input: { command: DISPATCH_COMMAND },
-    // tool_response not present
+    // tool_response not present — simulates a hook misconfiguration or unexpected shape
     session_id: SAMPLE_SESSION_ID,
   };
   const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
@@ -413,6 +473,32 @@ test("Bash dispatch: tool_response absent (null) writes matcher_session_id fallb
   const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
   assert.equal(entry.type, "matcher_session_id");
   assert.equal(entry.session_id, SAMPLE_SESSION_ID);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Bash dispatch: object-shape tool_response with non-JSON stdout writes matcher_session_id fallback", () => {
+  // Graceful/partial path: tool_response is an object but stdout is not parseable
+  // as decision JSON → hook falls back to matcher_session_id.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: DISPATCH_COMMAND },
+    // Object shape but stdout is not decision JSON (e.g. error output).
+    tool_response: makeToolResponse("Error: catalog file not found"),
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0, "exit 0 on unparseable stdout: " + result.stderr);
+  assert.ok(fs.existsSync(logPath), "log file created in partial fallback path");
+  const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
+  assert.equal(
+    entry.type,
+    "matcher_session_id",
+    "unparseable stdout must produce matcher_session_id fallback, not crash"
+  );
+  assert.equal(entry.session_id, SAMPLE_SESSION_ID);
+  assert.ok(typeof entry.note === "string", "fallback note must be present");
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -503,12 +589,14 @@ test("no-duplicate invariant: exactly one hook entry per dispatch call", () => {
   // The Python matcher may also write an entry (with session_id="", no
   // attribution_source). Log consumers prefer the hook entry.
   // This test verifies the hook itself does not write multiple entries.
+  // Uses the real object shape for tool_response.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
     tool_name: "Bash",
     tool_input: { command: DISPATCH_COMMAND },
-    tool_response: JSON.stringify(SAMPLE_DECISION),
+    // Real CC PostToolUse(Bash) object shape.
+    tool_response: makeToolResponse(JSON.stringify(SAMPLE_DECISION)),
     session_id: SAMPLE_SESSION_ID,
   };
   runHook(payload, { DISPATCH_LOG_PATH: logPath });
@@ -528,6 +616,7 @@ test("no-duplicate invariant: exactly one hook entry per dispatch call", () => {
 });
 
 test("input_context extracted from echo command appears in log entry", () => {
+  // Uses real object shape for tool_response.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-test-"));
   const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const inputCtx = { task_description: "implement auth", file_paths: ["src/auth.py"] };
@@ -536,7 +625,8 @@ test("input_context extracted from echo command appears in log entry", () => {
   const payload = {
     tool_name: "Bash",
     tool_input: { command },
-    tool_response: JSON.stringify(SAMPLE_DECISION),
+    // Real CC PostToolUse(Bash) object shape.
+    tool_response: makeToolResponse(JSON.stringify(SAMPLE_DECISION)),
     session_id: SAMPLE_SESSION_ID,
   };
   const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });

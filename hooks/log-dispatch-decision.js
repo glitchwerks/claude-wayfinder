@@ -29,21 +29,25 @@
 //   python -m claude_wayfinder dispatch --demo
 //   python -m claude_wayfinder catalog build
 //
-// ## Result field: tool_response (not tool_output)
+// ## Result field: tool_response (object shape, not a string)
 //
-// PostToolUse payloads carry the tool's result in tool_response. The prior
-// implementation read tool_output (always undefined). This version reads
-// tool_response per the documented PostToolUse contract.
+// PostToolUse(Bash) payloads carry the tool's result in tool_response as an
+// OBJECT, not a plain string. Verified live (issue #299):
+//   tool_response: {
+//     stdout: "<decision JSON string>",
+//     stderr: "",
+//     interrupted: false,
+//     isImage: false,
+//     noOutputExpected: false
+//   }
 //
-// VERIFICATION REQUIREMENT (hook-authoring §1):
-// The actual field name and shape in a live CC PostToolUse(Bash) payload
-// has NOT been captured in a non-interactive context. The field name
-// tool_response is the documented CC hook contract field. To confirm live:
-//   1. Set DISPATCH_HOOK_DEBUG=1 in the CC session environment.
-//   2. Run a real dispatch (invoke the /dispatch skill from the router).
-//   3. cat the dump file written to $TMPDIR/dispatch-hook-payload-*.json
-//      and verify the field name and shape.
-// The hook falls back gracefully if the field is absent (see §Fail-open).
+// The decision JSON lives at tool_response.stdout. The hook extracts it via:
+//   const tr = input.tool_response;
+//   const toolResponse = typeof tr === "string" ? tr : (tr?.stdout ?? null);
+// The string branch is a safety fallback; the primary live shape is the object.
+// The prior implementation passed the whole object to parseDecisionFromOutput,
+// which returned null at its typeof guard, causing the hook to always write
+// the partial matcher_session_id fallback instead of a full matcher_decision.
 //
 // ## Input extraction from command string
 //
@@ -285,11 +289,15 @@ if (require.main === module) {
         // --- end early return guard ---
 
         const sessionId = input.session_id ?? "";
-        // CC PostToolUse documented field for the tool result is tool_response.
-        // ASSUMPTION: verified against documented CC hook contract; not yet
-        // confirmed against a live payload dump in this non-interactive context.
-        // See DISPATCH_HOOK_DEBUG below for the live-capture mechanism.
-        const toolResponse = input.tool_response ?? null;
+        // CC PostToolUse(Bash) delivers tool_response as an OBJECT:
+        //   { stdout: "<decision json>", stderr: "", interrupted: false, ... }
+        // The decision JSON lives at tool_response.stdout.
+        // Verified live (issue #299): the previous string-read always returned
+        // null from parseDecisionFromOutput's typeof guard, causing the hook
+        // to fall through to the matcher_session_id partial path.
+        // String fallback is kept for safety in case the shape changes.
+        const tr = input.tool_response;
+        const toolResponse = typeof tr === "string" ? tr : (tr?.stdout ?? null);
         const ts = new Date().toISOString();
         const logPath = resolveLogPath();
 
