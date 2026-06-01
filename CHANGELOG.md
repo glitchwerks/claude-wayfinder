@@ -4,6 +4,42 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-06-01
+
+Patch release that makes the `session_id` attribution promised by v1.1.0
+actually work in production. After v1.1.0 shipped, `matcher_decision` log
+entries were still `session_id`-empty on 100% of real dispatches: the tier-3
+PID-keyed session-file walker was structurally broken in production because the
+matcher subprocess does not share the Claude Code process ancestry the walker
+assumed. This release replaces that approach with a `PostToolUse(Bash)` hook
+that reads the session ID directly from the Claude Code hook payload — the one
+place it is reliably available — and writes a fully-attributed entry.
+
+Because the hook fires after the Python matcher has already written its own
+(session-id-empty) `matcher_decision` entry, both writers now coexist and are
+distinguished by an `attribution_source` field. Log consumers and corpus
+builders should prefer the hook-attributed entry (`attribution_source:
+"post_tool_use_hook"`, which carries a populated `session_id`) and treat the
+Python-written entry (no `attribution_source`) as a fallback. This unblocks
+using organic dispatch traffic as a labelled-prompt corpus (#288).
+
+### Fixed
+
+- **`session_id` 0% populated on `matcher_decision` entries in production**
+  (#299, PR #300). Root cause: the v1.1.0 tier-3 PID-keyed session-file
+  attribution could not resolve the Claude Code session from the matcher
+  subprocess's process tree in real operation. Replaced with a
+  `PostToolUse(Bash)` hook (`hooks/log-dispatch-decision.js`) that fires after
+  a real `claude_wayfinder dispatch` command, reads the decision JSON from
+  `tool_response.stdout` and the `session_id` from the hook payload, and writes
+  a `matcher_decision` entry tagged `attribution_source: "post_tool_use_hook"`.
+- **Infinite loop in `parseDecisionFromOutput` hung `node --test` in CI**
+  (#299, PR #300). `String.prototype.lastIndexOf("{", -1)` returns `0` (not
+  `-1`) for strings beginning with `{`, so the backward JSON-scan loop revisited
+  position 0 forever on valid-JSON-without-`decision` and malformed-JSON inputs.
+  Fixed with an explicit `if (start === 0) break;` guard. The suite now
+  self-terminates in ~2s.
+
 ## [1.1.0] - 2026-05-29
 
 Minor release adding auto-population of the matcher's `session_id` field in
