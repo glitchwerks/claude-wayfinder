@@ -5,10 +5,51 @@ function: walking the matcher process's ancestor chain and reading the
 corresponding ``<pid>-<create_time>.txt`` file written by the
 SessionStart hook.
 
+## Issue #299 — Tier 3 is structurally broken in production
+
+Tier 3 was designed so the ``session-start-record-session.py`` hook writes
+a file keyed on ``os.getppid()`` (the node.exe that spawned it), and the
+matcher walks its own ancestor chain to find that file.  This is broken:
+
+- The JS hook spawns the Python script via ``spawnSync``, so the Python
+  script's ``os.getppid()`` returns the **node.exe PID**, not ``claude.exe``.
+- ``node.exe`` exits immediately after the script completes.
+- The matcher's ancestor chain is ``python → bash → claude.exe``.  The dead
+  ``node.exe`` is a sibling, never an ancestor, so the walk never finds the
+  file.
+
+## Fix — ``log-dispatch-decision.js`` PostToolUse hook (issue #299)
+
+The production fix is the ``hooks/log-dispatch-decision.js`` PostToolUse
+hook (wired in ``hooks/hooks.json``).  When a ``Skill(dispatch)`` call
+completes, the hook reads ``session_id`` from the CC hook payload (where it
+is guaranteed to be present per the hook contract: "Per session, stable")
+and writes a ``matcher_decision`` log entry with the correct session_id.
+
+This is deterministic and concurrent-safe:
+- Each PostToolUse fires synchronously for its own Skill call with its own
+  ``session_id``.
+- Two concurrent CC sessions produce two separate PostToolUse processes with
+  distinct session_ids.
+
+## Tier 3 tests retained
+
+The Tier 3 unit tests below are retained because the code still exists in
+``_catalog.py`` (the four-tier chain is unchanged) and the tests exercise
+valid code paths.  In production, Tier 3 will never match (the PID-keyed
+file is never written to a PID in the matcher's ancestor chain), but the
+fallthrough to Tier 4 (empty string) is benign — the PostToolUse hook
+provides the attributed record separately.
+
+The Tier 3 tests could be removed in a future cleanup once the PID-file
+mechanism is fully retired.  For now they serve as regression coverage for
+the orphan-prune and fallthrough logic.
+
 Tier precedence verified here (all four tiers):
   1. Input JSON  ``session_id`` field (highest priority)
   2. ``CLAUDE_SESSION_ID`` env var
   3. PID-keyed state file  ``~/.claude/state/wayfinder-sessions/<pid>-<ct>.txt``
+     (broken in production — see above; retained for code coverage)
   4. ``""`` (no info available)
 
 All tests use ``tmp_path`` for the state directory and monkeypatch the
