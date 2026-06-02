@@ -19,9 +19,14 @@ class TestKeywordGroupTypes:
         assert _match_mod._GROUP_MULTIPLIER == 1.0
 
     def test_slot_dataclass_holds_terms_and_optional_name(self) -> None:
-        """Slot stores a tuple of terms and an optional name."""
+        """Slot stores stemmed terms and an optional name.
+
+        After stemming integration (issue #304), Slot.__post_init__ applies
+        Porter2 stemming: 'update' -> 'updat', 'edit' -> 'edit'.
+        """
         slot = _match_mod.Slot(terms=("update", "edit"), name="verbs")
-        assert slot.terms == ("update", "edit")
+        # "update" -> "updat", "edit" -> "edit"
+        assert slot.terms == ("updat", "edit")
         assert slot.name == "verbs"
 
     def test_slot_name_defaults_to_none(self) -> None:
@@ -51,7 +56,12 @@ class TestTriggersParsing:
         assert triggers.keyword_groups == ()
 
     def test_parse_keyword_groups_dict_form(self) -> None:
-        """The canonical dict form (terms + optional name) parses."""
+        """The canonical dict form (terms + optional name) parses.
+
+        After stemming integration (issue #304), slot terms are stored as
+        their Porter2 stems: 'update' -> 'updat', 'edit' -> 'edit',
+        'docs' -> 'doc', 'readme' -> 'readm'.
+        """
         raw = {
             "keyword_groups": [
                 {
@@ -69,12 +79,19 @@ class TestTriggersParsing:
         assert group.weight == 1.0
         assert len(group.slots) == 2
         assert group.slots[0].name == "verbs"
-        assert group.slots[0].terms == ("update", "edit")
+        # Stems: "update" -> "updat", "edit" -> "edit"
+        assert group.slots[0].terms == ("updat", "edit")
         assert group.slots[1].name == "nouns"
-        assert group.slots[1].terms == ("docs", "readme")
+        # Stems: "docs" -> "doc", "readme" -> "readm"
+        assert group.slots[1].terms == ("doc", "readm")
 
     def test_parse_keyword_groups_bare_list_form(self) -> None:
-        """Authors may write slots as bare lists (no name)."""
+        """Authors may write slots as bare lists (no name).
+
+        After stemming integration (issue #304), slot terms are stored as
+        their Porter2 stems: 'github' -> 'github', 'issue' -> 'issu',
+        'pr' -> 'pr', 'workflow' -> 'workflow'.
+        """
         raw = {
             "keyword_groups": [
                 {
@@ -89,19 +106,27 @@ class TestTriggersParsing:
         triggers = _match_mod._parse_triggers(raw)
         group = triggers.keyword_groups[0]
         assert group.slots[0].name is None
+        # "github" -> "github" (unchanged)
         assert group.slots[0].terms == ("github",)
-        assert group.slots[1].terms == ("issue", "pr", "workflow")
+        # "issue" -> "issu", "pr" -> "pr", "workflow" -> "workflow"
+        assert group.slots[1].terms == ("issu", "pr", "workflow")
 
     def test_parse_keyword_groups_lowercases_terms(self) -> None:
-        """Terms are lowercased to match feature extraction."""
+        """Terms are lowercased and stemmed to match feature extraction.
+
+        After stemming integration (issue #304), case normalisation is
+        followed by Porter2 stemming: 'UPDATE' -> 'updat', 'DOCS' -> 'doc'.
+        """
         raw = {
             "keyword_groups": [
                 {"slots": [["UPDATE"], ["DOCS"]], "weight": 1.0}
             ]
         }
         triggers = _match_mod._parse_triggers(raw)
-        assert triggers.keyword_groups[0].slots[0].terms == ("update",)
-        assert triggers.keyword_groups[0].slots[1].terms == ("docs",)
+        # "UPDATE" lowercased -> "update" -> stem "updat"
+        assert triggers.keyword_groups[0].slots[0].terms == ("updat",)
+        # "DOCS" lowercased -> "docs" -> stem "doc"
+        assert triggers.keyword_groups[0].slots[1].terms == ("doc",)
 
 
 class TestScoreWithGroups:

@@ -10,6 +10,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Lazy import of the stemmer to avoid a circular-import at module load.
+# The actual function is imported inside Keyword.__post_init__ so that the
+# types module does not unconditionally depend on snowballstemmer at import
+# time (useful for tests that mock or inspect the types module in isolation).
+# The stem function is pulled once and cached as a module-level variable on
+# first use.
+_stem_fn = None
+
+
+def _get_stem_fn():  # type: ignore[return]
+    """Return the stem function, importing it on first call."""
+    global _stem_fn
+    if _stem_fn is None:
+        from claude_wayfinder.match._stem import stem
+        _stem_fn = stem
+    return _stem_fn
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -39,12 +56,43 @@ class Keyword:
     """A single keyword trigger with its match weight.
 
     Attributes:
-        term: Lowercase single-token trigger string.
+        term: Lowercase single-token trigger string.  When ``no_stem``
+            is ``False`` (the default), this field holds the Porter2 stem
+            of the original catalog term so morphological variants of the
+            same word route identically.  When ``no_stem`` is ``True``,
+            this field holds the original term verbatim (no stemming
+            applied); the matcher then checks it against
+            ``features.raw_keywords`` rather than ``features.keywords``.
         weight: Match weight in {0.25, 0.5, 1.0}.
+        no_stem: When ``True`` this term is opted out of stemming.
+            Defaults to ``False`` for back-compat — existing catalogs
+            without this field behave identically to before.
     """
 
     term: str
     weight: float
+    no_stem: bool = False
+
+    def __post_init__(self) -> None:
+        """Apply Porter2 stemming to ``term`` unless ``no_stem`` is True.
+
+        Stemming is applied at construction time so that ``Keyword.term``
+        always holds the form that will be checked against
+        ``features.keywords`` (stems) in the scoring engine.  When
+        ``no_stem=True`` the term is lowercased but NOT stemmed; the scorer
+        then checks it against ``features.raw_keywords`` instead.
+
+        This ``__post_init__`` runs regardless of how a ``Keyword`` is
+        constructed — through ``_parse_triggers``, directly in tests, or
+        via ``audit_catalog`` — ensuring consistent stem normalization
+        across all code paths.
+        """
+        # Normalise case always.
+        lowered = self.term.lower()
+        # Apply stemming only for normal (non-opted-out) terms.
+        stored = lowered if self.no_stem else _get_stem_fn()(lowered)
+        # frozen=True means we must use object.__setattr__ to mutate.
+        object.__setattr__(self, "term", stored)
 
 
 @dataclass(frozen=True)
@@ -52,14 +100,27 @@ class Slot:
     """One slot in a keyword_group: a set of alternative terms (OR).
 
     Attributes:
-        terms: Tuple of lowercase term strings. The slot is "filled"
-            when at least one of these terms is in features.keywords.
+        terms: Tuple of Porter2-stemmed lowercase term strings.  The
+            slot is "filled" when at least one of these stems is in
+            ``features.keywords`` (also stems).  Stemming is applied
+            automatically in ``__post_init__`` so that direct
+            construction and parse-time construction behave identically.
         name: Optional human-readable label (e.g., "verbs", "nouns").
             Ignored by the matcher; surfaced in debug/rationale output.
     """
 
     terms: tuple[str, ...]
     name: str | None = None
+
+    def __post_init__(self) -> None:
+        """Stem all terms in the slot using Porter2.
+
+        Applied at construction time so ``Slot.terms`` always contains
+        stems, regardless of whether the slot was created by
+        ``_parse_slot`` or directly in tests.
+        """
+        stemmed = tuple(_get_stem_fn()(t.lower()) for t in self.terms)
+        object.__setattr__(self, "terms", stemmed)
 
 
 @dataclass(frozen=True)
@@ -150,13 +211,22 @@ class Features:
     """Extracted feature set from the dispatch context JSON.
 
     All string collections are lowercased and deduplicated.  The
-    ``keywords`` set contains individual tokens split from the task
-    description using whitespace and punctuation boundaries.
+    ``keywords`` set contains Porter2-stemmed individual tokens split
+    from the task description.  The ``raw_keywords`` set contains the
+    same tokens WITHOUT stemming applied; it is used to match catalog
+    terms that have ``no_stem: true`` so those terms preserve their
+    exact-match semantics.
 
     Attributes:
         command_prefix: Single slash command string, or ``None``.
         agent_mentions: Explicit agent references in the prompt.
-        keywords: Token set extracted from ``task_description``.
+        keywords: Stemmed token set extracted from ``task_description``.
+            This is the primary matching surface for normal (stemmed)
+            catalog keywords.
+        raw_keywords: Unstemmed token set from ``task_description``.
+            Used exclusively to match catalog keywords with
+            ``no_stem=True`` so that acronyms and product names are
+            matched verbatim.
         paths: File/directory paths named in the task.
         extensions: File extensions (leading dot stripped, lowercased).
         tool_mentions: Explicit tool names mentioned.
@@ -165,6 +235,7 @@ class Features:
     command_prefix: str | None = None
     agent_mentions: frozenset[str] = field(default_factory=frozenset)
     keywords: frozenset[str] = field(default_factory=frozenset)
+    raw_keywords: frozenset[str] = field(default_factory=frozenset)
     paths: tuple[str, ...] = field(default_factory=tuple)
     extensions: frozenset[str] = field(default_factory=frozenset)
     tool_mentions: frozenset[str] = field(default_factory=frozenset)

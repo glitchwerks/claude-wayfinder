@@ -3,6 +3,21 @@
 Core matching logic: tokenises the task description, computes feature
 vectors, evaluates keyword groups and singletons, and computes a float
 score in [0.0, 1.0] for each catalog entry.
+
+Stemming (issue #304): ``extract_keywords`` applies Porter2 stemming to
+every token via :func:`claude_wayfinder.match._stem.stem`.  Catalog terms
+are stored as their Porter2 stems at catalog-build time (in the
+``stemmed_terms`` field).  The in-memory :class:`Keyword` object's
+``term`` field already holds the stem when the catalog is loaded via
+:func:`_parse._parse_triggers`.  The scoring membership check
+``k.term in features.keywords`` therefore compares stem→stem and
+morphological variants route identically without any change to the scoring
+formula or decision thresholds.
+
+Terms with ``no_stem=True`` bypass stemming on the catalog side (their
+``Keyword.term`` is verbatim).  They are matched against
+``features.raw_keywords`` (the unstemmed token set) rather than
+``features.keywords``.
 """
 
 from __future__ import annotations
@@ -12,6 +27,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from claude_wayfinder.match._stem import stem as _stem_word
 from claude_wayfinder.match._types import (
     CatalogEntry,
     Features,
@@ -56,30 +72,52 @@ _MAX_SKILLS = 3
 # Keyword extraction
 # ---------------------------------------------------------------------------
 
-def extract_keywords(text: str) -> frozenset[str]:
-    """Extract lowercase single tokens from a task description.
+def _raw_tokens(text: str) -> frozenset[str]:
+    """Extract raw lowercase tokens from *text* (no stemming applied).
 
-    The algorithm is intentionally simple (v5 §11.1 defers stemming /
-    lemmatization to post-launch tuning):
-
-    1. Lowercase the entire string.
-    2. Replace all non-alphanumeric, non-hyphen characters with spaces.
-    3. Split on whitespace.
-    4. Drop empty strings.
-    5. Deduplicate into a frozenset.
-
-    Hyphens inside tokens are preserved so ``"git-rebase"`` stays as
-    one token and can match a trigger term ``"git-rebase"``.
+    Shared internal helper used by both :func:`extract_keywords` (which
+    then stems the result) and :func:`build_features` (which preserves
+    the raw form in ``Features.raw_keywords`` for ``no_stem`` matching).
 
     Args:
         text: Raw task description string.
 
     Returns:
-        Frozenset of lowercase token strings.
+        Frozenset of lowercase token strings without stemming.
     """
     lowered = text.lower()
     spaced = _TOKEN_RE.sub(" ", lowered)
     return frozenset(t for t in spaced.split() if t)
+
+
+def extract_keywords(text: str) -> frozenset[str]:
+    """Extract Porter2-stemmed tokens from a task description.
+
+    Algorithm (issue #304 — stemming integration):
+
+    1. Lowercase the entire string.
+    2. Replace all non-alphanumeric, non-hyphen characters with spaces.
+    3. Split on whitespace.
+    4. Drop empty strings.
+    5. Apply Porter2 stemming to each token via
+       :func:`claude_wayfinder.match._stem.stem`.
+    6. Deduplicate into a frozenset.
+
+    Hyphens inside tokens are preserved so ``"git-rebase"`` stays as
+    one token and can match a trigger term ``"git-rebase"``.
+
+    Catalog keywords are also stored as their Porter2 stems at build
+    time (``stemmed_terms`` field).  The in-memory ``Keyword.term``
+    holds the stem, so scoring is a simple set-membership check between
+    two stem-sets — no change to the scoring formula.
+
+    Args:
+        text: Raw task description string.
+
+    Returns:
+        Frozenset of Porter2-stemmed lowercase token strings.
+    """
+    return frozenset(_stem_word(t) for t in _raw_tokens(text))
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +131,12 @@ def build_features(context: dict[str, Any]) -> Features:
     Normalises all string values to lowercase and deduplicates.
     File extensions are derived from ``file_paths`` (leading dot stripped).
 
+    Two keyword sets are populated:
+
+    - ``keywords``: Porter2-stemmed tokens (primary matching surface).
+    - ``raw_keywords``: Unstemmed tokens used only for catalog keywords
+      with ``no_stem=True`` (acronyms, product names, etc.).
+
     Args:
         context: Parsed dispatch context dict (from stdin).
 
@@ -100,7 +144,8 @@ def build_features(context: dict[str, Any]) -> Features:
         A fully-populated ``Features`` instance.
     """
     task = str(context.get("task_description", ""))
-    keywords = extract_keywords(task)
+    raw_kws = _raw_tokens(task)
+    stemmed_kws = frozenset(_stem_word(t) for t in raw_kws)
 
     raw_paths: list[str] = [str(p) for p in context.get("file_paths", [])]
     paths = tuple(raw_paths)
@@ -125,7 +170,8 @@ def build_features(context: dict[str, Any]) -> Features:
     return Features(
         command_prefix=command_prefix,
         agent_mentions=frozenset(raw_agents),
-        keywords=keywords,
+        keywords=stemmed_kws,
+        raw_keywords=raw_kws,
         paths=paths,
         extensions=frozenset(extensions),
         tool_mentions=frozenset(raw_tools),
@@ -267,8 +313,12 @@ def score(entry: CatalogEntry, features: Features) -> float:
     if any(m in features.agent_mentions for m in t.agent_mentions):
         return 1.0
 
-    # Hard zero: exclude term present in task keywords.
-    if any(x in features.keywords for x in t.excludes):
+    # Hard zero: exclude term present in task keywords (stemmed or raw).
+    # Excludes are checked against both stemmed and raw keyword sets so
+    # that exclusions work regardless of whether the term was stemmed.
+    if any(
+        x in features.keywords or x in features.raw_keywords for x in t.excludes
+    ):
         return 0.0
 
     s = 0.0
@@ -315,10 +365,20 @@ def score(entry: CatalogEntry, features: Features) -> float:
 
     # Keyword contributions: _KEYWORD_MULTIPLIER * weight per matched
     # term, EXCEPT terms covered by a satisfied group (suppressed).
+    #
+    # Stemming split (issue #304):
+    # - Normal keywords (no_stem=False): k.term holds the Porter2 stem;
+    #   matched against features.keywords (also stems).
+    # - no_stem keywords (no_stem=True): k.term holds the verbatim term;
+    #   matched against features.raw_keywords (unstemmed tokens).
     s += sum(
         _KEYWORD_MULTIPLIER * k.weight
         for k in t.keywords
-        if k.term in features.keywords and k.term not in suppressed
+        if k.term not in suppressed
+        and (
+            (not k.no_stem and k.term in features.keywords)
+            or (k.no_stem and k.term in features.raw_keywords)
+        )
     )
     return min(s, 1.0)
 
