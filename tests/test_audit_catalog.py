@@ -248,7 +248,10 @@ class TestWhitespaceInTerm:
         findings = rule_whitespace_in_term([e])
         assert len(findings) == 1
         assert findings[0].severity == Severity.BLOCKING
-        assert "two words" in findings[0].message
+        # After stemming, "two words" becomes "two word" (Porter2 stems
+        # "words" → "word").  The audit check still detects whitespace in
+        # the stored term; the message reflects the post-stem form.
+        assert "two word" in findings[0].message
 
 
 # ---------------------------------------------------------------------------

@@ -249,6 +249,11 @@ def _validate_keywords(
             )
             weight_f = clamped
 
+        # Preserve the no_stem flag when present (issue #304).
+        # Invalid values (non-bool) are silently coerced to False.
+        no_stem_raw = item.get("no_stem", False)
+        no_stem: bool = bool(no_stem_raw) if isinstance(no_stem_raw, bool) else False
+
         if term in seen:
             issues.append(
                 ValidationIssue(
@@ -261,7 +266,10 @@ def _validate_keywords(
         else:
             order.append(term)
 
-        seen[term] = {"term": term, "weight": weight_f}
+        kw_entry: dict[str, Any] = {"term": term, "weight": weight_f}
+        if no_stem:
+            kw_entry["no_stem"] = True
+        seen[term] = kw_entry
 
     return [seen[t] for t in order], issues
 

@@ -5,6 +5,12 @@ writing the catalog JSON and log, the ``detect_project_root`` git helper,
 and the CLI entry-point functions ``add_catalog_build_args``,
 ``run_catalog_build``, and ``main``.
 
+Stemming (issue #304): ``build_catalog()`` computes and stores a
+``stemmed_terms`` field on each catalog entry (a ``{term: stem}`` dict
+covering all keyword terms).  The ``--check-stems`` flag activates a
+post-build collision check that warns when two distinct catalog terms
+from different entries share the same Porter2 stem.
+
 Dependencies:
   - ``_validate.py``: ValidationIssue, validate_entry, TRIGGER_FIELDS
   - ``_semver.py``: _read_claude_version
@@ -51,10 +57,73 @@ from claude_wayfinder.build_catalog._validate import (
     ValidationIssue,
     validate_entry,
 )
+from claude_wayfinder.match._stem import stem as _stem_word
 
 _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
+
+# Prefix for stem-collision warning lines emitted to stderr/stdout.
+_STEM_COLLISION_PREFIX: str = "STEM_COLLISION"
+
+
+# ---------------------------------------------------------------------------
+# Stem-collision checker (--check-stems, issue #304)
+# ---------------------------------------------------------------------------
+
+
+def check_stem_collisions(catalog: dict[str, Any]) -> list[str]:
+    """Detect catalog keyword terms from different entries that share a stem.
+
+    Two terms from the SAME entry sharing a stem is harmless (they deduplicate
+    to the same stem in the scoring set).  Cross-entry collisions are
+    significant: when 'implement' (entry A) and 'implementing' (entry B) both
+    stem to 'implement', a prompt containing 'implementing' boosts BOTH A and
+    B equally — the terms no longer differentiate them.  This is a warning,
+    not an error, because the catalog author may have deliberately accepted the
+    overlap.
+
+    Terms with ``no_stem=True`` are stored verbatim; their raw forms are used
+    for exact matching and are never subject to stem collision.
+
+    Args:
+        catalog: The built catalog dict (as produced by :func:`build_catalog`).
+
+    Returns:
+        A list of human-readable collision strings.  Empty when no collisions
+        are detected.  Each string starts with ``STEM_COLLISION``.
+    """
+    # stem_value → list of (entry_name, raw_term) pairs.
+    stem_to_terms: dict[str, list[tuple[str, str]]] = {}
+
+    for entry in catalog.get("entries", []):
+        entry_name: str = entry.get("name", "<unknown>")
+        kws = entry.get("triggers", {}).get("keywords", [])
+        for kw in kws:
+            term: str = kw.get("term", "")
+            no_stem: bool = bool(kw.get("no_stem", False))
+            if not term or no_stem:
+                # no_stem terms are excluded from collision detection:
+                # they are matched verbatim, so same-stem is not a risk.
+                continue
+            stem_val: str = _stem_word(term)
+            stem_to_terms.setdefault(stem_val, []).append((entry_name, term))
+
+    collisions: list[str] = []
+    for stem_val, occurrences in stem_to_terms.items():
+        # Only report when at least two DIFFERENT entries contribute to the same
+        # stem (same-entry duplicates are already deduplicated by validate_entry).
+        entry_names = [e for e, _ in occurrences]
+        if len(set(entry_names)) < 2:
+            continue
+        terms_desc = ", ".join(
+            f"'{term}' (in '{ename}')" for ename, term in occurrences
+        )
+        collisions.append(
+            f"{_STEM_COLLISION_PREFIX}: stem '{stem_val}' shared by {terms_desc}"
+        )
+
+    return collisions
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +210,20 @@ def _sort_entry_lists(entry: dict[str, Any]) -> dict[str, Any]:
     # Absent on skill entries; bool() guard ensures it is never None.
     if "routable" in entry:
         out["routable"] = bool(entry["routable"])
+
+    # --- stemmed_terms (issue #304) ---
+    # Compute a {term: stem} mapping for every keyword term.
+    # Terms with no_stem=True map to themselves (verbatim, no stemming).
+    # Entries with no keywords get an empty dict (or no field at all).
+    kw_list = triggers.get("keywords", [])
+    if kw_list:
+        stemmed: dict[str, str] = {}
+        for kw in kw_list:
+            term = kw["term"]
+            no_stem: bool = bool(kw.get("no_stem", False))
+            stemmed[term] = term if no_stem else _stem_word(term)
+        out["stemmed_terms"] = stemmed
+
     return out
 
 
@@ -891,6 +974,19 @@ def add_catalog_build_args(parser: argparse.ArgumentParser) -> None:
             "via 'git rev-parse --show-toplevel' in the current directory."
         ),
     )
+    parser.add_argument(
+        "--check-stems",
+        action="store_true",
+        default=False,
+        help=(
+            "After building the catalog, report any pairs of distinct keyword "
+            "terms from different catalog entries that share the same Porter2 "
+            "stem.  Competing-skill stem collisions are printed to stderr as "
+            "STEM_COLLISION lines.  Does not affect the catalog output or exit "
+            "code; authors should review and either accept the collision or add "
+            "no_stem: true to disambiguate.  (issue #304)"
+        ),
+    )
 
 
 def run_catalog_build(args: argparse.Namespace) -> int:
@@ -937,7 +1033,7 @@ def run_catalog_build(args: argparse.Namespace) -> int:
     else:
         project_root = detect_project_root(user_global_dir=None)
 
-    return build(
+    exit_code = build(
         skills_dir=resolved["skills_dir"],
         agents_dir=resolved["agents_dir"],
         plugin_overrides_dir=resolved["plugin_overrides_dir"],
@@ -948,6 +1044,34 @@ def run_catalog_build(args: argparse.Namespace) -> int:
         log_path=resolved["log"],
         project_root=project_root,
     )
+
+    # --- --check-stems collision report (issue #304) ---
+    # Runs after a successful build so the catalog JSON exists.  Collisions
+    # are printed to stderr as informational warnings; the exit code and the
+    # catalog output are unaffected.
+    check_stems: bool = getattr(args, "check_stems", False)
+    if check_stems and resolved["out"].exists():
+        import json as _json
+
+        try:
+            catalog_data = _json.loads(
+                resolved["out"].read_text(encoding="utf-8")
+            )
+            collisions = check_stem_collisions(catalog_data)
+            if collisions:
+                for line in collisions:
+                    print(line, file=sys.stderr)
+            else:
+                print(
+                    "[check-stems] No stem collisions detected.", file=sys.stderr
+                )
+        except Exception as exc:  # pragma: no cover
+            print(
+                f"[check-stems] Could not read catalog for collision check: {exc}",
+                file=sys.stderr,
+            )
+
+    return exit_code
 
 
 def main(argv: list[str] | None = None) -> int:

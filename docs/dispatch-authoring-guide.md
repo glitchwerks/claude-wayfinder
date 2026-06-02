@@ -24,6 +24,20 @@ For canonical field definitions — types, defaults, and schema stability guaran
 
 **`keywords`** — A list of `{term, weight}` mappings. Valid weights are exactly `0.25`, `0.5`, and `1.0`. Each term found in the input's keyword set contributes `+0.5 × weight` to the score, capped at `1.0`. Terms are case-insensitive. Terms may not contain whitespace — the matcher tokenizes on whitespace, so a multi-word term will never match.
 
+&nbsp;&nbsp;&nbsp;&nbsp;**Stemming (issue #304):** The matcher applies symmetric Porter2 (Snowball English) stemming. Catalog terms are stemmed at catalog-build time; input tokens are stemmed at dispatch time. Matching is stem-vs-stem, so `implementing` routes the same as `implement`, `refactored` the same as `refactor`, and `linting` the same as `lint`. You do **not** need to enumerate inflected forms — list the base form and stemming handles variants automatically.
+
+&nbsp;&nbsp;&nbsp;&nbsp;**`no_stem` opt-out:** Add `no_stem: true` to any keyword entry to exempt that term from stemming. Use this for acronyms, product names, and CLI flags that must not collapse (`aws`, `gh`, `ps1`). A `no_stem` term is matched verbatim against the raw (unstemmed) input token. Example:
+
+```yaml
+triggers:
+  keywords:
+    - { term: "deploy", weight: 1.0 }        # stemmed: matches "deploying", "deployed"
+    - { term: "aws", weight: 1.0, no_stem: true }   # exact: matches "aws" only
+    - { term: "gh", weight: 0.5, no_stem: true }    # exact: matches "gh" only
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;**Stem-collision checker:** Run `python -m claude_wayfinder catalog build --check-stems` to detect pairs of distinct keyword terms from different catalog entries that share the same Porter2 stem. Competing-skill collisions are printed to stderr as `STEM_COLLISION` lines. Review each collision and either accept it or add `no_stem: true` to one of the terms to disambiguate.
+
 **`keyword_groups`** — AND-group conjunctive triggers (added v0.6.0, #135). A list of `{slots: [{name, terms: [...]}, ...], weight}` objects. Unlike flat `keywords`, which score independently on each matching term, a group fires **only when all of its slots are satisfied** — each slot must have at least one of its `terms` present in the input keywords. On a full match, the group contributes `+1.0 × weight` to the score (the `_GROUP_MULTIPLIER` of `1.0` is deliberately distinct from the per-keyword `0.5` multiplier, so a satisfied weight-`1.0` group can solo-reach the `delegate` threshold). Requires ≥ 2 slots per group; single-slot groups are dropped with a warning. Weight values follow the same `{0.25, 0.5, 1.0}` ladder as flat keywords. Use `keyword_groups` when a routing decision should only fire for the co-occurrence of two or more terms — for example, a verb slot (`create`, `open`) and a noun slot (`issue`, `ticket`) — rather than on either term appearing alone. See `docs/design/trigger-schema.md §9.10` for a worked example.
 
 **`tool_mentions`** — Tool names matched against the `tool_mentions` dimension of the dispatch input. Each match contributes `+0.5`. Tool names are case-sensitive; the harness passes `Bash`, `Read`, `WebFetch`, not lowercase variants.

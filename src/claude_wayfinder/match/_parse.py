@@ -6,12 +6,20 @@ typed ``Triggers`` / ``KeywordGroup`` / ``Slot`` dataclasses defined in
 are silently dropped so a corrupted catalog degrades gracefully rather
 than crashing at dispatch time.  Fatal validation lives in
 ``build_catalog.py``.
+
+Stemming (issue #304): keyword ``term`` values are run through Porter2
+at parse time so that ``Keyword.term`` always holds a stem when
+``no_stem`` is ``False``.  This makes the scoring check
+``k.term in features.keywords`` a stem-vs-stem comparison with no
+change to the scoring formula.  When ``no_stem=True`` the term is
+preserved verbatim and matched against ``features.raw_keywords``.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from claude_wayfinder.match._stem import stem as _stem_word
 from claude_wayfinder.match._types import (
     Keyword,
     KeywordGroup,
@@ -40,8 +48,10 @@ def _parse_slot(raw: Any) -> Slot | None:
         A ``Slot`` instance, or ``None`` if the input is malformed.
     """
     if isinstance(raw, list):
+        # Bare list form: slot-level no_stem not supported in this form;
+        # all terms are stemmed.
         terms = tuple(
-            str(t).lower() for t in raw if isinstance(t, str)
+            _stem_word(str(t).lower()) for t in raw if isinstance(t, str)
         )
         if not terms:
             return None
@@ -51,7 +61,7 @@ def _parse_slot(raw: Any) -> Slot | None:
         if not isinstance(raw_terms, list):
             return None
         terms = tuple(
-            str(t).lower() for t in raw_terms if isinstance(t, str)
+            _stem_word(str(t).lower()) for t in raw_terms if isinstance(t, str)
         )
         if not terms:
             return None
@@ -105,15 +115,30 @@ def _parse_triggers(raw: dict[str, Any]) -> Triggers:
     Returns:
         A ``Triggers`` instance with all fields populated.
     """
-    keywords: list[Keyword] = []
+    # Build keywords with stem-deduplication.  Two distinct catalog terms
+    # may collapse to the same Porter2 stem (e.g. "doc" and "docs" both
+    # become "doc").  After stemming, only one Keyword per stem is kept
+    # (last-wins, consistent with _validate_keywords dedup).  This prevents
+    # double-counting in the scorer.  no_stem terms are keyed by their raw
+    # term (not the stem) so they remain distinct.
+    seen_stems: dict[str, Keyword] = {}
     for kw in raw.get("keywords", []):
         if isinstance(kw, dict) and "term" in kw and "weight" in kw:
-            keywords.append(
-                Keyword(
-                    term=str(kw["term"]).lower(),
-                    weight=float(kw["weight"]),
-                )
+            no_stem: bool = bool(kw.get("no_stem", False))
+            # Keyword.__post_init__ applies Porter2 stemming automatically
+            # (issue #304).  Pass the raw term; the dataclass handles
+            # lowercasing and stemming.  When no_stem=True the dataclass
+            # preserves the term verbatim (lowercased only).
+            new_kw = Keyword(
+                term=str(kw["term"]),
+                weight=float(kw["weight"]),
+                no_stem=no_stem,
             )
+            # Dedup key: use the stored (stemmed) term so that "docs" and
+            # "doc" (both → "doc") collapse.  For no_stem terms the stored
+            # term IS the raw form, so they are never accidentally merged.
+            seen_stems[new_kw.term] = new_kw
+    keywords: list[Keyword] = list(seen_stems.values())
 
     keyword_groups: list[KeywordGroup] = []
     for raw_group in raw.get("keyword_groups", []):
