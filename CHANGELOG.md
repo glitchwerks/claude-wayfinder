@@ -4,6 +4,50 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-03
+
+Minor release adding symmetric morphological normalization to the dispatch
+matcher. Trigger terms are now Porter2 (Snowball English) stemmed at both
+catalog-build time and dispatch time, so inflected forms of a keyword route
+identically to its base form — `implementing` matches `implement`,
+`refactored` matches `refactor`, `linting` matches `lint` — without authors
+enumerating every inflection. A per-term `no_stem` opt-out preserves verbatim
+matching for acronyms, product names, and CLI flags, and a `--check-stems`
+collision checker surfaces distinct terms that collapse to the same stem.
+
+### Added
+
+- **Symmetric Porter2/Snowball stemming in the matcher** (#304, PR #306).
+  Catalog keyword terms and `keyword_groups` slot terms are stemmed at build
+  time; input tokens are stemmed at dispatch time; matching is stem-vs-stem.
+  Inflected forms now route to their base term automatically. The scoring
+  formula and thresholds are unchanged — only which tokens count as a match.
+- **`no_stem` per-term opt-out** (#304). Set `no_stem: true` on a
+  `{term, weight}` keyword mapping to match the raw, unstemmed input token
+  verbatim — intended for acronyms, product names, and CLI flags (`aws`, `gh`,
+  `ps1`) that must not be collapsed by the stemmer.
+- **`stemmed_terms` catalog field** (#304). Each catalog entry stores its
+  stemmed terms at build time; the addition is back-compatible for existing
+  catalog consumers.
+- **`--check-stems` collision checker** (#304). `claude_wayfinder catalog build
+  --check-stems` emits `STEM_COLLISION` lines to stderr for distinct keyword
+  terms from different entries that share a Porter2 stem, so authors can review
+  and disambiguate with `no_stem`.
+
+### Changed
+
+- **`snowballstemmer>=2.2` added as a runtime dependency** (#304).
+
+### Documentation
+
+- **Next-stage trigger-algorithm evaluation** (#288, PR #302) —
+  `docs/exploration/2026-05-28-trigger-algorithms.md` ranks candidate matcher
+  improvements; stemming was the Rank-1 pilot delivered in this release.
+- **`dispatch-authoring` skill stemming coverage** (#307, PR #308) — the skill
+  now documents symmetric stemming, the `no_stem` opt-out, the `--check-stems`
+  pre-flight, and a stemming-collision footgun, consistent with
+  `docs/dispatch-authoring-guide.md`.
+
 ## [1.1.1] - 2026-06-01
 
 Patch release that makes the `session_id` attribution promised by v1.1.0
