@@ -14,8 +14,9 @@ description: >
   isn't working", "dispatch isn't picking up", or similar authoring
   or troubleshooting requests around dispatch configuration. Covers
   the matcher's seven-decision ladder, scoring math, weight ladder
-  {0.25, 0.5, 1.0}, fnmatch path-glob footguns, conflict-pair
-  detection, and the audit-catalog CLI pointer.
+  {0.25, 0.5, 1.0}, symmetric Porter2 stemming and the no_stem
+  opt-out, fnmatch path-glob footguns, conflict-pair detection, and
+  the audit-catalog CLI pointer.
 ---
 
 # Frontmatter Authoring Guide
@@ -66,7 +67,8 @@ discussion behind the sidecar approach see `docs/design/trigger-schema.md`.
 | `command_prefixes` | `triggers:` block | Slash commands that immediately short-circuit to score `1.0`. |
 | `agent_mentions` | `triggers:` block | Agent names whose explicit mention in the prompt immediately short-circuits to score `1.0`. |
 | `path_globs` | `triggers:` block | `fnmatch`-style globs matched against the `file_paths` dimension of the input. Each matched glob adds `0.4` to the score. |
-| `keywords` | `triggers:` block | List of `{term, weight}` mappings. Each term found in the input keywords adds `0.5 × weight` to the score. |
+| `keywords` | `triggers:` block | List of `{term, weight}` mappings. Each term found in the input keywords adds `0.5 × weight` to the score. Terms are Porter2-stemmed unless `no_stem: true` is set (see § 1 "Stemming"). |
+| `no_stem` | per-keyword flag | Optional `no_stem: true` on a `{term, weight}` mapping exempts that term from stemming — it matches the raw (unstemmed) input token verbatim. Use for acronyms, product names, and CLI flags (`aws`, `gh`, `ps1`). |
 | `keyword_groups` | `triggers:` block | **AND-group conjunctive triggers** (added v0.6.0, #135). List of `{slots: [{name, terms: [...]}, ...], weight}` groups. A group fires only when **all** of its slots match — each slot must have ≥ 1 of its terms present in the input keywords. On match, the group adds `1.0 × weight` (via `_GROUP_MULTIPLIER`, distinct from the `0.5` `_KEYWORD_MULTIPLIER` so a satisfied weight-1.0 group can solo-decide `delegate`). Use when a routing decision should require co-occurrence of two or more terms (e.g. verb + noun) rather than either alone. |
 | `tool_mentions` | `triggers:` block | Tool names matched against the input `tool_mentions` dimension. Each match adds `0.5`. |
 | `excludes` | `triggers:` block | Terms that hard-zero the entry's score when found in the input keywords. |
@@ -86,6 +88,37 @@ running score that is capped at `1.0` before being returned. An entry
 with no triggers in any of these three fields will score `0.0` on any
 prompt that does not happen to name the entry directly by command prefix
 or agent mention.
+
+### Stemming (symmetric Porter2, issue #304)
+
+The matcher applies **symmetric Porter2 (Snowball English) stemming** to
+keyword matching. Catalog terms are stemmed at catalog-build time; input
+tokens are stemmed at dispatch time; matching is stem-vs-stem. The practical
+consequence for authors: **list the base form only — you do not need to
+enumerate inflections.** `implement` matches `implementing` and
+`implemented`; `refactor` matches `refactored`; `lint` matches `linting`.
+
+This applies to flat `keywords` terms and to `keyword_groups` slot terms
+alike. Two distinct catalog terms that collapse to the same stem are
+deduped at parse time so a single input token cannot double-count.
+
+**`no_stem` opt-out.** Add `no_stem: true` to a `{term, weight}` mapping to
+exempt that term from stemming. A `no_stem` term is matched verbatim against
+the raw (unstemmed) input token. Use it for tokens that must not collapse —
+acronyms, product names, and CLI flags:
+
+```yaml
+triggers:
+  keywords:
+    - { term: "deploy", weight: 1.0 }                 # stemmed: matches "deploying", "deployed"
+    - { term: "aws", weight: 1.0, no_stem: true }     # exact: matches "aws" only
+    - { term: "gh", weight: 0.5, no_stem: true }      # exact: matches "gh" only
+```
+
+Stemming changes nothing about the scoring formula or thresholds — it only
+changes which input tokens count as a match. See `docs/dispatch-authoring-guide.md`
+for the canonical reference, and § 9 for the `--check-stems` collision
+pre-flight.
 
 ---
 
@@ -266,6 +299,14 @@ unexpectedly.
   exactly two keys: `term` (a string) and `weight` (one of `0.25`,
   `0.5`, `1.0`).
 
+- **Keyword terms are Porter2-stemmed unless `no_stem: true`.** List base
+  forms; stemming matches inflections automatically (see § 1 "Stemming").
+  Set `no_stem: true` on terms that must match verbatim — acronyms, product
+  names, CLI flags. A `no_stem` term is compared against the raw input token,
+  not its stem. Authoring inflected variants of a stemmed term (`deploy`,
+  `deploying`, `deployed`) is redundant — they all collapse to one stem and
+  are deduped.
+
 - **`path_globs` uses Python `fnmatch` semantics, not gitignore semantics.**
   The matcher calls `fnmatch.fnmatch(path, glob)`. This has important
   consequences — see the footguns section for the most common mistake.
@@ -357,6 +398,18 @@ on, or a `command_prefixes` entry that explicitly routes one of them. If
 the overlap is fundamental — the two entries genuinely do the same thing
 in the same context — consider whether they should be merged into one.
 
+**Stemming can make two distinct terms collide silently.** Because matching
+is stem-vs-stem, two terms you intended to be different can collapse to the
+same Porter2 stem and fire as one — `universe` and `university` both stem to
+`univers`, `operating` and `operate` both stem to `oper`. When that collision
+spans two competing catalog entries, it manufactures a conflict pair you did
+not author by hand. The fix is either to accept the collision (often it is
+harmless) or to add `no_stem: true` to one of the terms so it matches
+verbatim. Run `python -m claude_wayfinder catalog build --check-stems` (see
+§ 9) to surface cross-entry stem collisions as `STEM_COLLISION` warnings
+before they reach the live catalog. Acronyms and product names are the most
+common over-stem casualties — prefer `no_stem: true` on those by default.
+
 ---
 
 ## 6. Authoring Workflow
@@ -385,6 +438,11 @@ A well-calibrated entry typically has one or two `1.0` terms, three to five
 `0.5` terms, and a handful of `0.25` terms. If the `1.0` bucket is full of
 generic words (`code`, `file`, `run`) the entry will conflict with half the
 catalog.
+
+List **base forms only** — terms are Porter2-stemmed, so `implement` already
+covers `implementing` and `implemented` (see § 1 "Stemming"). Mark acronyms,
+product names, and CLI flags with `no_stem: true` so they are not over-stemmed
+into a collision with another entry's term.
 
 **Step 3 — Add `path_globs` for any file patterns the body implies.**
 If the body directs attention to specific file types or directory trees, add
@@ -468,6 +526,9 @@ Before committing, verify that:
 - No term contains leading or trailing whitespace (the generator does not
   strip these; `" python"` and `"python"` are different terms).
 - `command_prefixes` entries each start with `/`.
+- Acronyms, product names, and CLI flags carry `no_stem: true` so they are
+  not over-stemmed; run `python -m claude_wayfinder catalog build --check-stems`
+  to confirm no unintended cross-entry stem collisions were introduced.
 
 ---
 
@@ -485,6 +546,8 @@ expected, work through the symptom table below to identify the cause.
 | Weight you set in the sidecar is not what the matcher uses | Non-ladder weight (e.g. `0.75`) was silently clamped to the nearest step; check `catalog-generation.log`. |
 | A specific term never contributes to the score | The term appears in the entry's own `excludes` list, zeroing the entry whenever it is present in the input. |
 | A `tool_mentions` entry never matches | Case mismatch — the harness passes `Bash`, not `bash`; `WebFetch`, not `webfetch`. Use the exact harness casing. |
+| A term matches inputs that share only a word stem (`university` firing on `universe`) | Porter2 over-stemming collapsed two distinct terms to one stem. Add `no_stem: true` to the term, or run `catalog build --check-stems` to find the collision (§ 1, § 5, § 9). |
+| An acronym / product name matches unexpected inflections | The token was stemmed when it should be literal. Add `no_stem: true` to match it verbatim. |
 
 **Diagnostic sequence when none of the above is obvious:**
 
@@ -516,6 +579,16 @@ The CLI is the authoritative source for catalog-wide problems. It is not a
 substitute for the field-by-field checks in Sections 6 and 7, but it
 catches conflict pairs and unreachable entries that would require reading
 the full catalog by hand to detect otherwise.
+
+**Stem-collision pre-flight.** Run
+`python -m claude_wayfinder catalog build --check-stems` whenever you add or
+edit keyword terms. It detects pairs of distinct keyword terms — across
+different catalog entries — that share the same Porter2 stem, printing each
+to stderr as a `STEM_COLLISION` line. Review each: accept the collision if
+it is harmless, or add `no_stem: true` to one of the terms to disambiguate
+(see the § 5 stemming footgun). This check is distinct from `audit-catalog`'s
+conflict-pair detection — a stem collision can manufacture a conflict pair
+that the hand-authored keyword lists do not reveal on inspection.
 
 ---
 
