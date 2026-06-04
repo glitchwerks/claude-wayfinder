@@ -26,7 +26,7 @@ The **Quick reference card** at the end is the section to keep open during a rel
 | **Patch** (`x.y.Z`) | Bug fixes, doc-only, test-only | — | No |
 | **Minor** (`x.Y.0`) | New skills, new commands, backward-compatible additions | Update README skill section if applicable | No |
 | **Major** (`X.0.0`) | Breaking changes, schema migrations | Update README; note breaking changes in CHANGELOG | No |
-| **Repo move** | `source.repo` in `glitchwerks/plugins` marketplace changes | All of major + cache wipe (step 12) | **Yes** |
+| **Repo move** | `source.repo` in `glitchwerks/claude-plugins` marketplace changes | All of major + cache wipe (step 12) | **Yes** |
 
 The cache wipe applies **only to repo moves**. Pure version bumps — including major bumps — do not need it. See the cache-wipe footgun entry below.
 
@@ -89,18 +89,18 @@ This returns the underlying commit SHA. **Never use bare `git rev-parse vX.Y.Z`*
 
 **8. Open the marketplace bump PR**
 
-In `glitchwerks/plugins`, update `.claude-plugin/marketplace.json`:
+In `glitchwerks/claude-plugins`, update `.claude-plugin/marketplace.json`:
 - `plugins[?name=="claude-wayfinder"].source.sha` → commit SHA from step 7
 - `plugins[?name=="claude-wayfinder"].version` → `X.Y.Z`
 
 **9. Merge the marketplace PR**
 
-`glitchwerks/plugins` has no CI (as of 2026-05-20) — squash-merge immediately.
+`glitchwerks/claude-plugins` has no CI (as of 2026-05-20) — squash-merge immediately.
 
 **10. Verify the live pin**
 
 ```bash
-gh api repos/glitchwerks/plugins/contents/.claude-plugin/marketplace.json \
+gh api repos/glitchwerks/claude-plugins/contents/.claude-plugin/marketplace.json \
   --jq '.content' | base64 -d | grep -A 6 '"claude-wayfinder"'
 ```
 
@@ -128,7 +128,7 @@ Then open a new Claude Code session and run `/reload-plugins`.
 
 **Rule:** Use `git rev-parse 'vX.Y.Z^{commit}'` for the marketplace SHA pin. Bare `git rev-parse vX.Y.Z` returns the tag-object SHA on annotated tags, which the marketplace loader cannot resolve.
 
-**Source of truth:** glitchwerks/plugins#20 (proved the tag-object SHA breaks the loader), glitchwerks/plugins#21 (fix).
+**Source of truth:** glitchwerks/claude-plugins#20 (proved the tag-object SHA breaks the loader), glitchwerks/claude-plugins#21 (fix).
 
 **Comply:** Always append `^{commit}` (step 7 above).
 
@@ -136,9 +136,9 @@ Then open a new Claude Code session and run `/reload-plugins`.
 
 ### Marketplace repo bump is required
 
-**Rule:** A release is not installable from `glitchwerks/plugins` until `marketplace.json` is bumped.
+**Rule:** A release is not installable from `glitchwerks/claude-plugins` until `marketplace.json` is bumped.
 
-**Source of truth:** glitchwerks/plugins#19 (claude-wayfinder v0.4.1 — release was not installable until the marketplace bump landed).
+**Source of truth:** glitchwerks/claude-plugins#19 (claude-wayfinder v0.4.1 — release was not installable until the marketplace bump landed).
 
 **Comply:** Steps 8–10 are not optional. Verify with step 10 before announcing.
 
@@ -196,7 +196,7 @@ Then open a new Claude Code session and run `/reload-plugins`.
 
 1. **Yank from PyPI** — use the PyPI web UI (`https://pypi.org/manage/project/claude-wayfinder/releases/`) to yank the version. Yank hides it from unconstrained installs; Delete is irreversible.
 2. **Delete the tag** — `git push --delete origin vX.Y.Z` then `git tag -d vX.Y.Z`.
-3. **Revert the marketplace pin** — PR on `glitchwerks/plugins` restoring the prior `sha` and `version`. Merge immediately.
+3. **Revert the marketplace pin** — PR on `glitchwerks/claude-plugins` restoring the prior `sha` and `version`. Merge immediately.
 4. **Comment on tracking issue** — note the rollback, symptom, and next steps. Do not re-close the issue until a corrected release lands.
 5. **Post-mortem** — add a CHANGELOG entry for the reverted version and update the relevant Footguns entry or memory file.
 
@@ -223,9 +223,9 @@ Pre-flight
  6. gh release view vX.Y.Z --repo glitchwerks/claude-wayfinder
     # auto-created by release.yml on tag push (closed #131)
  7. git -C <repo> rev-parse 'vX.Y.Z^{commit}'   # commit SHA (not tag-obj)
- 8. Open PR on glitchwerks/plugins: bump sha + version for claude-wayfinder
+ 8. Open PR on glitchwerks/claude-plugins: bump sha + version for claude-wayfinder
  9. Merge marketplace PR
-10. gh api repos/glitchwerks/plugins/contents/.claude-plugin/marketplace.json \
+10. gh api repos/glitchwerks/claude-plugins/contents/.claude-plugin/marketplace.json \
       --jq '.content' | base64 -d | grep -A 6 '"claude-wayfinder"'
 11. Announce: users must run /setup-wayfinder to pick up the new version
 
