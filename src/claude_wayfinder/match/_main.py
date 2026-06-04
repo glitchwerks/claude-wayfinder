@@ -16,6 +16,7 @@ from typing import Any
 from claude_wayfinder.match._catalog import (
     _compute_catalog_hash,
     _emit_catalog_error,
+    _get_matcher_version,
     _resolve_catalog_path,
     _resolve_log_path,
     _resolve_overrides_path,
@@ -189,6 +190,11 @@ def main(argv: list[str] | None = None) -> None:
             _resolve_log_path(),
             override_id=rule.id,
         )
+        # Include catalog_hash and matcher_version in stdout so the JS
+        # hook (log-dispatch-decision.js) can write a fully-attributed
+        # log row without null fields (issue #311).
+        result["catalog_hash"] = catalog_hash
+        result["matcher_version"] = _get_matcher_version()
         print(json.dumps(result, sort_keys=True), flush=True)
         return
 
@@ -221,5 +227,11 @@ def main(argv: list[str] | None = None) -> None:
     # --- Log decision (non-fatal: log failure never blocks stdout output) ---
     _write_log_entry(context, result, catalog_hash, _resolve_log_path(), override_id=None)
 
-    # --- Emit JSON ---
+    # --- Emit JSON (enriched with catalog_hash / matcher_version) ---
+    # These fields are added AFTER the log write so the log entry shape
+    # is unchanged; the fields are present in stdout for the JS hook
+    # (log-dispatch-decision.js) to write a complete attributed row
+    # (issue #311).
+    result["catalog_hash"] = catalog_hash
+    result["matcher_version"] = _get_matcher_version()
     print(json.dumps(result, sort_keys=True), flush=True)

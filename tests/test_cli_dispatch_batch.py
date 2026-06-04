@@ -276,6 +276,56 @@ class TestBatchHappyPath:
             f"stderr: {result.stderr}"
         )
 
+    def test_each_output_includes_catalog_hash(self) -> None:
+        """Every batch output decision must carry a ``catalog_hash`` field
+        matching ``sha256:<64 hex chars>`` (issue #311 — consistency with
+        single-mode fix).
+        """
+        import re
+
+        stdin = _ndjson(_CONTEXT_A, _CONTEXT_B)
+        result = _run_batch(
+            stdin,
+            env_overrides={
+                "DISPATCH_CATALOG_PATH": str(_DEMO_CATALOG_PATH)
+            },
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        decisions = _parse_ndjson_stdout(result.stdout)
+        for i, dec in enumerate(decisions):
+            assert "catalog_hash" in dec, (
+                f"Output line {i} missing 'catalog_hash' key (issue #311).\n"
+                f"line: {dec!r}"
+            )
+            assert re.match(r"^sha256:[0-9a-f]{64}$", dec["catalog_hash"]), (
+                f"Output line {i} catalog_hash malformed: "
+                f"{dec['catalog_hash']!r}"
+            )
+
+    def test_each_output_includes_matcher_version(self) -> None:
+        """Every batch output decision must carry a non-empty
+        ``matcher_version`` string (issue #311 — consistency with
+        single-mode fix).
+        """
+        stdin = _ndjson(_CONTEXT_A, _CONTEXT_B)
+        result = _run_batch(
+            stdin,
+            env_overrides={
+                "DISPATCH_CATALOG_PATH": str(_DEMO_CATALOG_PATH)
+            },
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        decisions = _parse_ndjson_stdout(result.stdout)
+        for i, dec in enumerate(decisions):
+            assert "matcher_version" in dec, (
+                f"Output line {i} missing 'matcher_version' key (issue #311).\n"
+                f"line: {dec!r}"
+            )
+            assert isinstance(dec["matcher_version"], str) and dec["matcher_version"], (
+                f"Output line {i} matcher_version must be a non-empty string, "
+                f"got: {dec['matcher_version']!r}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Blank-line handling

@@ -190,6 +190,75 @@ class TestRealCatalogMode:
             f"stdout: {result.stdout}"
         )
 
+    def test_stdout_decision_includes_catalog_hash(self) -> None:
+        """Stdout decision JSON must include ``catalog_hash`` as a real
+        sha256 digest so the JS hook can write a complete attributed row
+        (issue #311).
+
+        The JS hook builds its log entry via
+        ``decision.catalog_hash ?? null`` — if the Python matcher omits
+        this field from stdout the hook writes ``null`` and the attributed
+        row is incomplete.
+        """
+        import re
+
+        result = _run_dispatch(
+            env_overrides={"DISPATCH_CATALOG_PATH": str(_DEMO_CATALOG_PATH)},
+        )
+        assert result.returncode == 0, (
+            f"dispatch failed; cannot inspect decision JSON.\n"
+            f"stderr: {result.stderr}"
+        )
+        try:
+            decision = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            pytest.fail(
+                f"stdout is not valid JSON: {exc}\n"
+                f"stdout: {result.stdout!r}"
+            )
+        assert "catalog_hash" in decision, (
+            f"'catalog_hash' key missing from stdout decision JSON (issue #311).\n"
+            f"output: {decision}"
+        )
+        catalog_hash = decision["catalog_hash"]
+        assert re.match(r"^sha256:[0-9a-f]{64}$", catalog_hash), (
+            f"catalog_hash must match sha256:<64 hex chars>, got: "
+            f"{catalog_hash!r}"
+        )
+
+    def test_stdout_decision_includes_matcher_version(self) -> None:
+        """Stdout decision JSON must include ``matcher_version`` as a
+        non-empty string so the JS hook can write a complete attributed
+        row (issue #311).
+
+        The JS hook builds its log entry via
+        ``decision.matcher_version ?? null`` — if the Python matcher
+        omits this field from stdout the hook writes ``null``.
+        """
+        result = _run_dispatch(
+            env_overrides={"DISPATCH_CATALOG_PATH": str(_DEMO_CATALOG_PATH)},
+        )
+        assert result.returncode == 0, (
+            f"dispatch failed; cannot inspect decision JSON.\n"
+            f"stderr: {result.stderr}"
+        )
+        try:
+            decision = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            pytest.fail(
+                f"stdout is not valid JSON: {exc}\n"
+                f"stdout: {result.stdout!r}"
+            )
+        assert "matcher_version" in decision, (
+            f"'matcher_version' key missing from stdout decision JSON "
+            f"(issue #311).\noutput: {decision}"
+        )
+        matcher_version = decision["matcher_version"]
+        assert isinstance(matcher_version, str) and matcher_version, (
+            f"matcher_version must be a non-empty string, got: "
+            f"{matcher_version!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Hard-error mode (env set, missing file)
