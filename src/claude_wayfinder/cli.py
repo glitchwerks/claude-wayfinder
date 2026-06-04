@@ -23,6 +23,7 @@ from typing import Any
 import claude_wayfinder._health as _health_mod
 import claude_wayfinder.audit_catalog as _audit_mod
 import claude_wayfinder.build_catalog as _build_catalog_mod
+import claude_wayfinder.log_filter as _log_filter_mod
 from claude_wayfinder._dispatch import run_batch_dispatch, run_dispatch
 from claude_wayfinder.match import (
     build_features,
@@ -385,6 +386,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Router health report (CI invariants + runtime telemetry).",
     )
 
+    # --- log-filter subcommand ---
+    log_filter_parser = sub.add_parser(
+        "log-filter",
+        help=(
+            "Filter the dispatch-log to organic matcher_decision entries "
+            "(non-empty session_id, post-v1.1.1 attribution fix).  "
+            "Prints the organic entry count by default; use --emit-jsonl "
+            "to stream the filtered entries to stdout."
+        ),
+    )
+    _log_filter_mod.add_log_filter_args(log_filter_parser)
+
     return parser
 
 
@@ -426,6 +439,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "audit-catalog":
         return _audit_mod.run_audit_cli(args)
+
+    if args.command == "log-filter":
+        return _log_filter_mod.run_log_filter_cli(args)
 
     # No sub-command given — print help and exit non-zero.
     parser.print_help()
