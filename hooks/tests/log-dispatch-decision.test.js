@@ -659,3 +659,107 @@ test("hook subprocess: empty stdin exits 0 (fail-open)", () => {
   });
   assert.equal(result.status, 0, "must exit 0 on empty stdin");
 });
+
+// ---------------------------------------------------------------------------
+// Issue #311 regression: catalog_hash / matcher_version propagation
+//
+// The JS hook reads decision.catalog_hash and decision.matcher_version via
+// the null-coalescing pattern:
+//   catalog_hash: decision.catalog_hash ?? null
+//   matcher_version: decision.matcher_version ?? null
+//
+// Before the fix, the Python matcher omitted these fields from its stdout
+// JSON, so the hook always wrote null. After the fix, these fields are
+// present in the Python stdout and the hook writes them into the attributed
+// log row — no hook logic change required.
+//
+// This test guards the end-to-end contract: when the parsed decision carries
+// catalog_hash / matcher_version, the hook's written entry must carry them
+// too (not null). If the hook is ever changed to stop reading these fields,
+// this test will fail.
+// ---------------------------------------------------------------------------
+
+test("issue #311: catalog_hash from decision JSON flows into hook log entry", () => {
+  // Simulate the enriched Python stdout after the fix: decision JSON now
+  // includes catalog_hash and matcher_version.
+  const ENRICHED_DECISION = {
+    decision: "delegate",
+    agent: "code-writer",
+    confidence: 0.92,
+    rationale: "matched keyword: implement",
+    alternatives: [],
+    disposition_source: "scored",
+    catalog_hash: "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+    matcher_version: "abc1234",
+  };
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-311-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: DISPATCH_COMMAND },
+    tool_response: makeToolResponse(JSON.stringify(ENRICHED_DECISION)),
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0, "exit 0: " + result.stderr);
+  assert.ok(fs.existsSync(logPath), "log file must be created");
+  const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
+  assert.equal(entry.type, "matcher_decision", "must be a matcher_decision entry");
+  // Core #311 contract: catalog_hash must flow from decision into the log entry.
+  assert.equal(
+    entry.catalog_hash,
+    ENRICHED_DECISION.catalog_hash,
+    "catalog_hash must be copied from decision into hook log entry (issue #311); " +
+    "if null, the Python matcher is not including it in stdout"
+  );
+  // Core #311 contract: matcher_version must flow from decision into the log entry.
+  assert.equal(
+    entry.matcher_version,
+    ENRICHED_DECISION.matcher_version,
+    "matcher_version must be copied from decision into hook log entry (issue #311); " +
+    "if null, the Python matcher is not including it in stdout"
+  );
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("issue #311: catalog_hash null when decision omits it (pre-fix guard)", () => {
+  // Verify the baseline behaviour: when decision has no catalog_hash
+  // (the old Python output), the hook writes null (not crashing, not
+  // fabricating a value). This guards the null-coalescing logic.
+  const LEGACY_DECISION = {
+    decision: "delegate",
+    agent: "code-writer",
+    confidence: 0.92,
+    rationale: "matched keyword: implement",
+    alternatives: [],
+    disposition_source: "scored",
+    // No catalog_hash or matcher_version — simulates pre-fix Python output.
+  };
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-dispatch-311b-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
+  const payload = {
+    tool_name: "Bash",
+    tool_input: { command: DISPATCH_COMMAND },
+    tool_response: makeToolResponse(JSON.stringify(LEGACY_DECISION)),
+    session_id: SAMPLE_SESSION_ID,
+  };
+  const result = runHook(payload, { DISPATCH_LOG_PATH: logPath });
+  assert.equal(result.status, 0, "exit 0 on legacy decision: " + result.stderr);
+  assert.ok(fs.existsSync(logPath), "log file must be created");
+  const entry = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
+  assert.equal(entry.type, "matcher_decision");
+  // Without the fix: hook must write null (not fabricate a value).
+  assert.equal(
+    entry.catalog_hash,
+    null,
+    "catalog_hash must be null when decision omits it (null-coalescing guard)"
+  );
+  assert.equal(
+    entry.matcher_version,
+    null,
+    "matcher_version must be null when decision omits it (null-coalescing guard)"
+  );
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});

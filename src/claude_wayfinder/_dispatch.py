@@ -45,6 +45,7 @@ from claude_wayfinder.match import (
 )
 from claude_wayfinder.match._catalog import (
     _compute_catalog_hash,
+    _get_matcher_version,
     _resolve_log_path,
     _resolve_overrides_path,
     _write_log_entry,
@@ -605,7 +606,14 @@ def run_batch_dispatch(
                 log_path,
                 override_id=rule.id,
             )
-            output: dict[str, Any] = {"input_index": input_index, **decision_dict}
+            # Include catalog_hash and matcher_version in output for
+            # consistency with single-mode (issue #311).
+            output: dict[str, Any] = {
+                "input_index": input_index,
+                **decision_dict,
+                "catalog_hash": catalog_hash,
+                "matcher_version": _get_matcher_version(),
+            }
             print(json.dumps(output, sort_keys=True), file=out, flush=True)
             input_index += 1
             continue
@@ -625,7 +633,14 @@ def run_batch_dispatch(
             context, decision_dict, catalog_hash, log_path, override_id=None
         )
 
-        output = {"input_index": input_index, **decision_dict}
+        # Include catalog_hash and matcher_version in output for
+        # consistency with single-mode (issue #311).
+        output = {
+            "input_index": input_index,
+            **decision_dict,
+            "catalog_hash": catalog_hash,
+            "matcher_version": _get_matcher_version(),
+        }
         print(json.dumps(output, sort_keys=True), file=out, flush=True)
         input_index += 1
 
