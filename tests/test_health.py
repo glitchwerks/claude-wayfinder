@@ -1143,25 +1143,27 @@ def test_bypass_causes_section_low_n_renders_na() -> None:
 def test_bypass_causes_section_high_n_renders_table_and_thresholds() -> None:
     """Section renders the cause table and threshold lines when N >= min sample.
 
-    80 skill_mediated_interactive (expected) + 40 router_direct_no_dispatch
-    (unwanted) = 120 total.  Unwanted share = 33.3% <= 50% bootstrap → PASS.
+    97 skill_mediated_interactive (expected) + 23 router_direct_no_dispatch
+    (unwanted) = 120 total.  Unwanted share = 19.2% <= 20% F-1-recalibrated
+    threshold → PASS.
     """
-    events = [_enriched("skill_mediated_interactive") for _ in range(80)]
-    events.extend(_enriched("router_direct_no_dispatch") for _ in range(40))
+    events = [_enriched("skill_mediated_interactive") for _ in range(97)]
+    events.extend(_enriched("router_direct_no_dispatch") for _ in range(23))
     out = "\n".join(_build_bypass_causes_section(events))
     assert "## Bypass causes (7-day window, 120 enriched events)" in out
     assert "skill_mediated_interactive" in out
     assert "router_direct_no_dispatch" in out
     assert "expected" in out
     assert "unwanted" in out
-    # 40/120 = 33.3% unwanted, ≤ 50% bootstrap → PASS
-    assert "PASS — unwanted-bypass share 33.3%" in out
+    # 23/120 = 19.2% unwanted, ≤ 20% F-1-recalibrated threshold → PASS
+    assert "PASS — unwanted-bypass share 19.2%" in out
 
 
 def test_bypass_causes_section_warns_when_over_threshold() -> None:
-    """Section emits WARN when unwanted-bypass share exceeds the bootstrap threshold.
+    """Section emits WARN when unwanted-bypass share exceeds the F-1-recalibrated
+    threshold.
 
-    70/120 = 58.3% unwanted, > 50% → WARN.
+    70/120 = 58.3% unwanted, > 20% F-1-recalibrated threshold → WARN.
     """
     events = [_enriched("skill_mediated_interactive") for _ in range(50)]
     events.extend(_enriched("router_direct_no_dispatch") for _ in range(70))
@@ -1170,10 +1172,11 @@ def test_bypass_causes_section_warns_when_over_threshold() -> None:
 
 
 def test_bypass_causes_section_unknown_share_threshold() -> None:
-    """Section emits WARN when unknown-cause share exceeds the warn threshold.
+    """Section emits WARN when unknown-cause share exceeds the F-1-recalibrated
+    warn threshold.
 
     85 skill_mediated_interactive + 15 unknown = 100 total.
-    Unknown share = 15.0% > 10% → WARN.
+    Unknown share = 15.0% > 5% F-1-recalibrated threshold → WARN.
     """
     events = [_enriched("skill_mediated_interactive") for _ in range(85)]
     events.extend(_enriched("unknown") for _ in range(15))
@@ -1204,9 +1207,13 @@ def test_bypass_causes_section_excludes_out_of_window_events() -> None:
 
 
 def test_bypass_causes_constants_match_spec() -> None:
-    """Bypass-cause taxonomy constants match the v2 spec bootstrap values."""
-    assert _UNWANTED_BYPASS_SHARE_MAX == 0.50
-    assert _UNKNOWN_SHARE_WARN == 0.10
+    """Bypass-cause taxonomy constants match the F-1-recalibrated values.
+
+    Recalibrated from F-1 baseline (issue #159): 7-day observed
+    unwanted-bypass share ≈ 17.8%, unknown share = 0%.
+    """
+    assert _UNWANTED_BYPASS_SHARE_MAX == 0.20
+    assert _UNKNOWN_SHARE_WARN == 0.05
     assert _BYPASS_CAUSE_MIN_SAMPLE == 100
 
 
