@@ -16,7 +16,7 @@
  *   - Writes drift events to ROUTER_DRIFT_PATH (env-override of ~/.claude/state/router-drift.jsonl)
  *   - STALENESS_BOUND defaults to 15; configurable via ROUTER_STALENESS_BOUND env var
  *
- * References: issue #200, #341
+ * References: issue #200, #341, #322
  */
 
 const { test } = require("node:test");
@@ -63,7 +63,7 @@ function agentPayload(history = [], toolInput = {}) {
 /**
  * Build a conversation_history entry representing a Skill tool call.
  *
- * @param {string} skillName - e.g. "dispatch" or "python"
+ * @param {string} skillName - e.g. "claude-wayfinder:dispatch" or "python"
  */
 function skillEntry(skillName) {
   return {
@@ -203,7 +203,8 @@ test("check-agent-dispatch-pairing: does not emit permissionDecision deny", () =
 
 test("check-agent-dispatch-pairing: does not emit updatedInput (never augments tool input)", () => {
   const driftPath = tmpDriftPath();
-  const payload = agentPayload([skillEntry("dispatch")]);
+  // Use the namespaced dispatch skill name — this is the real form used in practice.
+  const payload = agentPayload([skillEntry("claude-wayfinder:dispatch")]);
   const result = runHook(payload, { ROUTER_DRIFT_PATH: driftPath });
   if (result.stdout.trim()) {
     const out = JSON.parse(result.stdout.trim());
@@ -219,7 +220,7 @@ test("check-agent-dispatch-pairing: does not emit updatedInput (never augments t
 
 test("check-agent-dispatch-pairing: dispatch immediately before Agent → no drift event", () => {
   const driftPath = tmpDriftPath();
-  const history = [skillEntry("dispatch")];
+  const history = [skillEntry("claude-wayfinder:dispatch")];
   const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
   assert.equal(result.exitCode, 0, `stderr: ${result.stderr}`);
   const events = readDriftEvents(driftPath);
@@ -233,11 +234,42 @@ test("check-agent-dispatch-pairing: dispatch immediately before Agent → no dri
 test("check-agent-dispatch-pairing: dispatch with a few tool calls between → no drift event (within staleness bound)", () => {
   const driftPath = tmpDriftPath();
   // dispatch + 3 non-Agent tool calls (well within default bound of 15)
-  const history = [skillEntry("dispatch"), toolEntry("Read"), toolEntry("Grep"), toolEntry("Glob")];
+  const history = [
+    skillEntry("claude-wayfinder:dispatch"),
+    toolEntry("Read"),
+    toolEntry("Grep"),
+    toolEntry("Glob"),
+  ];
   const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
   assert.equal(result.exitCode, 0, `stderr: ${result.stderr}`);
   const events = readDriftEvents(driftPath);
   assert.equal(events.length, 0, "3 tools after dispatch is within staleness bound");
+});
+
+// ── Regression #322: bare "dispatch" name must NOT be treated as the dispatch skill ──
+
+test("check-agent-dispatch-pairing: bare 'dispatch' skillName no longer recognized as dispatch → bypass event (regression #322)", () => {
+  // Before the fix, "dispatch" matched the comparison — so this history would
+  // have produced router_mediated (0 events). After the fix, only
+  // "claude-wayfinder:dispatch" matches, so this is treated as a plain Skill
+  // call → the hook sees no dispatch and classifies as skill_mediated.
+  const driftPath = tmpDriftPath();
+  const history = [skillEntry("dispatch")];
+  const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
+  assert.equal(result.exitCode, 0, `stderr: ${result.stderr}`);
+  const events = readDriftEvents(driftPath);
+  assert.equal(
+    events.length,
+    1,
+    "Bare 'dispatch' must not be treated as the router dispatch skill — event must be written"
+  );
+  // The bare "dispatch" skill is treated as a non-dispatch Skill (skill_mediated),
+  // not as the router dispatch (which would produce router_mediated / no event).
+  assert.equal(
+    events[0].category,
+    "skill_mediated",
+    "Bare 'dispatch' is classified skill_mediated, not router_mediated"
+  );
 });
 
 // ── Case 2: bypass — Agent with no dispatch and no enclosing Skill ────────────
@@ -267,7 +299,7 @@ test("check-agent-dispatch-pairing: no dispatch and only non-Skill tools → byp
 
 test("check-agent-dispatch-pairing: dispatch with 16 tool calls after → stale_dispatch (exceeds default bound 15)", () => {
   const driftPath = tmpDriftPath();
-  const history = [skillEntry("dispatch")];
+  const history = [skillEntry("claude-wayfinder:dispatch")];
   for (let i = 0; i < 16; i++) {
     history.push(toolEntry("Read"));
   }
@@ -280,7 +312,7 @@ test("check-agent-dispatch-pairing: dispatch with 16 tool calls after → stale_
 
 test("check-agent-dispatch-pairing: dispatch with exactly STALENESS_BOUND tools after → no event (boundary inclusive)", () => {
   const driftPath = tmpDriftPath();
-  const history = [skillEntry("dispatch")];
+  const history = [skillEntry("claude-wayfinder:dispatch")];
   for (let i = 0; i < 15; i++) {
     history.push(toolEntry("Bash"));
   }
@@ -293,7 +325,7 @@ test("check-agent-dispatch-pairing: dispatch with exactly STALENESS_BOUND tools 
 test("check-agent-dispatch-pairing: ROUTER_STALENESS_BOUND env var overrides default", () => {
   const driftPath = tmpDriftPath();
   // Set bound to 3 — 4 tools after dispatch should be stale
-  const history = [skillEntry("dispatch")];
+  const history = [skillEntry("claude-wayfinder:dispatch")];
   for (let i = 0; i < 4; i++) {
     history.push(toolEntry("Read"));
   }
@@ -312,7 +344,7 @@ test("check-agent-dispatch-pairing: ROUTER_STALENESS_BOUND env var overrides def
 test("check-agent-dispatch-pairing: prior Agent call between dispatch and now → bypass", () => {
   const driftPath = tmpDriftPath();
   // dispatch → Agent (prior, already dispatched) → now dispatching again without new dispatch
-  const history = [skillEntry("dispatch"), agentEntry()];
+  const history = [skillEntry("claude-wayfinder:dispatch"), agentEntry()];
   const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
   assert.equal(result.exitCode, 0, `stderr: ${result.stderr}`);
   const events = readDriftEvents(driftPath);
@@ -364,11 +396,11 @@ test("check-agent-dispatch-pairing: non-dispatch Skill then tools then Agent →
   assert.equal(events[0].category, "skill_mediated");
 });
 
-test("check-agent-dispatch-pairing: dispatch Skill (dispatch is a Skill) before Agent → no event (router_mediated wins)", () => {
-  // dispatch Skill is a Skill, but because it IS the dispatch skill, it's router_mediated
-  // not skill_mediated — the dispatch case takes priority
+test("check-agent-dispatch-pairing: dispatch Skill (namespaced) before Agent → no event (router_mediated wins)", () => {
+  // The namespaced dispatch Skill is a Skill, but because it IS the dispatch skill,
+  // it's router_mediated not skill_mediated — the dispatch case takes priority.
   const driftPath = tmpDriftPath();
-  const history = [skillEntry("dispatch")];
+  const history = [skillEntry("claude-wayfinder:dispatch")];
   const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
   assert.equal(result.exitCode, 0, `stderr: ${result.stderr}`);
   const events = readDriftEvents(driftPath);
@@ -515,7 +547,7 @@ test("check-agent-dispatch-pairing: conversation_history with non-assistant entr
   const driftPath = tmpDriftPath();
   const history = [
     { role: "user", content: "Hello" },
-    skillEntry("dispatch"),
+    skillEntry("claude-wayfinder:dispatch"),
     { role: "user", content: "Thanks" },
   ];
   const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
@@ -583,9 +615,9 @@ test("check-agent-dispatch-pairing: most recent dispatch is used (older dispatch
   // count_Agent between second dispatch and now = 1 → bypass
   const driftPath = tmpDriftPath();
   const history = [
-    skillEntry("dispatch"), // first dispatch
+    skillEntry("claude-wayfinder:dispatch"), // first dispatch
     agentEntry(), // first agent (consumed first dispatch)
-    skillEntry("dispatch"), // second dispatch
+    skillEntry("claude-wayfinder:dispatch"), // second dispatch
     agentEntry(), // second agent (consumed second dispatch) — now history has another Agent
   ];
   // current call is a third Agent — most recent dispatch was second dispatch,
@@ -602,9 +634,9 @@ test("check-agent-dispatch-pairing: fresh dispatch after consumed prior dispatch
   // count_Agent after second dispatch = 0, count_other = 0 → router_mediated
   const driftPath = tmpDriftPath();
   const history = [
-    skillEntry("dispatch"), // first dispatch
+    skillEntry("claude-wayfinder:dispatch"), // first dispatch
     agentEntry(), // consumed by first dispatch
-    skillEntry("dispatch"), // fresh dispatch for current Agent
+    skillEntry("claude-wayfinder:dispatch"), // fresh dispatch for current Agent
   ];
   const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
   assert.equal(result.exitCode, 0, `stderr: ${result.stderr}`);
@@ -643,6 +675,34 @@ test("check-agent-dispatch-pairing: bypass event is enriched with bypass_signals
     ev.bypass_cause,
     "router_direct_no_dispatch",
     "Empty history bypass → router_direct_no_dispatch"
+  );
+});
+
+test("check-agent-dispatch-pairing: dispatch in history → bypass_signals shows dispatch_skill_called_recently=true", () => {
+  // Regression #322: before the fix, dispatch_skill_called_recently was always
+  // false because the comparison used the bare "dispatch" name. Now that the
+  // namespaced form is recognized, this must be true.
+  const driftPath = tmpDriftPath();
+  // dispatch → Agent (consumed) → current Agent triggers bypass
+  const history = [skillEntry("claude-wayfinder:dispatch"), agentEntry()];
+  const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
+  assert.equal(result.exitCode, 0, `stderr: ${result.stderr}`);
+  const events = readDriftEvents(driftPath);
+  assert.equal(events.length, 1, "One bypass event expected");
+  assert.equal(events[0].category, "bypass");
+  assert.ok(
+    events[0].bypass_signals !== undefined,
+    "bypass_signals must be present"
+  );
+  assert.equal(
+    events[0].bypass_signals.dispatch_skill_called_recently,
+    true,
+    "dispatch_skill_called_recently must be true when 'claude-wayfinder:dispatch' is in history"
+  );
+  assert.equal(
+    events[0].bypass_cause,
+    "router_direct_after_consumed_dispatch",
+    "Consumed dispatch → router_direct_after_consumed_dispatch cause"
   );
 });
 

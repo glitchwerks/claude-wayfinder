@@ -5,6 +5,15 @@
 //   docs/superpowers/specs/2026-05-19-telemetry-bypass-taxonomy-design.md
 
 /**
+ * Fully-qualified skill name for the router dispatch skill.
+ *
+ * The Skill tool is always invoked with the plugin-namespaced form
+ * "claude-wayfinder:dispatch". Comparing against the bare name "dispatch"
+ * never matches — see issue #322.
+ */
+const DISPATCH_SKILL_NAME = "claude-wayfinder:dispatch";
+
+/**
  * Skills the router does NOT delegate — they handle their own user-interactive
  * flow. Agent calls from inside one of these skills are expected bypasses.
  *
@@ -62,7 +71,7 @@ function extractSignals(toolCall, toolEvents) {
   // window (full history, no user-turn boundary).
   let lastDispatchIdx = -1;
   for (let i = evts.length - 1; i >= 0; i--) {
-    if (evts[i].toolName === "Skill" && evts[i].skillName === "dispatch") {
+    if (evts[i].toolName === "Skill" && evts[i].skillName === DISPATCH_SKILL_NAME) {
       lastDispatchIdx = i;
       break;
     }
@@ -82,7 +91,7 @@ function extractSignals(toolCall, toolEvents) {
   let lastSkillCallName = null;
   for (let i = evts.length - 1; i >= 0; i--) {
     const e = evts[i];
-    if (e.toolName === "Skill" && e.skillName && e.skillName !== "dispatch") {
+    if (e.toolName === "Skill" && e.skillName && e.skillName !== DISPATCH_SKILL_NAME) {
       lastSkillCallName = e.skillName;
       break;
     }
@@ -128,4 +137,4 @@ function deriveCause(category, signals) {
   }
 }
 
-module.exports = { classify, INTERACTIVE_SKILLS, _deriveCauseForTest: deriveCause };
+module.exports = { classify, DISPATCH_SKILL_NAME, INTERACTIVE_SKILLS, _deriveCauseForTest: deriveCause };

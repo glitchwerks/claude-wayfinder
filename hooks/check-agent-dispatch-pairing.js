@@ -37,8 +37,12 @@ const parseInput = require("./parse-input");
 // runs inside its own try; the fallback `null` is short-circuited at
 // use-time (see emit path below). Spec §Hook integration.
 let _bypassTaxonomyClassify = null;
+let _dispatchSkillName = "claude-wayfinder:dispatch"; // fallback if module fails to load
 try {
-  ({ classify: _bypassTaxonomyClassify } = require("./lib/bypass-taxonomy"));
+  ({
+    classify: _bypassTaxonomyClassify,
+    DISPATCH_SKILL_NAME: _dispatchSkillName,
+  } = require("./lib/bypass-taxonomy"));
 } catch (err) {
   process.stderr.write(
     `[bypass-taxonomy] module load failed; events will emit without enrichment: ${err.message}\n`
@@ -177,7 +181,7 @@ function classifyDispatchRich(toolEvents) {
   // Find the most recent "dispatch" Skill invocation index.
   let lastDispatchIdx = -1;
   for (let i = toolEvents.length - 1; i >= 0; i--) {
-    if (toolEvents[i].toolName === "Skill" && toolEvents[i].skillName === "dispatch") {
+    if (toolEvents[i].toolName === "Skill" && toolEvents[i].skillName === _dispatchSkillName) {
       lastDispatchIdx = i;
       break;
     }
