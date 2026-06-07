@@ -29,10 +29,10 @@ _BYPASS_RATE_MAX = 0.10  # ≤ 10 % → healthy
 _ADVISORY_OVERRIDE_RATE_MAX = 0.30  # ≤ 30 % → healthy
 # catalog_availability: any catalog_degraded_session event = immediate action
 
-# Bypass-cause taxonomy thresholds (v2-draft4 spec, both bootstrap;
-# recalibrated at F-2 review, issue #160).
-_UNWANTED_BYPASS_SHARE_MAX = 0.50  # bootstrap; tighten after baseline
-_UNKNOWN_SHARE_WARN = 0.10  # bootstrap; tighten or extend enum at F-2
+# Bypass-cause taxonomy thresholds — F-1-recalibrated (issue #159 baseline:
+# 7-day unwanted-bypass share ≈ 17.8%, unknown share = 0%).
+_UNWANTED_BYPASS_SHARE_MAX = 0.20  # F-1 baseline ~17.8%; margin above observed
+_UNKNOWN_SHARE_WARN = 0.05  # F-1 baseline 0%; tight warn for new unknowns
 _BYPASS_CAUSE_MIN_SAMPLE = 100  # low-N guard: section renders N/A below this
 
 # Cause → disposition mapping (mirrors scripts/analyze-drift-causes.py)
