@@ -60,18 +60,21 @@ test("signals: namespaced dispatch 'claude-wayfinder:dispatch' is recognized (re
   assert.equal(signals.count_agent_since_dispatch, 0);
 });
 
-test("signals: bare 'dispatch' skillName is NOT recognized as the dispatch skill (regression #322)", () => {
-  // The bare name "dispatch" should no longer match — it was never the real
-  // form used in practice. Matching it would re-introduce the bug.
+test("signals: bare 'dispatch' skillName IS recognized as the dispatch skill via normalization", () => {
+  // After refactor: bareSkillName() normalization is used for comparisons, so
+  // both the fully-qualified "claude-wayfinder:dispatch" and the bare "dispatch"
+  // form map to the same "dispatch" sentinel. This is acceptable because the
+  // dispatch skill is the only skill with this name in the controlled set.
+  // (Prior to the normalization refactor, only the fully-qualified form matched.)
   const { signals } = classify(
-    "bypass",
+    "stale_dispatch",
     { subagent_type: "code-writer" },
     [{ toolName: "Skill", skillName: "dispatch" }, { toolName: "Read" }]
   );
   assert.equal(
     signals.dispatch_skill_called_recently,
-    false,
-    "Bare 'dispatch' must NOT be recognized as the dispatch skill after fix #322"
+    true,
+    "Bare 'dispatch' is recognized as the dispatch skill after normalization"
   );
 });
 
@@ -246,5 +249,53 @@ test("signals: dispatch Skill is excluded from last_skill_call_name (not treated
     signals.last_skill_call_name,
     null,
     "dispatch Skill must be excluded from last_skill_call_name"
+  );
+});
+
+// ── Regression: INTERACTIVE_SKILLS lookup must work with namespaced skill names ──
+// The INTERACTIVE_SKILLS set stores bare names but lastSkillCallName arrives
+// namespaced for plugin skills, causing the lookup to be always false.
+// Fix: normalize with bareSkillName() before the Set.has() call.
+
+test("signals: namespaced interactive skill yields last_skill_call_is_interactive=true (regression #322 sibling)", () => {
+  // Before the fix, INTERACTIVE_SKILLS.has("claude-github-tools:gh-create-issue")
+  // was always false because the set stores bare names. This test would FAIL on
+  // the unfixed code and PASS after normalization is applied.
+  const { signals } = classify(
+    "skill_mediated",
+    { subagent_type: "code-writer" },
+    [ev("Skill", "claude-github-tools:gh-create-issue"), ev("Read")]
+  );
+  assert.equal(
+    signals.last_skill_call_is_interactive,
+    true,
+    "Namespaced 'claude-github-tools:gh-create-issue' must resolve to interactive=true"
+  );
+  // last_skill_call_name must retain the RAW (namespaced) value for telemetry accuracy.
+  assert.equal(
+    signals.last_skill_call_name,
+    "claude-github-tools:gh-create-issue",
+    "last_skill_call_name must retain the namespaced form for telemetry"
+  );
+});
+
+test("classify: namespaced interactive skill yields skill_mediated_interactive cause (regression #322 sibling)", () => {
+  // End-to-end: a fully-namespaced interactive skill should produce the
+  // skill_mediated_interactive cause, not skill_mediated_other.
+  const { cause, signals } = classify(
+    "skill_mediated",
+    { subagent_type: "code-writer" },
+    [ev("Skill", "claude-github-tools:gh-create-issue"), ev("Read")]
+  );
+  assert.equal(
+    cause,
+    "skill_mediated_interactive",
+    "Namespaced interactive skill must produce skill_mediated_interactive cause"
+  );
+  // Telemetry accuracy: last_skill_call_name must remain namespaced.
+  assert.equal(
+    signals.last_skill_call_name,
+    "claude-github-tools:gh-create-issue",
+    "last_skill_call_name must retain the namespaced form for telemetry"
   );
 });

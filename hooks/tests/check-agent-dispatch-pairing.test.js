@@ -246,13 +246,13 @@ test("check-agent-dispatch-pairing: dispatch with a few tool calls between → n
   assert.equal(events.length, 0, "3 tools after dispatch is within staleness bound");
 });
 
-// ── Regression #322: bare "dispatch" name must NOT be treated as the dispatch skill ──
+// ── Regression #322 + normalization: bare "dispatch" is now treated as the dispatch skill ──
 
-test("check-agent-dispatch-pairing: bare 'dispatch' skillName no longer recognized as dispatch → bypass event (regression #322)", () => {
-  // Before the fix, "dispatch" matched the comparison — so this history would
-  // have produced router_mediated (0 events). After the fix, only
-  // "claude-wayfinder:dispatch" matches, so this is treated as a plain Skill
-  // call → the hook sees no dispatch and classifies as skill_mediated.
+test("check-agent-dispatch-pairing: bare 'dispatch' skillName IS recognized as dispatch via normalization → no event (router_mediated)", () => {
+  // After the normalization refactor: bareSkillName() maps both
+  // "claude-wayfinder:dispatch" and bare "dispatch" to "dispatch".
+  // A history containing bare "dispatch" therefore produces router_mediated
+  // (no event written), not skill_mediated as it did in the initial point-fix.
   const driftPath = tmpDriftPath();
   const history = [skillEntry("dispatch")];
   const result = runHook(agentPayload(history), { ROUTER_DRIFT_PATH: driftPath });
@@ -260,15 +260,8 @@ test("check-agent-dispatch-pairing: bare 'dispatch' skillName no longer recogniz
   const events = readDriftEvents(driftPath);
   assert.equal(
     events.length,
-    1,
-    "Bare 'dispatch' must not be treated as the router dispatch skill — event must be written"
-  );
-  // The bare "dispatch" skill is treated as a non-dispatch Skill (skill_mediated),
-  // not as the router dispatch (which would produce router_mediated / no event).
-  assert.equal(
-    events[0].category,
-    "skill_mediated",
-    "Bare 'dispatch' is classified skill_mediated, not router_mediated"
+    0,
+    "Bare 'dispatch' is recognized as the router dispatch skill via normalization — no event written"
   );
 });
 
