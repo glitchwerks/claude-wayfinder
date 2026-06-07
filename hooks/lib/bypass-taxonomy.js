@@ -4,6 +4,19 @@
 // hooks/check-agent-dispatch-pairing.js. See spec:
 //   docs/superpowers/specs/2026-05-19-telemetry-bypass-taxonomy-design.md
 
+const { bareSkillName } = require("./skill-name");
+
+/**
+ * Bare sentinel name for the router dispatch skill.
+ *
+ * Comparisons use bareSkillName() normalization (see hooks/lib/skill-name.js)
+ * so both the plugin-namespaced form "claude-wayfinder:dispatch" and the bare
+ * form "dispatch" map to this sentinel. The normalization is safe here because
+ * the dispatch skill is the only plugin skill that needs to be identified by
+ * the bypass-taxonomy logic. See issue #322.
+ */
+const DISPATCH_SKILL_NAME = "claude-wayfinder:dispatch";
+
 /**
  * Skills the router does NOT delegate — they handle their own user-interactive
  * flow. Agent calls from inside one of these skills are expected bypasses.
@@ -60,9 +73,11 @@ function extractSignals(toolCall, toolEvents) {
 
   // Locate the most recent dispatch Skill call — matches the hook's
   // window (full history, no user-turn boundary).
+  // bareSkillName() normalizes both "claude-wayfinder:dispatch" and bare
+  // "dispatch" to "dispatch" before comparison. See hooks/lib/skill-name.js.
   let lastDispatchIdx = -1;
   for (let i = evts.length - 1; i >= 0; i--) {
-    if (evts[i].toolName === "Skill" && evts[i].skillName === "dispatch") {
+    if (evts[i].toolName === "Skill" && bareSkillName(evts[i].skillName) === "dispatch") {
       lastDispatchIdx = i;
       break;
     }
@@ -79,10 +94,12 @@ function extractSignals(toolCall, toolEvents) {
   }
 
   // Find the most recent non-dispatch Skill call (for skill_mediated cases).
+  // bareSkillName() normalizes for the exclusion check; lastSkillCallName retains
+  // the raw (namespaced) value for telemetry accuracy.
   let lastSkillCallName = null;
   for (let i = evts.length - 1; i >= 0; i--) {
     const e = evts[i];
-    if (e.toolName === "Skill" && e.skillName && e.skillName !== "dispatch") {
+    if (e.toolName === "Skill" && e.skillName && bareSkillName(e.skillName) !== "dispatch") {
       lastSkillCallName = e.skillName;
       break;
     }
@@ -92,9 +109,13 @@ function extractSignals(toolCall, toolEvents) {
     subagent_type: (toolCall && toolCall.subagent_type) || "",
     dispatch_skill_called_recently: lastDispatchIdx !== -1,
     count_agent_since_dispatch: countAgentSinceDispatch,
+    // last_skill_call_name retains the raw (namespaced) value for telemetry accuracy.
     last_skill_call_name: lastSkillCallName,
+    // INTERACTIVE_SKILLS stores bare names; normalize lastSkillCallName before
+    // the Set.has() lookup so plugin-namespaced forms are correctly resolved.
+    // The raw namespaced value is preserved in last_skill_call_name above.
     last_skill_call_is_interactive:
-      lastSkillCallName !== null && INTERACTIVE_SKILLS.has(lastSkillCallName),
+      lastSkillCallName !== null && INTERACTIVE_SKILLS.has(bareSkillName(lastSkillCallName)),
     // turns_since_user_message — not currently computable from the
     // toolEvents shape alone (which lacks turn-role info). Surface as 0
     // for v1; the analyzer does not depend on it. F-2 review can revisit.
@@ -128,4 +149,4 @@ function deriveCause(category, signals) {
   }
 }
 
-module.exports = { classify, INTERACTIVE_SKILLS, _deriveCauseForTest: deriveCause };
+module.exports = { classify, DISPATCH_SKILL_NAME, INTERACTIVE_SKILLS, _deriveCauseForTest: deriveCause };

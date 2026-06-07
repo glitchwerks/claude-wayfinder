@@ -32,6 +32,16 @@ const os = require("node:os");
 const path = require("node:path");
 const parseInput = require("./parse-input");
 
+// Lazy load bareSkillName for dispatch sentinel normalization. Fail-open:
+// if the module is unavailable, _bareSkillName falls back to the identity
+// function so classifyDispatchRich degrades to bare-name-only matching.
+let _bareSkillName = (name) => (typeof name === "string" ? name : "");
+try {
+  ({ bareSkillName: _bareSkillName } = require("./lib/skill-name"));
+} catch (_) {
+  // Fallback identity — hook continues without normalization.
+}
+
 // Lazy load the bypass-taxonomy module with explicit module-load error
 // handling. A require-time throw cannot kill the hook because the require
 // runs inside its own try; the fallback `null` is short-circuited at
@@ -175,9 +185,11 @@ function extractToolEventsRich(history) {
  */
 function classifyDispatchRich(toolEvents) {
   // Find the most recent "dispatch" Skill invocation index.
+  // _bareSkillName() normalizes both "claude-wayfinder:dispatch" and bare
+  // "dispatch" to "dispatch" for the comparison. See hooks/lib/skill-name.js.
   let lastDispatchIdx = -1;
   for (let i = toolEvents.length - 1; i >= 0; i--) {
-    if (toolEvents[i].toolName === "Skill" && toolEvents[i].skillName === "dispatch") {
+    if (toolEvents[i].toolName === "Skill" && _bareSkillName(toolEvents[i].skillName) === "dispatch") {
       lastDispatchIdx = i;
       break;
     }
