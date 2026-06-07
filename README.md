@@ -322,6 +322,12 @@ uv venv .venv
 uv pip install -e ".[dev]"
 ```
 
+If you add or remove dependencies in `pyproject.toml`, regenerate the lockfile and commit it:
+
+```bash
+uv lock
+```
+
 Run the test suite:
 
 ```bash

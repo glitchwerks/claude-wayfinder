@@ -15,6 +15,7 @@ The **Quick reference card** at the end is the section to keep open during a rel
 - [ ] `CHANGELOG.md` has a draft `## [X.Y.Z] - YYYY-MM-DD` section ready — the heading must use this **exact format**: `## [X.Y.Z] - YYYY-MM-DD`. The `github-release` job's awk extractor strips the leading `v` from the tag and matches on `## [X.Y.Z]`; a non-standard heading produces empty release notes.
 - [ ] `pyproject.toml` `version` = target version
 - [ ] `.claude-plugin/plugin.json` `version` = target version
+- [ ] If `pyproject.toml` dependencies changed: `uv lock` re-run and `uv.lock` included in the release PR
 - [ ] Release PR body lists `Closes #N` for every issue being closed (one keyword per issue, plain text, not in commit message scope)
 
 ---
@@ -36,7 +37,7 @@ The cache wipe applies **only to repo moves**. Pure version bumps — including 
 
 **1. Open the release PR**
 
-Branch from `main`. Bump `pyproject.toml` `version`, `.claude-plugin/plugin.json` `version`, and `CHANGELOG.md` (move the draft entry to `## [X.Y.Z] - YYYY-MM-DD`). (`src/claude_wayfinder/__init__.py` does **not** need a manual bump — `__version__` self-derives from dist metadata via `importlib.metadata`; see #176.) Include `Closes #N` for every issue. For minor/major: also update `README.md` if skill names, command names, or environment variables changed.
+Branch from `main`. Bump `pyproject.toml` `version`, `.claude-plugin/plugin.json` `version`, and `CHANGELOG.md` (move the draft entry to `## [X.Y.Z] - YYYY-MM-DD`). (`src/claude_wayfinder/__init__.py` does **not** need a manual bump — `__version__` self-derives from dist metadata via `importlib.metadata`; see #176.) Include `Closes #N` for every issue. For minor/major: also update `README.md` if skill names, command names, or environment variables changed. If any `pyproject.toml` dependencies changed, re-run `uv lock` and include the updated `uv.lock` in the same PR.
 
 **2. Wait for CI and merge**
 
