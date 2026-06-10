@@ -141,6 +141,46 @@ class TestMarkerConstants:
             f"PROSE_FAILURE_TERMS missing: {required - PROSE_FAILURE_TERMS}"
         )
 
+    def test_named_doc_nouns_frozenset(self) -> None:
+        """NAMED_DOC_NOUNS must be a frozenset of strings (E5 C-assist)."""
+        from claude_wayfinder.posture._markers import NAMED_DOC_NOUNS
+
+        assert isinstance(NAMED_DOC_NOUNS, frozenset)
+        assert all(isinstance(m, str) for m in NAMED_DOC_NOUNS)
+
+    def test_named_doc_nouns_content(self) -> None:
+        """NAMED_DOC_NOUNS must contain the §10.2 E5 C-assist set verbatim."""
+        from claude_wayfinder.posture._markers import NAMED_DOC_NOUNS
+
+        required = {
+            "release notes",
+            "changelog",
+            "schema",
+            "contract",
+            "invariant",
+        }
+        assert required <= NAMED_DOC_NOUNS, (
+            f"NAMED_DOC_NOUNS missing: {required - NAMED_DOC_NOUNS}"
+        )
+
+    def test_named_doc_nouns_exact_membership(self) -> None:
+        """NAMED_DOC_NOUNS must contain exactly the five §10.2 E5 members."""
+        from claude_wayfinder.posture._markers import NAMED_DOC_NOUNS
+
+        expected = frozenset(
+            {
+                "release notes",
+                "changelog",
+                "schema",
+                "contract",
+                "invariant",
+            }
+        )
+        assert NAMED_DOC_NOUNS == expected, (
+            f"NAMED_DOC_NOUNS extra/missing: symmetric diff = "
+            f"{NAMED_DOC_NOUNS.symmetric_difference(expected)}"
+        )
+
     def test_marker_sets_are_runtime_immutable(self) -> None:
         """Marker sets must not be modifiable at runtime."""
         import pytest
@@ -150,6 +190,7 @@ class TestMarkerConstants:
             FRAME_MARKERS_CHALLENGE,
             FRAME_MARKERS_PRIOR_ART,
             FRAME_MARKERS_SCOPE,
+            NAMED_DOC_NOUNS,
             PROSE_FAILURE_TERMS,
             RELATIONAL_MARKERS,
         )
@@ -161,6 +202,7 @@ class TestMarkerConstants:
             ("FRAME_MARKERS_SCOPE", FRAME_MARKERS_SCOPE),
             ("FRAME_MARKERS_CHALLENGE", FRAME_MARKERS_CHALLENGE),
             ("PROSE_FAILURE_TERMS", PROSE_FAILURE_TERMS),
+            ("NAMED_DOC_NOUNS", NAMED_DOC_NOUNS),
         ]:
             with pytest.raises((AttributeError, TypeError)):
                 fset.add("__test_mutation__")  # type: ignore[union-attr]

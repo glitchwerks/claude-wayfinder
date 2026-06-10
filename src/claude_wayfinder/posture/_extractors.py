@@ -37,6 +37,7 @@ from claude_wayfinder.posture._markers import (
     FRAME_MARKERS_CHALLENGE,
     FRAME_MARKERS_PRIOR_ART,
     FRAME_MARKERS_SCOPE,
+    NAMED_DOC_NOUNS,
     PROSE_FAILURE_TERMS,
     RELATIONAL_MARKERS,
 )
@@ -370,10 +371,7 @@ def extract_source_of_truth_pair(ctx: PostureContext) -> ExtractorResult:
     text_lower = text.lower()
 
     # C assist check first (cheaper than path counting).
-    # Named-doc nouns that imply conformance framing.
-    _DOC_NOUNS = frozenset(
-        {"release notes", "changelog", "schema", "contract", "invariant"}
-    )
+    # Named-doc nouns that imply conformance framing (module-level constant).
 
     # Relational marker matching: per §10.3, stemming applies within the
     # frozen set.  Check for each marker and its common stem variants
@@ -393,7 +391,7 @@ def extract_source_of_truth_pair(ctx: PostureContext) -> ExtractorResult:
         return False
 
     relational_match = _relational_hits(text_lower)
-    doc_noun_match = any(noun in text_lower for noun in _DOC_NOUNS)
+    doc_noun_match = any(noun in text_lower for noun in NAMED_DOC_NOUNS)
     c_assist = relational_match or doc_noun_match
 
     if not c_assist:

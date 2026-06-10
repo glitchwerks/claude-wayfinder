@@ -43,6 +43,20 @@ RELATIONAL_MARKERS: frozenset[str] = frozenset(
     }
 )
 
+#: E5 named-doc nouns (§10.2 E5 C-assist).
+#: These confirm a conformance-check framing when ≥2 artifact refs are
+#: already present (B core). Role per R1: completes E5's B-core activation,
+#: never adds a posture alone.
+NAMED_DOC_NOUNS: frozenset[str] = frozenset(
+    {
+        "release notes",
+        "changelog",
+        "schema",
+        "contract",
+        "invariant",
+    }
+)
+
 # ---------------------------------------------------------------------------
 # E6 — cause_stated causal connectives (§10.2 + §12.3 R3)
 #
