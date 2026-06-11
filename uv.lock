@@ -55,7 +55,7 @@ spike = [
 
 [package.metadata]
 requires-dist = [
-    { name = "model2vec", marker = "extra == 'spike'", specifier = ">=0.3" },
+    { name = "model2vec", marker = "extra == 'spike'", specifier = "==0.8.2" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7" },
     { name = "pyyaml", specifier = ">=6.0" },
