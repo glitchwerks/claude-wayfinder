@@ -289,6 +289,7 @@ the caching conclusion but is worth measuring.
   exact snapshot via `huggingface_hub.snapshot_download`, so upstream repo pushes do not
   silently drift the centroid numbers)
 - `model2vec` version: `0.8.2`
+  (pinned: `spike = ["model2vec==0.8.2"]` in `pyproject.toml` — the spike extra is exact-pinned to this version, same reproducibility class as the HF revision pin above)
 - Seed phrases version: `2026-06-11-v1` (see `spikes/domain_encoder/_domains.py`)
 - Platform: Windows 11 Pro, Python 3.12.13, numpy 2.4.6
 - HuggingFace cache: `~/.cache/huggingface/hub/models--minishlab--potion-base-8M`
