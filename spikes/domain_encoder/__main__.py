@@ -4,7 +4,6 @@ Usage::
 
     python -m spikes.domain_encoder "Fix the failing test in test_api.py"
     python -m spikes.domain_encoder --json "Deploy to Kubernetes"
-    python -m spikes.domain_encoder --batch < prompts.txt
 
 Cross-process determinism check::
 
