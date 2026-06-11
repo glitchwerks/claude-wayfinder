@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 from spikes.domain_encoder._domains import DOMAIN_CLASSES, DomainLabel
 from spikes.domain_encoder._entropy import distribution_entropy
 from spikes.domain_encoder._head import CentroidHead
+from spikes.domain_encoder._paths import _is_hf_repo_id
 
 if TYPE_CHECKING:
     import numpy as np
@@ -130,19 +131,33 @@ class DomainClassifier:
                 "Install with: pip install '.[spike]'"
             ) from exc
 
-        import os
-
         load_path: str = model_name_or_path
         # Only pin via snapshot_download when the caller passed a HF repo id
-        # (no local path separator) and a revision is requested.
-        if revision is not None and os.path.sep not in model_name_or_path:
+        # and a revision is requested.  _is_hf_repo_id is platform-independent:
+        # it never reads os.path.sep / os.sep so "minishlab/potion-base-8M"
+        # is correctly recognised as a repo id on both POSIX and Windows.
+        if revision is not None and _is_hf_repo_id(model_name_or_path):
             from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
-
-            load_path = snapshot_download(
-                repo_id=model_name_or_path,
-                revision=revision,
-                local_files_only=True,  # use the HF cache; no network at inference
+            from huggingface_hub.errors import (  # type: ignore[import-untyped]
+                LocalEntryNotFoundError,
             )
+
+            # Cache-first, pinned-download fallback:
+            #   1. Try to serve from the local HF cache (offline, no network).
+            #   2. On cache miss (LocalEntryNotFoundError), fetch the same
+            #      pinned revision from the Hub.  The resulting artifact is
+            #      identical either way — only the transport differs.
+            try:
+                load_path = snapshot_download(
+                    repo_id=model_name_or_path,
+                    revision=revision,
+                    local_files_only=True,
+                )
+            except LocalEntryNotFoundError:
+                load_path = snapshot_download(
+                    repo_id=model_name_or_path,
+                    revision=revision,
+                )
 
         model = StaticModel.from_pretrained(load_path)
         head = CentroidHead.build(model)
