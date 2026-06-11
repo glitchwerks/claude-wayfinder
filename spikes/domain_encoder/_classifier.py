@@ -17,7 +17,9 @@ CLI::
     python -m spikes.domain_encoder "Fix the bug in the auth module"
 
 Model: minishlab/potion-base-8M
-Model revision: bf8b056651a2c21b8d2565580b8569da283cab23
+Model revision: bf8b056651a2c21b8d2565580b8569da283cab23 (pinned — see §7)
+    The default loader pins this exact commit via huggingface_hub.snapshot_download
+    so centroid numbers are reproducible regardless of upstream pushes.
 Model2Vec version: 0.8.2
 Seed phrases version: 2026-06-11-v1
 """
@@ -33,6 +35,12 @@ from spikes.domain_encoder._head import CentroidHead
 
 if TYPE_CHECKING:
     import numpy as np
+
+# Default model identifier and the exact git commit it resolves to.
+# Revision pinned so that centroid numbers match the spike report §7
+# regardless of future upstream pushes to the model repo.  verified 2026-06-11
+DEFAULT_MODEL_NAME = "minishlab/potion-base-8M"
+DEFAULT_MODEL_REVISION = "bf8b056651a2c21b8d2565580b8569da283cab23"  # verified 2026-06-11
 
 
 @dataclass
@@ -84,13 +92,28 @@ class DomainClassifier:
     @classmethod
     def from_pretrained(
         cls,
-        model_name_or_path: str = "minishlab/potion-base-8M",
+        model_name_or_path: str = DEFAULT_MODEL_NAME,
+        revision: str | None = DEFAULT_MODEL_REVISION,
     ) -> "DomainClassifier":
         """Load the model and build the centroid head.
 
+        When ``model_name_or_path`` is a HuggingFace repo id (not a local
+        path) and ``revision`` is provided, the model is loaded from the
+        exact commit snapshot via ``huggingface_hub.snapshot_download`` so
+        that centroid numbers are reproducible across upstream repo pushes.
+
+        Pass ``revision=None`` to disable pinning (e.g. for exploratory runs
+        with a different model that has no known-good revision yet).
+
         Args:
             model_name_or_path: HuggingFace model id or local path.
-                Defaults to ``"minishlab/potion-base-8M"``.
+                Defaults to ``DEFAULT_MODEL_NAME``
+                (``"minishlab/potion-base-8M"``).
+            revision: Exact git commit SHA to load.  Defaults to
+                ``DEFAULT_MODEL_REVISION`` (the revision whose centroid
+                numbers match the spike report §7).  Pass ``None`` to load
+                the latest version of the model (mutable — not recommended
+                for reproducibility).
 
         Returns:
             Fully initialised DomainClassifier ready for inference.
@@ -107,7 +130,21 @@ class DomainClassifier:
                 "Install with: pip install '.[spike]'"
             ) from exc
 
-        model = StaticModel.from_pretrained(model_name_or_path)
+        import os
+
+        load_path: str = model_name_or_path
+        # Only pin via snapshot_download when the caller passed a HF repo id
+        # (no local path separator) and a revision is requested.
+        if revision is not None and os.path.sep not in model_name_or_path:
+            from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
+
+            load_path = snapshot_download(
+                repo_id=model_name_or_path,
+                revision=revision,
+                local_files_only=True,  # use the HF cache; no network at inference
+            )
+
+        model = StaticModel.from_pretrained(load_path)
         head = CentroidHead.build(model)
         return cls(model, head)
 

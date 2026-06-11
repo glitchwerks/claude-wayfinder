@@ -48,8 +48,20 @@ def _main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--model",
-        default="minishlab/potion-base-8M",
-        help="HuggingFace model id (default: minishlab/potion-base-8M).",
+        default=None,
+        help=(
+            "HuggingFace model id or local path "
+            "(default: minishlab/potion-base-8M via DEFAULT_MODEL_NAME)."
+        ),
+    )
+    parser.add_argument(
+        "--revision",
+        default=None,
+        help=(
+            "Exact git commit SHA to load from the HF cache "
+            "(default: DEFAULT_MODEL_REVISION from _classifier.py; "
+            "pass 'none' to disable pinning)."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -62,12 +74,22 @@ def _main(argv: list[str] | None = None) -> int:
             parser.error("No text provided (either as argument or on stdin).")
 
     try:
-        from spikes.domain_encoder._classifier import DomainClassifier
+        from spikes.domain_encoder._classifier import (
+            DEFAULT_MODEL_NAME,
+            DEFAULT_MODEL_REVISION,
+            DomainClassifier,
+        )
     except ImportError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    clf = DomainClassifier.from_pretrained(args.model)
+    model_name = args.model if args.model is not None else DEFAULT_MODEL_NAME
+    # --revision none disables pinning (mutable latest); omitting uses the default pin
+    if args.revision is not None:
+        revision = None if args.revision.lower() == "none" else args.revision
+    else:
+        revision = DEFAULT_MODEL_REVISION
+    clf = DomainClassifier.from_pretrained(model_name, revision=revision)
     result = clf.classify(text)
 
     if args.json:

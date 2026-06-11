@@ -285,6 +285,9 @@ the caching conclusion but is worth measuring.
 
 - Model: `minishlab/potion-base-8M`
 - Model revision (SHA): `bf8b056651a2c21b8d2565580b8569da283cab23`
+  (pinned: `DEFAULT_MODEL_REVISION` in `_classifier.py` — the default loader loads this
+  exact snapshot via `huggingface_hub.snapshot_download`, so upstream repo pushes do not
+  silently drift the centroid numbers)
 - `model2vec` version: `0.8.2`
 - Seed phrases version: `2026-06-11-v1` (see `spikes/domain_encoder/_domains.py`)
 - Platform: Windows 11 Pro, Python 3.12.13, numpy 2.4.6

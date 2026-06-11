@@ -108,6 +108,24 @@ def test_seed_phrases_immutable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 1b. Default model revision constant
+# ---------------------------------------------------------------------------
+
+
+def test_default_model_revision_constant_exists() -> None:
+    """DEFAULT_MODEL_REVISION must be a 40-char hex SHA (the pinned commit)."""
+    from spikes.domain_encoder._classifier import DEFAULT_MODEL_REVISION
+
+    assert isinstance(DEFAULT_MODEL_REVISION, str)
+    assert len(DEFAULT_MODEL_REVISION) == 40, (
+        f"Expected 40-char hex SHA, got {len(DEFAULT_MODEL_REVISION)!r} chars: "
+        f"{DEFAULT_MODEL_REVISION!r}"
+    )
+    # Must match the revision recorded in the spike report §7
+    assert DEFAULT_MODEL_REVISION == "bf8b056651a2c21b8d2565580b8569da283cab23"
+
+
+# ---------------------------------------------------------------------------
 # 2. Entropy
 # ---------------------------------------------------------------------------
 
