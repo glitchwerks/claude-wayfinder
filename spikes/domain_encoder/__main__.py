@@ -1,0 +1,94 @@
+"""CLI entry point for the domain-encoder spike.
+
+Usage::
+
+    python -m spikes.domain_encoder "Fix the failing test in test_api.py"
+    python -m spikes.domain_encoder --json "Deploy to Kubernetes"
+    python -m spikes.domain_encoder --batch < prompts.txt
+
+Cross-process determinism check::
+
+    python -m spikes.domain_encoder --json "some text" > run1.json
+    python -m spikes.domain_encoder --json "some text" > run2.json
+    diff run1.json run2.json   # must be empty
+
+The --json flag outputs a JSON object with ``distribution``, ``top_label``,
+and ``entropy`` so the caller can diff full-precision floats.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+
+
+def _main(argv: list[str] | None = None) -> int:
+    """Entry point for the domain encoder CLI.
+
+    Args:
+        argv: Command-line arguments (defaults to sys.argv[1:]).
+
+    Returns:
+        Exit code (0 = success).
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m spikes.domain_encoder",
+        description="Classify a task description into the 5-way domain distribution.",
+    )
+    parser.add_argument(
+        "text",
+        nargs="?",
+        help="Task description to classify.  Omit to read from stdin.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output full-precision JSON (for cross-process determinism checks).",
+    )
+    parser.add_argument(
+        "--model",
+        default="minishlab/potion-base-8M",
+        help="HuggingFace model id (default: minishlab/potion-base-8M).",
+    )
+    args = parser.parse_args(argv)
+
+    # Resolve input text
+    if args.text:
+        text = args.text
+    else:
+        text = sys.stdin.read().strip()
+        if not text:
+            parser.error("No text provided (either as argument or on stdin).")
+
+    try:
+        from spikes.domain_encoder._classifier import DomainClassifier
+    except ImportError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    clf = DomainClassifier.from_pretrained(args.model)
+    result = clf.classify(text)
+
+    if args.json:
+        output = {
+            "text": text,
+            "top_label": result.top_label,
+            "entropy": result.entropy,
+            "distribution": result.distribution,
+        }
+        # Ensure full float precision for determinism comparison
+        print(json.dumps(output, sort_keys=True))
+    else:
+        print(f"top_label : {result.top_label}")
+        print(f"entropy   : {result.entropy:.6f} bits (max {2.321928:.6f})")
+        print("distribution:")
+        for label, prob in sorted(result.distribution.items()):
+            bar = "#" * int(prob * 40)
+            print(f"  {label:<14} {prob:.6f}  {bar}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main())
