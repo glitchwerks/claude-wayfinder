@@ -453,6 +453,105 @@ def test_manifest_has_no_task_description_text(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 13. corpus_id must be original 1-based line number in source log
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_id_is_raw_line_number_not_eligible_rank(tmp_path: Path) -> None:
+    """corpus_id must be the 1-based line number in the source log.
+
+    When non-eligible rows (fixture entries, empty-td) precede eligible ones,
+    the eligible entries' corpus_ids must reflect their TRUE line positions
+    in the original file, not compact ranks over the filtered list.
+
+    Line 1: fixture entry (excluded)
+    Line 2: organic with empty td (excluded)
+    Line 3: organic eligible → corpus_id must be 3, not 1
+    Line 4: organic eligible → corpus_id must be 4, not 2
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id=""),                          # line 1: fixture, excluded
+        _md(session_id="s1", task_description=""),   # line 2: organic, empty td, excluded
+        _md(session_id="s2"),                         # line 3: organic eligible → corpus_id=3
+        _md(session_id="s3"),                         # line 4: organic eligible → corpus_id=4
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    result = build_corpus(log, output_dir=None)
+
+    assert result["total_in_corpus"] == 2
+    ids = [e["corpus_id"] for e in result["entries"]]
+    assert ids == [3, 4], (
+        f"Expected corpus_ids [3, 4] (raw line numbers), got {ids}. "
+        "corpus_id must be 1-based line number in the source log, "
+        "not compact rank over the eligible list."
+    )
+
+
+def test_corpus_id_skips_non_matcher_decision_rows(tmp_path: Path) -> None:
+    """Non-matcher_decision rows count toward line numbers but are not corpus entries.
+
+    Line 1: agent_dispatch (different type, not an entry)
+    Line 2: matcher_decision organic eligible → corpus_id=2
+    Line 3: matcher_decision fixture (excluded)
+    Line 4: matcher_decision organic eligible → corpus_id=4
+    """
+    from scripts.corpus.builder import build_corpus
+
+    other_type = {
+        "type": "agent_dispatch",
+        "ts": "2026-06-01T10:00:00.000000Z",
+        "session_id": "s0",
+    }
+    entries: list[Any] = [
+        other_type,                   # line 1: not matcher_decision
+        _md(session_id="s1"),          # line 2: organic eligible → corpus_id=2
+        _md(session_id=""),            # line 3: fixture, excluded
+        _md(session_id="s2"),          # line 4: organic eligible → corpus_id=4
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    result = build_corpus(log, output_dir=None)
+
+    assert result["total_in_corpus"] == 2
+    ids = [e["corpus_id"] for e in result["entries"]]
+    assert ids == [2, 4], (
+        f"Expected corpus_ids [2, 4], got {ids}. "
+        "Non-matcher_decision rows must still count toward line numbers."
+    )
+
+
+def test_corpus_id_unique_and_stable_across_runs(tmp_path: Path) -> None:
+    """corpus_ids must be unique and reproducible (line numbers are stable)."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [_md(session_id=f"s{i}") for i in range(10)]
+    log = _write_jsonl(tmp_path, entries)
+
+    r1 = build_corpus(log, output_dir=None)
+    r2 = build_corpus(log, output_dir=None)
+
+    ids1 = [e["corpus_id"] for e in r1["entries"]]
+    ids2 = [e["corpus_id"] for e in r2["entries"]]
+
+    assert ids1 == ids2, "corpus_ids must be stable across runs"
+    assert len(ids1) == len(set(ids1)), "corpus_ids must be unique"
+
+
+def test_corpus_id_first_eligible_entry_when_no_skipped_rows(tmp_path: Path) -> None:
+    """When all rows are organic eligible, corpus_id for first entry is 1."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [_md(session_id=f"s{i}") for i in range(3)]
+    log = _write_jsonl(tmp_path, entries)
+    result = build_corpus(log, output_dir=None)
+
+    ids = [e["corpus_id"] for e in result["entries"]]
+    # First eligible row is at line 1, second at line 2, third at line 3
+    assert ids == [1, 2, 3], f"Expected [1, 2, 3], got {ids}"
+
+
+# ---------------------------------------------------------------------------
 # 12. Empty corpus handled gracefully
 # ---------------------------------------------------------------------------
 

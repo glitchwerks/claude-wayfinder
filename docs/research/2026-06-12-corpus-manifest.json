@@ -1,6 +1,6 @@
 {
-  "total_in_corpus": 167,
-  "total_organic": 240,
+  "total_in_corpus": 168,
+  "total_organic": 259,
   "total_filtered_empty_td": 28,
   "strata_table": {
     "needs_more_detail|short|fp=no": 30,
@@ -17,7 +17,7 @@
     "advisory|long|fp=no": 8,
     "advisory|very_long|fp=no": 1,
     "self_handle_unaided|long|fp=yes": 1,
-    "advisory|medium|fp=no": 1,
+    "advisory|medium|fp=no": 2,
     "self_handle|very_long|fp=no": 2,
     "self_handle_unaided|long|fp=no": 2
   },
@@ -41,13 +41,13 @@
       "shortfall": 29
     },
     {
-      "cell": "advisory|medium|fp=no",
-      "count": 1,
+      "cell": "self_handle|long|fp=no",
+      "count": 2,
       "floor": 30,
-      "shortfall": 29
+      "shortfall": 28
     },
     {
-      "cell": "self_handle|long|fp=no",
+      "cell": "advisory|medium|fp=no",
       "count": 2,
       "floor": 30,
       "shortfall": 28
@@ -107,8 +107,8 @@
       "shortfall": 14
     }
   ],
-  "format_spec": "JSONL; one JSON object per line; fields: original log entry fields + corpus_id (int, 1-based file position) + stratum (dict: decision_band str, td_length_band str, file_paths_present bool); encoding: UTF-8; entries: organic matcher_decision only, non-empty task_description, capped at sample_floor per (decision_band, td_length_band, file_paths_present) cell; ordering: file order within each cell (first N kept when cap applied)",
-  "sha256": "2687ae28aa99b6dcb6ae028f76555ae7f53c84fcf4c1cda0b9386a712e681417",
+  "format_spec": "JSONL; one JSON object per line; fields: original log entry fields + corpus_id (int, 1-based line number in the source dispatch-log.jsonl at generation time; unique and traceable, NOT dense/sequential \u2014 excluded rows still consume line numbers) + stratum (dict: decision_band str, td_length_band str, file_paths_present bool); encoding: UTF-8; entries: organic matcher_decision only, non-empty task_description, capped at sample_floor per (decision_band, td_length_band, file_paths_present) cell; ordering: file order within each cell (first N kept when cap applied)",
+  "sha256": "98454ca6544181118b7fb4870d3745be3146f56478f9b95c13f3c99ffa6cb090",
   "artifact_path": "C:\\Users\\chris\\.claude\\state\\wayfinder-corpus\\2026-06-12\\wayfinder-corpus.jsonl",
   "generation_params": {
     "sample_floor": 30,

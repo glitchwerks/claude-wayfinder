@@ -61,7 +61,9 @@ ARTIFACT_FILENAME: str = "wayfinder-corpus.jsonl"
 #: Format specification string embedded in the manifest.
 FORMAT_SPEC: str = (
     "JSONL; one JSON object per line; "
-    "fields: original log entry fields + corpus_id (int, 1-based file position) "
+    "fields: original log entry fields + corpus_id (int, 1-based line number in the "
+    "source dispatch-log.jsonl at generation time; unique and traceable, NOT dense/"
+    "sequential — excluded rows still consume line numbers) "
     "+ stratum (dict: decision_band str, td_length_band str, file_paths_present bool); "
     "encoding: UTF-8; "
     "entries: organic matcher_decision only, non-empty task_description, "
@@ -146,23 +148,28 @@ def build_corpus(
         - ``shortfall_table`` — list of {cell, count, shortfall, floor} dicts
         - ``generation_params`` — {sample_floor, log_path, filter_rules}
     """
-    # Load all organic entries
-    all_organic = _load_organic_entries(log_path)
-    total_organic = len(all_organic)
+    # Load all organic entries as (line_no, entry) tuples.
+    # line_no is the 1-based position of the raw line in the source file —
+    # ALL lines count, including non-matcher_decision and blank lines.
+    all_organic_with_lineno = _load_organic_entries(log_path)
+    total_organic = len(all_organic_with_lineno)
 
-    # Filter out empty task_description entries
+    # Filter out empty task_description entries, preserving line numbers.
     eligible = [
-        e for e in all_organic
+        (line_no, e)
+        for line_no, e in all_organic_with_lineno
         if _get_td(e)
     ]
     total_filtered = total_organic - len(eligible)
 
-    # Assign corpus IDs (1-based position in original log order) and strata
-    # corpus_id is the 1-based position of the entry in the eligible list
+    # Assign corpus IDs: corpus_id = 1-based line number in the source log.
+    # This is NOT a compact rank over the eligible list — excluded rows still
+    # consume line numbers, so corpus_ids may have gaps.  The line number is
+    # the stable join key: `sed -n '<N>p' dispatch-log.jsonl` recovers the row.
     augmented: list[dict[str, Any]] = []
-    for idx, entry in enumerate(eligible, start=1):
+    for line_no, entry in eligible:
         aug = dict(entry)
-        aug["corpus_id"] = idx
+        aug["corpus_id"] = line_no
         aug["stratum"] = _assign_stratum(entry)
         augmented.append(aug)
 
@@ -229,21 +236,29 @@ def _get_td(entry: dict[str, Any]) -> str:
     return inp.get("task_description", "") or ""
 
 
-def _load_organic_entries(log_path: Path) -> list[dict[str, Any]]:
-    """Load organic matcher_decision entries from the JSONL log.
+def _load_organic_entries(log_path: Path) -> list[tuple[int, dict[str, Any]]]:
+    """Load organic matcher_decision entries from the JSONL log, with line numbers.
+
+    Each raw line (including blank and non-JSON lines) increments the line
+    counter so that ``line_no`` equals the 1-based position in the file.
+    This makes ``corpus_id = line_no`` a stable, traceable join key: given a
+    corpus_id you can recover the original log row with
+    ``sed -n '<N>p' dispatch-log.jsonl``.
 
     Args:
         log_path: Path to the dispatch-log JSONL file.
 
     Returns:
-        List of parsed dicts in file order, organic only
+        List of ``(line_no, entry_dict)`` tuples in file order, organic only
         (type == matcher_decision AND non-empty session_id).
+        ``line_no`` is 1-based and counts ALL lines in the file, not just
+        matcher_decision lines.
     """
     if not log_path.exists():
         return []
-    results: list[dict[str, Any]] = []
+    results: list[tuple[int, dict[str, Any]]] = []
     with open(log_path, encoding="utf-8") as fh:
-        for raw in fh:
+        for line_no, raw in enumerate(fh, start=1):
             stripped = raw.strip()
             if not stripped:
                 continue
@@ -257,7 +272,7 @@ def _load_organic_entries(log_path: Path) -> list[dict[str, Any]]:
                 continue
             if not obj.get("session_id", ""):
                 continue
-            results.append(obj)
+            results.append((line_no, obj))
     return results
 
 
