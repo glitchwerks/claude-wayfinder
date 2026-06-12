@@ -54,26 +54,52 @@ from profiler import td_length_band  # noqa: E402
 
 
 def _home_relative(path: Path) -> str:
-    """Return a portable ``~/``-prefixed POSIX form for paths under the home dir.
+    """Return a commit-safe POSIX string for ``path``, redacting all machine-specific parts.
 
-    Paths that are not under the user's home directory are returned as their
-    POSIX string representation unchanged.  This helper is a pure string
-    operation and does not touch the filesystem.
+    Guarantees that no absolute local path survives into a committed manifest:
+
+    * **Under home** → ``~/rest/of/path`` (POSIX slashes).
+    * **Rooted/absolute, NOT under home** → ``<external>/<basename>`` — all
+      machine-specific directory components are dropped; only the filename is
+      kept for informational value.  This handles CI workspace paths
+      (``/github/workspace/…``), scratch drives (``D:/tmp/…``), POSIX-style
+      rooted paths (``/tmp/…``), and any other host-specific root.
+      Detection uses ``path.root`` (non-empty) rather than
+      ``path.is_absolute()``, because on Windows a POSIX-style path like
+      ``/tmp/x`` has ``root='\'`` but ``is_absolute()`` returns ``False``
+      (no drive letter).
+    * **Relative path** → ``path.as_posix()`` unchanged.  Relative paths are
+      already machine-unspecific, so no transformation is needed.
+
+    This helper is a pure string/path operation and does **not** touch the
+    filesystem.
 
     Args:
         path: Absolute (or relative) :class:`~pathlib.Path` to rewrite.
 
     Returns:
-        ``~/rest/of/path`` when ``path`` is under :func:`Path.home`;
-        otherwise ``path.as_posix()``.
+        A commit-safe string representation of ``path``:
+        ``~/rest/of/path`` (home-relative), ``<external>/<basename>``
+        (non-home absolute), or ``path.as_posix()`` (relative).
     """
     home = Path.home()
     try:
         relative = path.relative_to(home)
         return "~/" + PurePosixPath(relative).as_posix()
     except ValueError:
-        # path is not relative to home — return as POSIX without modification
-        return path.as_posix()
+        # path is not relative to home.
+        # A "rooted" path has a non-empty root (``path.root != ''``): it starts
+        # with a drive-letter root (``C:\``) or a POSIX/UNC root (``/``).
+        # On Windows, ``Path('/tmp/x')`` has ``root='\'`` but ``is_absolute()``
+        # returns False (no drive letter), so we use ``path.root`` rather than
+        # ``path.is_absolute()`` to detect machine-rooted paths.
+        # Relative paths (``root == ''``) are already machine-unspecific;
+        # return them as-is in POSIX form.
+        if not path.root:
+            return path.as_posix()
+        # Absolute/rooted path outside home: drop all machine-specific directory
+        # components; keep only the basename to preserve informational value.
+        return "<external>/" + path.name
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +410,13 @@ def build_manifest(
 
     The manifest contains counts, strata table, format spec, sha256,
     and generation parameters.  It MUST NOT contain any raw prompt text.
+
+    All absolute local paths in the manifest are redacted via
+    :func:`_home_relative`: under-home paths become ``~/…``, and any
+    absolute path outside the home directory (e.g. CI workspace, scratch
+    drive) becomes ``<external>/<basename>``.  Only relative paths are
+    kept verbatim.  This guarantees no machine-specific directory
+    information survives into a committed manifest.
 
     Args:
         result:        Result dict from ``build_corpus()``.

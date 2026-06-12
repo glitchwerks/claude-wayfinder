@@ -617,11 +617,11 @@ def test_home_relative_posix_path_under_home() -> None:
     assert result == "~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl"
 
 
-def test_home_relative_non_home_path_unchanged() -> None:
-    """A path NOT under the user's home directory is returned as a POSIX string, unchanged."""
+def test_home_relative_non_home_path_redacted() -> None:
+    """A path NOT under the user's home directory is redacted to <external>/<basename>."""
     from scripts.corpus.builder import _home_relative
 
-    # Use a well-known non-home path
+    # Use a well-known non-home absolute path
     non_home = Path("/tmp/some/file.jsonl")
     result = _home_relative(non_home)
 
@@ -629,8 +629,39 @@ def test_home_relative_non_home_path_unchanged() -> None:
     assert not result.startswith("~/"), (
         f"Non-home path should not get ~/ prefix, got: {result!r}"
     )
-    # Must not touch filesystem — just string ops; ends with the filename in some form
-    assert result.endswith("file.jsonl")
+    # All machine-specific directory parts stripped; only sentinel prefix + basename kept
+    assert result == "<external>/file.jsonl", (
+        f"Non-home absolute path should be redacted to '<external>/<basename>', got: {result!r}"
+    )
+
+
+def test_home_relative_non_home_windows_absolute_path_redacted() -> None:
+    """A Windows-style absolute path outside home is redacted to <external>/<basename>."""
+    from scripts.corpus.builder import _home_relative
+
+    # Simulate a CI workspace path (absolute, not under home on any OS)
+    # Use PurePosixPath to construct a consistent non-home absolute path
+    non_home = Path("/d/github/workspace/runner/corpus/wayfinder-corpus.jsonl")
+    result = _home_relative(non_home)
+
+    assert not result.startswith("~/")
+    assert result == "<external>/wayfinder-corpus.jsonl", (
+        f"Expected '<external>/wayfinder-corpus.jsonl', got: {result!r}"
+    )
+
+
+def test_home_relative_relative_path_kept_as_posix() -> None:
+    """A relative path is returned unchanged in POSIX form (already machine-unspecific)."""
+    from scripts.corpus.builder import _home_relative
+
+    rel = Path("corpus/output/wayfinder-corpus.jsonl")
+    result = _home_relative(rel)
+
+    # Relative path is machine-unspecific — keep as-is (POSIX form, no backslashes)
+    assert result == "corpus/output/wayfinder-corpus.jsonl", (
+        f"Relative path should be returned as POSIX string unchanged, got: {result!r}"
+    )
+    assert "\\" not in result
 
 
 def test_home_relative_does_not_touch_filesystem(tmp_path: Path) -> None:
@@ -650,7 +681,7 @@ def test_home_relative_does_not_touch_filesystem(tmp_path: Path) -> None:
 
 
 def test_manifest_artifact_path_is_home_relative() -> None:
-    """build_manifest artifact_path must be a string (~/... when under home, posix otherwise)."""
+    """build_manifest artifact_path uses ~/... under home, <external>/<basename> otherwise."""
     import tempfile
 
     from scripts.corpus.builder import build_corpus, build_manifest, write_corpus_artifact
@@ -669,10 +700,18 @@ def test_manifest_artifact_path_is_home_relative() -> None:
         manifest = build_manifest(result, artifact_path)
 
         ap = manifest["artifact_path"]
-        # artifact_path is NOT under home (it's in tmp), so it should pass through unchanged.
-        # The key contract: no backslashes (POSIX form) and it's a string.
+        # artifact_path is NOT under home (it's in system tmp).
+        # New contract: must be redacted to <external>/<basename> — no machine-specific dirs.
         assert isinstance(ap, str)
         assert "\\" not in ap, f"artifact_path must use POSIX slashes, got: {ap!r}"
+        # Either home-relative or fully redacted — no raw machine path dirs allowed
+        assert ap.startswith("~/") or ap.startswith("<external>/"), (
+            f"artifact_path must be home-relative or <external>/<basename>, got: {ap!r}"
+        )
+        # The basename must be preserved for informational value
+        assert ap.endswith("wayfinder-corpus.jsonl"), (
+            f"artifact_path basename must be preserved, got: {ap!r}"
+        )
 
 
 def test_manifest_log_path_is_home_relative() -> None:
