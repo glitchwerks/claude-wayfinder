@@ -33,22 +33,50 @@ def compute_plugin_data_dir(
 ) -> Path:
     """Step 1: Resolve ${CLAUDE_PLUGIN_DATA} deterministically.
 
-    Honors $CLAUDE_PLUGIN_DATA when set (test seam); otherwise computes
-    ~/.claude/plugins/data/{slug}/ per spec § 4.2. The slug is derived
-    by replacing every character outside [a-zA-Z0-9_-] with a hyphen.
+    Honors $CLAUDE_PLUGIN_DATA when its basename matches the same-plugin
+    prefix ``<plugin_name>-`` (e.g. ``claude-wayfinder-inline``,
+    ``claude-wayfinder-glitchwerks``). On a cross-plugin leak — where the
+    basename starts with a *different* plugin's name (e.g. ``codex-inline``)
+    — or when the variable is unset, falls back to the computed slug
+    ``~/.claude/plugins/data/claude-wayfinder-glitchwerks``.
+
+    This guards against the harness keying plugin data dirs as
+    ``<plugin>-<marketplace>`` and a desktop/ccd session injecting
+    ``$CLAUDE_PLUGIN_DATA`` pointing at a different plugin's dir (the
+    infinite "requires setup" banner bug, issue #342).
+
+    **Mirror asymmetry — no harness here:** The SKILL.md Step 1 logic
+    has a three-tier fallback: (1) env var when same-plugin prefix
+    matches, (2) harness-rendered ``${CLAUDE_PLUGIN_DATA}`` literal,
+    (3) computed ``claude-wayfinder-glitchwerks`` slug. This Python
+    mirror has no harness, so tier 2 does not exist. On a rejected or
+    unset env var this function falls directly to the computed slug —
+    tier 3. Do not "fix" this mirror to add a tier-2 path; without a
+    harness there is no harness-rendered value to use.
 
     Args:
         plugin_id: Plugin identifier used to compute the data directory
-            slug. Defaults to the canonical wayfinder plugin ID.
+            slug. Defaults to the canonical wayfinder plugin ID. The
+            plugin name (part before ``@``) is also used to derive the
+            same-plugin prefix guard.
 
     Returns:
         Absolute path to the plugin data directory. The directory is not
         created by this function — callers that need it to exist should
         call ``mkdir(parents=True, exist_ok=True)`` on the result.
     """
+    # Derive plugin name: the part of the ID before "@" (e.g.
+    # "claude-wayfinder" from "claude-wayfinder@glitchwerks").
+    plugin_name = plugin_id.split("@")[0]
+    same_plugin_prefix = f"{plugin_name}-"
+
     env_override = os.environ.get("CLAUDE_PLUGIN_DATA")
     if env_override:
-        return Path(env_override)
+        basename = os.path.basename(os.path.normpath(env_override))
+        if basename.startswith(same_plugin_prefix):
+            return Path(env_override)
+        # Cross-plugin leak or non-matching key — fall through to slug.
+
     slug = re.sub(r"[^a-zA-Z0-9_\-]", "-", plugin_id)
     return Path.home() / ".claude" / "plugins" / "data" / slug
 
