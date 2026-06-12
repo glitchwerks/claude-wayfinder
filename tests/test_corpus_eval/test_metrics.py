@@ -566,3 +566,61 @@ class TestPerRowMetricsIndependence:
         assert math.isnan(rate) or rate != rate_ext, (
             "Lexical and extractor fdb rates must differ"
         )
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 (review): fdb denominator conditioned on labeled rows only
+# ---------------------------------------------------------------------------
+
+
+class TestMetricFalseDefaultBuildLabeledOnly:
+    """§10.4 fdb: partial-labels case — unlabeled default-build rows must be
+    excluded from BOTH numerator AND denominator.
+
+    Reviewer finding: current code counts unlabeled rows in the denominator
+    but skips them in the numerator, artificially depressing the rate.
+    """
+
+    def test_partial_labels_excludes_unlabeled_from_denominator(self) -> None:
+        """1 labeled wrong + 1 unlabeled → rate 1.0, not 0.5.
+
+        Both rows are default-build (empty postures).  Only corpus_id=1 has
+        a label, and it is wrong.  corpus_id=2 has no label — it must be
+        excluded from the denominator.  Result: 1 wrong / 1 labeled = 1.0.
+        """
+        import math
+
+        results = [
+            _make_result(1, "delegate", "code-writer",
+                         extras={"postures": []}),
+            _make_result(2, "delegate", "code-writer",
+                         extras={"postures": []}),
+        ]
+        labels = {
+            1: _make_label(1, "investigator"),   # labeled, wrong
+            # corpus_id=2 intentionally absent — unlabeled
+        }
+        rate = metric_false_default_build(results, labels)
+        assert not math.isnan(rate), "Rate must not be nan when one labeled row exists"
+        assert rate == 1.0, (
+            f"1 labeled wrong / 1 labeled default-build = 1.0; got {rate}"
+        )
+
+    def test_all_unlabeled_default_build_returns_nan(self) -> None:
+        """When ALL default-build rows lack labels, return nan (not 0.0).
+
+        Denominator would be zero labeled rows → metric is undefined → nan.
+        """
+        import math
+
+        results = [
+            _make_result(1, "delegate", "code-writer",
+                         extras={"postures": []}),
+            _make_result(2, "delegate", "code-writer",
+                         extras={"postures": []}),
+        ]
+        labels: dict[int, object] = {}  # no labels at all
+        rate = metric_false_default_build(results, labels)
+        assert math.isnan(rate), (
+            f"All-unlabeled default-build must return nan; got {rate}"
+        )

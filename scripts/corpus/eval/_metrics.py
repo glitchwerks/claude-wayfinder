@@ -393,18 +393,21 @@ def metric_false_default_build(
     if not default_build:
         return 0.0
 
-    wrong = 0
-    for r in default_build:
-        label = labels.get(r.corpus_id)
-        if label is None:
-            continue
-        if r.agent != label.gold_agent:
-            wrong += 1
-
-    if not any(labels.get(r.corpus_id) for r in default_build):
+    # Denominator: only labeled default-build rows.  Unlabeled rows cannot
+    # contribute to numerator or denominator — counting them in the
+    # denominator while skipping them in the numerator artificially depresses
+    # the rate (partial-labels artifact, reviewer fix §10.4).
+    labeled_default_build = [
+        r for r in default_build if labels.get(r.corpus_id) is not None
+    ]
+    if not labeled_default_build:
         return float("nan")
 
-    return round(wrong / len(default_build), 4)
+    wrong = sum(
+        1 for r in labeled_default_build
+        if r.agent != labels[r.corpus_id].gold_agent
+    )
+    return round(wrong / len(labeled_default_build), 4)
 
 
 # ---------------------------------------------------------------------------

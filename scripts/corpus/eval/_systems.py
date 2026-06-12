@@ -265,6 +265,13 @@ def _postures_from_extractor_results(
       the posture set and "build" is added.  The "modifier" weight class
       on E6's evidence signals this flip role; a modifier must not be
       treated as an additive posture alongside the source it modifies.
+    - E7 host-gate (§10.2): E7 is a modifier INSIDE an active diagnose
+      context.  Its posture evidence only counts when E1 or E2 also fired
+      (the diagnose host condition).  The span count is recorded in
+      extras["area_span"] regardless; only the posture contribution is
+      gated.  Without this gate, plain file-path-bearing build/verify
+      prompts misroute to investigator/debugger because diagnose outranks
+      build in the priority order.
     - E12 brakes non-diagnose confident postures (tracked separately).
     - Priority ordering is applied by the caller.
 
@@ -278,10 +285,19 @@ def _postures_from_extractor_results(
     """
     postures: list[str] = []
     seen: set[str] = set()
+    # E7 host condition: E1 (stacktrace) or E2 (test failure) must have fired
+    # for E7's posture evidence to count (§10.2 — E7 refines diagnose, does
+    # not activate it).
+    e1_fired = bool(results.get("e1") and results["e1"].fired)
+    e2_fired = bool(results.get("e2") and results["e2"].fired)
+    e7_host_condition = e1_fired or e2_fired
     for name in ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9",
                  "e10", "e11"]:
         result = results.get(name)
         if result is None or not result.fired:
+            continue
+        # Gate E7 posture evidence on host condition
+        if name == "e7" and not e7_host_condition:
             continue
         for posture, weight in result.evidence:
             if weight == "modifier":

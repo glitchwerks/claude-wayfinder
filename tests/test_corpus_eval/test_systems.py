@@ -903,3 +903,216 @@ class TestE6FlipSemantics:
         assert p11.decision == "delegate", (
             f"P11 must be delegate band, got {p11.decision!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 (review): E7 area-span must be gated on a diagnose host (E1 or E2)
+# ---------------------------------------------------------------------------
+
+
+class TestE7HostGating:
+    """§10.2 E7: E7 is a MODIFIER inside diagnose — it must NOT activate
+    diagnose itself.
+
+    A prompt with only file_paths (no E1/E2 failure artifact) must NOT
+    receive diagnose posture from E7.  E7's span count is recorded in
+    extras["area_span"] regardless.
+    """
+
+    def test_file_paths_only_no_failure_does_not_get_diagnose(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """Entry with file_paths but NO E1/E2 must NOT route to diagnose."""
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        # Build an entry: only file_paths across two areas (src + infra),
+        # no stacktrace, no test failure output.
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-e7-gate-001",
+            "input": {
+                "task_description": (
+                    "Update src/api/client.py and .github/workflows/deploy.yml"
+                    " to use the new endpoint."
+                ),
+                "file_paths": [
+                    "src/api/client.py",
+                    ".github/workflows/deploy.yml",
+                ],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "advisory", "agent": None, "confidence": 0.5},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "advisory",
+                "td_length_band": "short",
+                "file_paths_present": True,
+            },
+        }
+        corpus_file = tmp_path / "e7-gate-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        postures = r.extras.get("postures", [])
+        assert "diagnose" not in postures, (
+            f"E7 must NOT inject diagnose without E1/E2 host; "
+            f"postures={postures!r}, agent={r.agent!r}"
+        )
+
+    def test_file_paths_only_no_failure_does_not_route_to_debugger_or_investigator(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """file_paths-only prompt must NOT route to debugger or investigator."""
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-e7-gate-002",
+            "input": {
+                "task_description": (
+                    "Update src/api/client.py and .github/workflows/deploy.yml"
+                    " to use the new endpoint."
+                ),
+                "file_paths": [
+                    "src/api/client.py",
+                    ".github/workflows/deploy.yml",
+                ],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "advisory", "agent": None, "confidence": 0.5},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "advisory",
+                "td_length_band": "short",
+                "file_paths_present": True,
+            },
+        }
+        corpus_file = tmp_path / "e7-gate-agent-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        assert r.agent not in ("debugger", "investigator"), (
+            f"file_paths-only prompt must not route to debugger/investigator; "
+            f"got agent={r.agent!r}"
+        )
+
+    def test_area_span_in_extras_regardless_of_host_condition(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """area_span count appears in extras even when E1/E2 did not fire."""
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-e7-gate-003",
+            "input": {
+                "task_description": (
+                    "Update src/api/client.py and .github/workflows/deploy.yml"
+                    " to use the new endpoint."
+                ),
+                "file_paths": [
+                    "src/api/client.py",
+                    ".github/workflows/deploy.yml",
+                ],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "advisory", "agent": None, "confidence": 0.5},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "advisory",
+                "td_length_band": "short",
+                "file_paths_present": True,
+            },
+        }
+        corpus_file = tmp_path / "e7-gate-span-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        # area_span must be present in extras (used by metric 4 + braked logic)
+        assert "area_span" in r.extras, (
+            "area_span must appear in extras regardless of E1/E2 host condition"
+        )
+
+    def test_e1_span_ge2_still_routes_investigator(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """E1 (stacktrace) + file_paths spanning ≥2 areas → investigator.
+
+        P14 fixture exercises this: stacktrace block + two-area file_paths.
+        The host condition (E1 fired) is met, so E7 posture evidence counts
+        and the span≥2 rule routes to investigator.
+        """
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        # Minimal E1 + span≥2: stacktrace in prose + file_paths in two areas
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-e7-gate-004",
+            "input": {
+                "task_description": (
+                    "Getting this in CI: `Traceback (most recent call last):\n"
+                    "  File 'src/api/client.py', line 42, in fetch\n"
+                    "    raise ConnectionError` — happens only in deploy."
+                ),
+                "file_paths": [
+                    "src/api/client.py",
+                    ".github/workflows/deploy.yml",
+                ],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "delegate", "agent": "investigator", "confidence": 0.9},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "delegate",
+                "td_length_band": "medium",
+                "file_paths_present": True,
+            },
+        }
+        corpus_file = tmp_path / "e7-e1-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        assert r.agent == "investigator", (
+            f"E1 + span≥2 → investigator; got agent={r.agent!r}, "
+            f"postures={r.extras.get('postures')!r}"
+        )
