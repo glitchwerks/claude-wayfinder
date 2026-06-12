@@ -1,0 +1,123 @@
+{
+  "total_in_corpus": 168,
+  "total_organic": 271,
+  "total_filtered_empty_td": 28,
+  "strata_table": {
+    "needs_more_detail|short|fp=no": 30,
+    "delegate|short|fp=yes": 30,
+    "delegate|long|fp=yes": 30,
+    "self_handle|long|fp=yes": 15,
+    "advisory|long|fp=yes": 12,
+    "delegate|long|fp=no": 16,
+    "advisory|very_long|fp=yes": 4,
+    "delegate|very_long|fp=yes": 1,
+    "self_handle|very_long|fp=yes": 5,
+    "self_handle|long|fp=no": 2,
+    "delegate|medium|fp=no": 7,
+    "advisory|long|fp=no": 8,
+    "advisory|very_long|fp=no": 1,
+    "self_handle_unaided|long|fp=yes": 1,
+    "advisory|medium|fp=no": 2,
+    "self_handle|very_long|fp=no": 2,
+    "self_handle_unaided|long|fp=no": 2
+  },
+  "shortfall_table": [
+    {
+      "cell": "delegate|very_long|fp=yes",
+      "count": 1,
+      "floor": 30,
+      "shortfall": 29
+    },
+    {
+      "cell": "advisory|very_long|fp=no",
+      "count": 1,
+      "floor": 30,
+      "shortfall": 29
+    },
+    {
+      "cell": "self_handle_unaided|long|fp=yes",
+      "count": 1,
+      "floor": 30,
+      "shortfall": 29
+    },
+    {
+      "cell": "self_handle|long|fp=no",
+      "count": 2,
+      "floor": 30,
+      "shortfall": 28
+    },
+    {
+      "cell": "advisory|medium|fp=no",
+      "count": 2,
+      "floor": 30,
+      "shortfall": 28
+    },
+    {
+      "cell": "self_handle|very_long|fp=no",
+      "count": 2,
+      "floor": 30,
+      "shortfall": 28
+    },
+    {
+      "cell": "self_handle_unaided|long|fp=no",
+      "count": 2,
+      "floor": 30,
+      "shortfall": 28
+    },
+    {
+      "cell": "advisory|very_long|fp=yes",
+      "count": 4,
+      "floor": 30,
+      "shortfall": 26
+    },
+    {
+      "cell": "self_handle|very_long|fp=yes",
+      "count": 5,
+      "floor": 30,
+      "shortfall": 25
+    },
+    {
+      "cell": "delegate|medium|fp=no",
+      "count": 7,
+      "floor": 30,
+      "shortfall": 23
+    },
+    {
+      "cell": "advisory|long|fp=no",
+      "count": 8,
+      "floor": 30,
+      "shortfall": 22
+    },
+    {
+      "cell": "advisory|long|fp=yes",
+      "count": 12,
+      "floor": 30,
+      "shortfall": 18
+    },
+    {
+      "cell": "self_handle|long|fp=yes",
+      "count": 15,
+      "floor": 30,
+      "shortfall": 15
+    },
+    {
+      "cell": "delegate|long|fp=no",
+      "count": 16,
+      "floor": 30,
+      "shortfall": 14
+    }
+  ],
+  "format_spec": "JSONL; one JSON object per line; fields: original log entry fields + corpus_id (int, 1-based line number in the source dispatch-log.jsonl at generation time; unique and traceable, NOT dense/sequential \u2014 excluded rows still consume line numbers) + stratum (dict: decision_band str, td_length_band str, file_paths_present bool); encoding: UTF-8; entries: organic matcher_decision only, non-empty task_description, capped at sample_floor per (decision_band, td_length_band, file_paths_present) cell; ordering: file order within each cell (first N kept when cap applied)",
+  "sha256": "98454ca6544181118b7fb4870d3745be3146f56478f9b95c13f3c99ffa6cb090",
+  "artifact_path": "~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl",
+  "generation_params": {
+    "sample_floor": 30,
+    "log_path": "~/.claude/state/dispatch-log.jsonl",
+    "filter_rules": [
+      "include: type == matcher_decision",
+      "include: session_id non-empty (organic only)",
+      "exclude: empty task_description",
+      "cap: first sample_floor entries per (decision_band \u00d7 td_length_band \u00d7 file_paths_present) cell"
+    ]
+  }
+}
