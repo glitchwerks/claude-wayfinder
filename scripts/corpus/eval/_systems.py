@@ -302,6 +302,71 @@ def _area_span_count(results: dict[str, ExtractorResult]) -> int:
     return int(e7.fired)
 
 
+def _e11_agents_from_results(
+    results: dict[str, ExtractorResult],
+) -> list[str]:
+    """Extract explicit agent names from E11 evidence.
+
+    E11 emits evidence of the form ``("as-named:<agent>", "strong")``
+    for each agent mentioned.  This helper decodes those entries into
+    bare agent name strings for use in pass-through routing.
+
+    Args:
+        results: Dict of extractor name → ExtractorResult.
+
+    Returns:
+        Sorted list of agent names mentioned via E11, or ``[]`` when
+        E11 did not fire.
+    """
+    e11 = results.get("e11")
+    if e11 is None or not e11.fired:
+        return []
+    agents: list[str] = []
+    for posture_key, _ in e11.evidence:
+        if posture_key.startswith("as-named:"):
+            agent_name = posture_key[len("as-named:"):]
+            agents.append(agent_name)
+    return agents
+
+
+def _candidate_agents_from_postures(
+    postures: list[str],
+    area_span: int,
+    domain: str,
+) -> list[str]:
+    """Build a candidate-agent list from all activated posture evidence.
+
+    Used to populate ``extras["alternatives"]`` for braked outcomes
+    (metric 5).  Returns one agent per activated posture in priority
+    order, de-duplicated.
+
+    Args:
+        postures: Fired posture strings (from ``_postures_from_extractor_results``).
+        area_span: E7 area span count.
+        domain: Coarse domain string.
+
+    Returns:
+        List of candidate agent names in priority order, without duplicates.
+    """
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for p in _POSTURE_PRIORITY:
+        if p not in postures:
+            continue
+        # Apply diagnose + span rule
+        if p == "diagnose" and area_span >= 2:
+            agent = "investigator"
+        else:
+            agent = _CELL_MAP.get(
+                (domain, p),
+                _CELL_MAP.get(("any", p)),
+            )
+        if agent and agent not in seen:
+            candidates.append(agent)
+            seen.add(agent)
+    return candidates
+
+
 def _tier_c_fired(results: dict[str, ExtractorResult]) -> bool:
     """Return True if any Tier-C extractor fired.
 
@@ -494,13 +559,40 @@ def run_extractors(
         e12_fired = bool(extractor_results["e12"].fired)
         tier_c = _tier_c_fired(extractor_results)
 
-        agent, confidence = _route_from_postures(
-            postures=postures,
-            area_span=span,
-            e8_fired=e8_fired,
-            e12_fired=e12_fired,
-            domain="any",
-        )
+        # §10.2 E11 near-dispositive pass-through: explicit agent mention
+        # overrides posture-priority selection.  Route directly to the named
+        # agent at confident band; subject to catalog routability check.
+        e11_agents = _e11_agents_from_results(extractor_results)
+
+        braked = False
+        if e11_agents:
+            # Use the first named agent (sorted in _e11_agents_from_results)
+            agent = e11_agents[0]
+            confidence = 0.9
+        else:
+            agent, confidence = _route_from_postures(
+                postures=postures,
+                area_span=span,
+                e8_fired=e8_fired,
+                e12_fired=e12_fired,
+                domain="any",
+            )
+            # Record brake: E12 fires + a posture extractor fired + the
+            # winning posture is not diagnose/operate → E12 braked the
+            # confident outcome down to advisory (0.5).  Excludes the
+            # default-build case (postures empty, winning_posture=None)
+            # which is an abstain, not a brake.
+            if e12_fired and confidence == 0.5 and agent is not None:
+                winning_posture_set = set(postures) & set(_POSTURE_PRIORITY)
+                winning_posture = next(
+                    (p for p in _POSTURE_PRIORITY if p in winning_posture_set),
+                    None,
+                )
+                if (
+                    winning_posture is not None
+                    and winning_posture not in ("diagnose", "operate")
+                ):
+                    braked = True
 
         # Validate agent against catalog (may be absent from small fixture)
         if agent and agent not in catalog_agent_names:
@@ -513,11 +605,18 @@ def run_extractors(
         else:
             decision = "advisory"
 
-        extras = {
+        extras: dict[str, Any] = {
             "postures": postures,
             "tier_c_fired": tier_c,
             "area_span": span,
         }
+        if braked:
+            extras["braked"] = True
+            extras["alternatives"] = _candidate_agents_from_postures(
+                postures=postures,
+                area_span=span,
+                domain="any",
+            )
         results.append(
             SystemResult(
                 corpus_id=entry.corpus_id,
@@ -724,13 +823,35 @@ def run_composed(
         e12_fired = bool(extractor_results["e12"].fired)
         tier_c = _tier_c_fired(extractor_results)
 
-        agent, confidence = _route_from_postures(
-            postures=postures,
-            area_span=span,
-            e8_fired=e8_fired,
-            e12_fired=e12_fired,
-            domain=domain,
-        )
+        # §10.2 E11 near-dispositive pass-through: explicit agent mention
+        # overrides posture-priority selection.
+        e11_agents = _e11_agents_from_results(extractor_results)
+
+        braked = False
+        if e11_agents:
+            agent = e11_agents[0]
+            confidence = 0.9
+        else:
+            agent, confidence = _route_from_postures(
+                postures=postures,
+                area_span=span,
+                e8_fired=e8_fired,
+                e12_fired=e12_fired,
+                domain=domain,
+            )
+            # Record brake: E12 fires + a posture extractor fired + the
+            # winning posture is not diagnose/operate.
+            if e12_fired and confidence == 0.5 and agent is not None:
+                winning_posture_set = set(postures) & set(_POSTURE_PRIORITY)
+                winning_posture = next(
+                    (p for p in _POSTURE_PRIORITY if p in winning_posture_set),
+                    None,
+                )
+                if (
+                    winning_posture is not None
+                    and winning_posture not in ("diagnose", "operate")
+                ):
+                    braked = True
 
         if agent and agent not in catalog_agent_names:
             decision = "advisory"
@@ -741,7 +862,7 @@ def run_composed(
         else:
             decision = "advisory"
 
-        extras = {
+        extras: dict[str, Any] = {
             "domain": domain_result.top_label,
             "entropy": round(entropy, 4),
             "margin": round(margin, 4),
@@ -750,6 +871,13 @@ def run_composed(
             "tier_c_fired": tier_c,
             "area_span": span,
         }
+        if braked:
+            extras["braked"] = True
+            extras["alternatives"] = _candidate_agents_from_postures(
+                postures=postures,
+                area_span=span,
+                domain=domain,
+            )
         results.append(SystemResult(
             corpus_id=entry.corpus_id,
             decision=decision,

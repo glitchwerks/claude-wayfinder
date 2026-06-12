@@ -458,3 +458,358 @@ class TestRouteFromPosturesDefaultBuild:
         assert agent is not None, (
             "§10.4 default-build must yield an agent from _CELL_MAP, not None"
         )
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: E11 agent-mention pass-through (spec §10.2)
+# ---------------------------------------------------------------------------
+
+
+class TestE11PassThrough:
+    """§10.2: explicit agent mention → near-dispositive pass-through.
+
+    E11 evidence has form ``("as-named:<agent>", "strong")`` which does
+    not match any posture name.  The runner must detect this and route
+    directly to the named agent at confident band (0.9).
+    """
+
+    def test_e11_only_entry_routes_to_named_agent(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """Entry with only agent_mentions fires E11 → routes to named agent."""
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-e11-001",
+            "input": {
+                "task_description": "Can you have the researcher look into this?",
+                "file_paths": [],
+                "agent_mentions": ["researcher"],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "delegate", "agent": "researcher", "confidence": 0.9},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "delegate",
+                "td_length_band": "short",
+                "file_paths_present": False,
+            },
+        }
+        corpus_file = tmp_path / "e11-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.agent == "researcher", (
+            f"E11 pass-through should route to 'researcher', got {r.agent!r}"
+        )
+        # Near-dispositive: confident band (0.9), not advisory (0.5)
+        assert r.confidence == 0.9, (
+            f"E11 pass-through must be confident (0.9), got {r.confidence}"
+        )
+
+    def test_e11_wins_over_other_postures(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """E11 is near-dispositive: agent_mentions overrides other posture signals."""
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        # Has a build-posture signal AND an agent mention — E11 should win
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-e11-002",
+            "input": {
+                "task_description": (
+                    "Implement this feature — I want the researcher agent on it."
+                ),
+                "file_paths": ["src/feature.py"],
+                "agent_mentions": ["researcher"],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "delegate", "agent": "researcher", "confidence": 0.9},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "delegate",
+                "td_length_band": "short",
+                "file_paths_present": True,
+            },
+        }
+        corpus_file = tmp_path / "e11-wins-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        assert r.agent == "researcher", (
+            f"E11 near-dispositive must override build posture; got {r.agent!r}"
+        )
+        assert r.confidence == 0.9
+
+    def test_e11_agent_not_in_catalog_falls_to_advisory(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """E11 with unknown agent name stays advisory (not in catalog)."""
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-e11-003",
+            "input": {
+                "task_description": "Can the unknown-agent handle this?",
+                "file_paths": [],
+                "agent_mentions": ["unknown-agent-xyz"],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "advisory", "agent": None, "confidence": 0.5},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "advisory",
+                "td_length_band": "short",
+                "file_paths_present": False,
+            },
+        }
+        corpus_file = tmp_path / "e11-unknown-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        # Agent not in catalog → advisory
+        assert r.decision == "advisory", (
+            f"Unknown E11 agent should produce advisory, got {r.decision!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: braked-outcome recording (extras["braked"] + extras["alternatives"])
+# ---------------------------------------------------------------------------
+
+
+class TestBrakedOutcomeRecording:
+    """E12 brake must set extras['braked']=True and extras['alternatives'].
+
+    Without these flags, metric_braked_candidate_quality always returns n/a.
+    """
+
+    def test_braked_entry_sets_braked_flag(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """E4 build posture + E12 prose-failure term → E12 brakes → braked=True.
+
+        Fires E4 (spec path in prose → build posture) and E12 (broken →
+        prose_failure_mention).  E12 brakes the confident build → advisory,
+        so extras['braked'] must be set to True.
+        """
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        # E4: prose path matching docs/superpowers/specs/** → build posture.
+        # E12: "broken" → prose_failure_mention fires → brakes build.
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-brake-001",
+            "input": {
+                "task_description": (
+                    "The spec is broken — check"
+                    " docs/superpowers/specs/feature-spec.md and make"
+                    " sure the build passes."
+                ),
+                "file_paths": [],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "advisory", "agent": None, "confidence": 0.5},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "advisory",
+                "td_length_band": "medium",
+                "file_paths_present": False,
+            },
+        }
+        corpus_file = tmp_path / "brake-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        assert r.extras.get("braked") is True, (
+            f"E12-braked result must have extras['braked']=True; "
+            f"extras={r.extras!r}"
+        )
+
+    def test_braked_entry_sets_alternatives(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """Braked entry must have extras['alternatives'] as a non-empty list."""
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-brake-002",
+            "input": {
+                "task_description": (
+                    "The spec is broken — check"
+                    " docs/superpowers/specs/feature-spec.md and make"
+                    " sure the build passes."
+                ),
+                "file_paths": [],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "advisory", "agent": None, "confidence": 0.5},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "advisory",
+                "td_length_band": "medium",
+                "file_paths_present": False,
+            },
+        }
+        corpus_file = tmp_path / "brake-alts-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        alternatives = r.extras.get("alternatives")
+        assert isinstance(alternatives, list), (
+            f"extras['alternatives'] must be a list; got {type(alternatives)}"
+        )
+        assert len(alternatives) > 0, (
+            "extras['alternatives'] must be non-empty for a braked result"
+        )
+
+    def test_non_braked_entry_has_no_braked_flag(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """Non-braked entry must NOT have extras['braked']=True."""
+        import json
+
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        # P13: operate (E8 Tier-A dominant) → no brake
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-brake-003",
+            "input": {
+                "task_description": "Run `gh pr checks 214` and summarize what's red.",
+                "file_paths": [],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": "gh",
+            },
+            "output": {"decision": "delegate", "agent": "ops", "confidence": 0.9},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "delegate",
+                "td_length_band": "short",
+                "file_paths_present": False,
+            },
+        }
+        corpus_file = tmp_path / "no-brake-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        r = results[0]
+        assert not r.extras.get("braked", False), (
+            "Non-braked result must not have extras['braked']=True"
+        )
+
+    def test_metric_braked_quality_computes_on_braked_fixture(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """metric_braked_candidate_quality must return non-nan with a braked case."""
+        import json
+        import math
+
+        from scripts.corpus.eval._metrics import metric_braked_candidate_quality
+        from scripts.corpus.eval._reader import GoldLabel, load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        # Same E4+E12 braked prompt as the other brake tests
+        record = {
+            "type": "matcher_decision",
+            "session_id": "session-brake-004",
+            "input": {
+                "task_description": (
+                    "The spec is broken — check"
+                    " docs/superpowers/specs/feature-spec.md and make"
+                    " sure the build passes."
+                ),
+                "file_paths": [],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "advisory", "agent": None, "confidence": 0.5},
+            "corpus_id": 1,
+            "stratum": {
+                "decision_band": "advisory",
+                "td_length_band": "medium",
+                "file_paths_present": False,
+            },
+        }
+        corpus_file = tmp_path / "brake-metric-corpus.jsonl"
+        corpus_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        entries = load_corpus(corpus_file)
+        results = run_extractors(entries, fixture_catalog_path)
+
+        # Gold: code-writer is the braked winner (E4 build → code-writer)
+        labels = {
+            1: GoldLabel(
+                corpus_id=1,
+                domain="code",
+                posture="build",
+                gold_agent="code-writer",
+                is_any=False,
+            )
+        }
+        quality = metric_braked_candidate_quality(results, labels)
+        assert not math.isnan(quality), (
+            f"metric_braked_candidate_quality must not be nan when braked "
+            f"cases exist; got {quality}"
+        )
