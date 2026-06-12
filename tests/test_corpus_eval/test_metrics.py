@@ -275,12 +275,23 @@ class TestMetricFalseDefaultBuild:
         assert rate == 0.0
 
     def test_nan_when_no_postures_key_at_all(self) -> None:
-        """Returns 0.0 when results have no postures key (non-extractor sys)."""
+        """Returns nan when results have no postures key (non-extractor sys).
+
+        Fix 2: lexical/encoder rows have no 'postures' key in extras → the
+        false-default-build metric is n/a (nan), not 0.0.  A 0.0 would
+        erroneously suggest the system ran posture extractors and found zero
+        default-build cases, which is misleading.  nan is the honest signal.
+        """
+        import math
+
         results = [_make_result(1, extras={})]
         labels = {1: _make_label(1, "ops")}
         rate = metric_false_default_build(results, labels)
-        # No extractor-system results → 0.0 (no default-build events possible)
-        assert rate == 0.0
+        # No 'postures' key → metric is n/a (nan) for non-extractor systems
+        assert math.isnan(rate), (
+            f"metric_false_default_build must be nan when no result has "
+            f"'postures' in extras (non-extractor row); got {rate}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -437,3 +448,121 @@ class TestComputeAllMetrics:
         assert hasattr(r, "false_default_build_rate")
         assert hasattr(r, "braked_candidate_quality")
         assert hasattr(r, "confident_wrong_rate")
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: per-row metrics independence (CLI table rows compute own metrics)
+# ---------------------------------------------------------------------------
+
+
+class TestPerRowMetricsIndependence:
+    """Each table row must compute metrics from ITS OWN sys_results.
+
+    Fix 2 bug: the CLI loop passed ``extractors_r`` as the ``extractors``
+    arg for every non-extractor row, so the lexical and encoder rows
+    inherited the extractor system's tier_c_decisiveness, false_default_build,
+    and braked_candidate_quality values.
+
+    Correct behaviour:
+    - lexical row: no ``postures``/``tier_c_fired`` in extras → tier_c,
+      fdb, and brake metrics return 0.0/nan (no eligible results).
+    - extractors row: has postures/tier_c_fired extras → computes for real.
+    - composed row: has its own extras (runs extractors internally) → real.
+
+    Two different extractor-like systems with different tier_c_fired
+    distributions must NOT produce the same tier_c_decisiveness value
+    when used as the primary row.
+    """
+
+    def test_lexical_row_tier_c_is_nan_not_inherited(self) -> None:
+        """Lexical results (no tier_c_fired extras) → tier_c_decisiveness = nan.
+
+        Fix 2: non-extractor rows lack the 'tier_c_fired' key in extras.
+        The metric must return nan (displayed as n/a) rather than 0.0, which
+        would falsely imply zero Tier-C events in an extractor-capable system.
+        """
+        import math
+
+        # Lexical results have no 'tier_c_fired' key in extras
+        lexical_r = [
+            _make_result(1, extras={}),
+            _make_result(2, extras={}),
+        ]
+        # tier_c_decisiveness computed from lexical_r directly: no eligible results → nan
+        rate = metric_tier_c_decisiveness(lexical_r)
+        assert math.isnan(rate), (
+            f"Lexical row has no tier_c_fired extras → rate must be nan, got {rate}"
+        )
+
+    def test_extractor_row_tier_c_differs_from_lexical(self) -> None:
+        """Extractor results with tier_c_fired=True → tier_c > 0; lexical → nan."""
+        import math
+
+        extractor_r = [
+            _make_result(1, extras={"tier_c_fired": True, "postures": ["build"]}),
+            _make_result(2, extras={"tier_c_fired": True, "postures": ["build"]}),
+        ]
+        lexical_r = [
+            _make_result(1, extras={}),
+            _make_result(2, extras={}),
+        ]
+        extractor_rate = metric_tier_c_decisiveness(extractor_r)
+        lexical_rate = metric_tier_c_decisiveness(lexical_r)
+        assert extractor_rate > 0.0, "Extractor row must have tier_c > 0 when all fired"
+        assert math.isnan(lexical_rate), "Lexical row must be nan (no tier_c_fired key)"
+        assert extractor_rate != lexical_rate or math.isnan(lexical_rate), (
+            "Rows with different extras must NOT produce the same tier_c value"
+        )
+
+    def test_two_extractor_like_systems_with_different_tier_c_stay_different(
+        self,
+    ) -> None:
+        """Two systems with different tier_c distributions stay independent."""
+        sys_high = [
+            _make_result(1, extras={"tier_c_fired": True, "postures": ["build"]}),
+            _make_result(2, extras={"tier_c_fired": True, "postures": ["build"]}),
+        ]
+        sys_low = [
+            _make_result(1, extras={"tier_c_fired": False, "postures": ["operate"]}),
+            _make_result(2, extras={"tier_c_fired": False, "postures": ["operate"]}),
+        ]
+        rate_high = metric_tier_c_decisiveness(sys_high)
+        rate_low = metric_tier_c_decisiveness(sys_low)
+        assert rate_high == 1.0
+        assert rate_low == 0.0
+        assert rate_high != rate_low, (
+            "Per-row independence: different tier_c distributions must differ"
+        )
+
+    def test_fdb_uses_own_postures_not_inherited(self) -> None:
+        """False-default-build uses own postures key, not another row's extras.
+
+        Fix 2: lexical row has no 'postures' key → fdb returns nan (n/a).
+        Extractor row with empty postures → 1.0 (wrong default-build).
+        They must not be equal (independence check).
+        """
+        import math
+
+        # Lexical row: no 'postures' key in extras → nan (non-extractor row)
+        lexical_r = [
+            _make_result(1, "delegate", "code-writer", extras={}),
+        ]
+        labels = {1: _make_label(1, "investigator")}
+        rate = metric_false_default_build(lexical_r, labels)
+        assert math.isnan(rate), (
+            f"Lexical row (no postures key) must return nan for fdb, got {rate}"
+        )
+
+        # Extractor row: postures=[] → default-build case, wrong → 1.0
+        extractor_r = [
+            _make_result(1, "delegate", "code-writer", extras={"postures": []}),
+        ]
+        rate_ext = metric_false_default_build(extractor_r, labels)
+        assert rate_ext == 1.0, (
+            f"Extractor row (empty postures) must return 1.0 for fdb, got {rate_ext}"
+        )
+
+        # The two rates must not be equal (independence check)
+        assert math.isnan(rate) or rate != rate_ext, (
+            "Lexical and extractor fdb rates must differ"
+        )

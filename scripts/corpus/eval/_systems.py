@@ -261,7 +261,10 @@ def _postures_from_extractor_results(
     """Collect all fired posture evidence values from extractor results.
 
     Applies §12.3 R1-R3 refinements:
-    - E6 only flips diagnose→build when it fires (handled by E6 itself).
+    - E6 FLIPS diagnose→build when it fires: "diagnose" is removed from
+      the posture set and "build" is added.  The "modifier" weight class
+      on E6's evidence signals this flip role; a modifier must not be
+      treated as an additive posture alongside the source it modifies.
     - E12 brakes non-diagnose confident postures (tracked separately).
     - Priority ordering is applied by the caller.
 
@@ -280,10 +283,21 @@ def _postures_from_extractor_results(
         result = results.get(name)
         if result is None or not result.fired:
             continue
-        for posture, _ in result.evidence:
-            if posture not in seen:
-                postures.append(posture)
-                seen.add(posture)
+        for posture, weight in result.evidence:
+            if weight == "modifier":
+                # §12.3 R1 — E6 flip: modifier evidence removes the source
+                # posture it modifies ("diagnose") and replaces it with the
+                # target posture ("build").  Do not treat modifier as additive.
+                if "diagnose" in seen:
+                    postures.remove("diagnose")
+                    seen.discard("diagnose")
+                if posture not in seen:
+                    postures.append(posture)
+                    seen.add(posture)
+            else:
+                if posture not in seen:
+                    postures.append(posture)
+                    seen.add(posture)
     return postures
 
 

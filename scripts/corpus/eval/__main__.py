@@ -296,15 +296,14 @@ def main(argv: list[str] | None = None) -> int:
     ]:
         if not sys_results:
             continue
-        # For each system, compute metrics using that system as the primary
+        # For each system, compute metrics from THIS row's own sys_results.
+        # Metrics depending on extractor extras (tier_c, fdb, brake) return
+        # nan for rows whose extras lack postures/tier_c_fired — displayed as
+        # n/a in the table, which is honest for lexical/encoder rows.
         m = compute_all_metrics(
             lexical=sys_results,
             encoder=None,
-            extractors=(
-                sys_results
-                if system_label == "extractors"
-                else (extractors_r or sys_results)
-            ),
+            extractors=sys_results,
             composed=None,
             labels=labels,
         )

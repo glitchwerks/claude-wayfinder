@@ -345,7 +345,10 @@ def metric_tier_c_decisiveness(results: list[SystemResult]) -> float:
     """
     eligible = [r for r in results if "tier_c_fired" in r.extras]
     if not eligible:
-        return 0.0
+        # No result has a 'tier_c_fired' key — this system is not an extractor
+        # system (e.g. lexical or encoder row).  Return nan so the table shows
+        # n/a, which is honest: the metric is undefined for non-extractor rows.
+        return float("nan")
     fired_count = sum(1 for r in eligible if r.extras["tier_c_fired"])
     return round(fired_count / len(eligible), 4)
 
@@ -377,10 +380,14 @@ def metric_false_default_build(
     """
     # Only count as "default-build" when postures key is present AND empty
     # (the extractor ran but no posture fired → unmarked default §10.4)
-    default_build = [
-        r for r in results
-        if "postures" in r.extras and not r.extras["postures"]
-    ]
+    extractor_results = [r for r in results if "postures" in r.extras]
+    if not extractor_results:
+        # No result has a 'postures' key — this is a non-extractor system
+        # (lexical or encoder row).  Return nan: the metric is undefined for
+        # systems that did not run posture extractors.
+        return float("nan")
+
+    default_build = [r for r in extractor_results if not r.extras["postures"]]
     # When no default-build cases exist (all posture extractors fired), the
     # rate is 0.0 by definition — there are no cases to be false.
     if not default_build:

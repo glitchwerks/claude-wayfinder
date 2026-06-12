@@ -813,3 +813,93 @@ class TestBrakedOutcomeRecording:
             f"metric_braked_candidate_quality must not be nan when braked "
             f"cases exist; got {quality}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: E6 flip semantics — diagnose must be REMOVED when E6 fires
+# ---------------------------------------------------------------------------
+
+
+class TestE6FlipSemantics:
+    """§10.2 E6, §12.3: E6 is a MODIFIER that FLIPS diagnose → build.
+
+    When E6 fires, the posture set must have 'diagnose' removed and 'build'
+    present.  The resulting route is code × build → code-writer, not the
+    diagnose-priority investigator/debugger path.
+
+    P11 fixture: ``FAILED tests/test_api.py … Started after we renamed …
+    Update the tests to match.``  E2 fires (test failure output), E6 fires
+    (cause stated via 'after'), so diagnose must flip → build, routing to
+    code-writer.
+    """
+
+    def test_e6_removes_diagnose_from_postures(self) -> None:
+        """When E6 fires, _postures_from_extractor_results must NOT include diagnose."""
+        from claude_wayfinder.posture._types import PostureContext
+        from scripts.corpus.eval._systems import (
+            _postures_from_extractor_results,
+            _run_all_extractors,
+        )
+
+        # P11: test failure output (E2) + cause stated after (E6)
+        ctx = PostureContext(
+            task_description=(
+                "Here's pytest: `FAILED tests/test_api.py::test_fetch -"
+                " AttributeError: no attribute 'get_user'`. Started after we"
+                " renamed get_user → fetch_user. Update the tests to match."
+            ),
+            file_paths=(),
+            agent_mentions=frozenset(),
+            tool_mentions=frozenset(),
+            command_prefix=None,
+        )
+        results = _run_all_extractors(ctx)
+        assert results["e6"].fired, "E6 must fire on P11 (cause stated via 'after')"
+        postures = _postures_from_extractor_results(results)
+        assert "diagnose" not in postures, (
+            f"E6 flip must remove 'diagnose' from postures; got {postures!r}"
+        )
+
+    def test_e6_adds_build_to_postures(self) -> None:
+        """When E6 fires, 'build' must be present in postures."""
+        from claude_wayfinder.posture._types import PostureContext
+        from scripts.corpus.eval._systems import (
+            _postures_from_extractor_results,
+            _run_all_extractors,
+        )
+
+        ctx = PostureContext(
+            task_description=(
+                "Here's pytest: `FAILED tests/test_api.py::test_fetch -"
+                " AttributeError: no attribute 'get_user'`. Started after we"
+                " renamed get_user → fetch_user. Update the tests to match."
+            ),
+            file_paths=(),
+            agent_mentions=frozenset(),
+            tool_mentions=frozenset(),
+            command_prefix=None,
+        )
+        results = _run_all_extractors(ctx)
+        postures = _postures_from_extractor_results(results)
+        assert "build" in postures, (
+            f"E6 flip must add 'build' to postures; got {postures!r}"
+        )
+
+    def test_p11_routes_code_writer_via_e6_flip(
+        self,
+        fixture_corpus_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """P11 must route to code-writer after E6 flips diagnose → build."""
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_extractors
+
+        entries = load_corpus(fixture_corpus_path)
+        results = run_extractors(entries, fixture_catalog_path)
+        p11 = next(r for r in results if r.corpus_id == 11)
+        assert p11.agent == "code-writer", (
+            f"P11 must route to code-writer (E6 flip), got {p11.agent!r}"
+        )
+        assert p11.decision == "delegate", (
+            f"P11 must be delegate band, got {p11.decision!r}"
+        )
