@@ -360,9 +360,16 @@ def _route_from_postures(
             break
 
     if winning_posture is None:
-        # Default-build (§10.4): no posture fired → advisory
-        # This contributes posture=build but not confidence
-        return None, 0.5
+        # Default-build (§10.4): no posture extractor fired but domain signal
+        # exists → treat as build posture and route via the cell map so that
+        # composed delegation and the false-default-build metric can count it.
+        # Confidence remains advisory (0.5) per §10.4 (contributes posture,
+        # not confidence).
+        agent = _CELL_MAP.get(
+            (domain, "build"),
+            _CELL_MAP.get(("any", "build")),
+        )
+        return agent, 0.5
 
     # Diagnose + span≥2 → investigator regardless of domain
     if winning_posture == "diagnose" and area_span >= 2:

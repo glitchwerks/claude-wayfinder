@@ -381,3 +381,80 @@ class TestRunComposed:
         results = run_composed(entries, fixture_catalog_path)
         assert isinstance(results, list)
         assert len(results) == 14
+
+
+# ---------------------------------------------------------------------------
+# _route_from_postures — default-build must route via cell map
+# ---------------------------------------------------------------------------
+
+
+class TestRouteFromPosturesDefaultBuild:
+    """§10.4: when no posture extractor fires but domain is concrete,
+    default-build MUST route via _CELL_MAP[(domain, 'build')]."""
+
+    def test_default_build_with_code_domain_returns_code_writer(
+        self,
+    ) -> None:
+        """No-posture + code domain → code-writer via cell map (not None)."""
+        from scripts.corpus.eval._systems import _route_from_postures
+
+        agent, confidence = _route_from_postures(
+            postures=[],
+            area_span=0,
+            e8_fired=False,
+            e12_fired=False,
+            domain="code",
+        )
+        assert agent == "code-writer", (
+            f"Expected 'code-writer' via _CELL_MAP[('code','build')], got {agent!r}"
+        )
+        # Confidence should be advisory per §10.4 (contributes posture, not
+        # confidence — advisory band is fine)
+        assert confidence == 0.5
+
+    def test_default_build_with_docs_prose_domain_returns_doc_writer(
+        self,
+    ) -> None:
+        """No-posture + docs_prose domain → doc-writer via cell map."""
+        from scripts.corpus.eval._systems import _route_from_postures
+
+        agent, confidence = _route_from_postures(
+            postures=[],
+            area_span=0,
+            e8_fired=False,
+            e12_fired=False,
+            domain="docs_prose",
+        )
+        assert agent == "doc-writer"
+        assert confidence == 0.5
+
+    def test_default_build_with_any_domain_returns_code_writer(
+        self,
+    ) -> None:
+        """No-posture + 'any' domain → code-writer via ('any','build') fallback."""
+        from scripts.corpus.eval._systems import _route_from_postures
+
+        agent, confidence = _route_from_postures(
+            postures=[],
+            area_span=0,
+            e8_fired=False,
+            e12_fired=False,
+            domain="any",
+        )
+        assert agent == "code-writer"
+        assert confidence == 0.5
+
+    def test_default_build_agent_is_not_none(self) -> None:
+        """The default-build path MUST return a concrete agent, never None."""
+        from scripts.corpus.eval._systems import _route_from_postures
+
+        agent, _ = _route_from_postures(
+            postures=[],
+            area_span=0,
+            e8_fired=False,
+            e12_fired=False,
+            domain="code",
+        )
+        assert agent is not None, (
+            "§10.4 default-build must yield an agent from _CELL_MAP, not None"
+        )

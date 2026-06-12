@@ -118,6 +118,31 @@ def load_corpus(path: Path) -> list[CorpusEntry]:
 def _parse_corpus_record(record: dict[str, Any]) -> CorpusEntry:
     """Parse one corpus JSON record into a CorpusEntry.
 
+    The phase-A corpus format (produced by ``scripts/corpus/builder.py``)
+    nests dispatch-context fields inside the original log entry's ``input``
+    dict, following the actual log-entry shape:
+
+    .. code-block:: json
+
+        {
+          "type": "matcher_decision",
+          "session_id": "...",
+          "input": {
+            "task_description": "...",
+            "file_paths": [...],
+            "agent_mentions": [...],
+            "tool_mentions": [...],
+            "command_prefix": null
+          },
+          "output": {...},
+          "corpus_id": 5,
+          "stratum": {...}
+        }
+
+    ``corpus_id`` and ``stratum`` remain at the top level (added by the
+    builder).  If the ``input`` key is absent or ``None``, all context
+    fields default to empty values.
+
     Args:
         record: Raw JSON dict from one corpus JSONL line.
 
@@ -125,15 +150,20 @@ def _parse_corpus_record(record: dict[str, Any]) -> CorpusEntry:
         CorpusEntry with typed fields.
 
     Raises:
-        KeyError: If required fields are missing.
+        KeyError: If required top-level fields (``corpus_id``, ``stratum``)
+            are missing from a record.
     """
+    # Dispatch-context fields live inside the nested 'input' dict.
+    # Tolerate absent/None input gracefully — yield empty defaults.
+    inp: dict[str, Any] = record.get("input") or {}
+
     return CorpusEntry(
         corpus_id=int(record["corpus_id"]),
-        task_description=str(record.get("task_description", "")),
-        file_paths=list(record.get("file_paths") or []),
-        agent_mentions=list(record.get("agent_mentions") or []),
-        tool_mentions=list(record.get("tool_mentions") or []),
-        command_prefix=record.get("command_prefix") or None,
+        task_description=str(inp.get("task_description", "")),
+        file_paths=list(inp.get("file_paths") or []),
+        agent_mentions=list(inp.get("agent_mentions") or []),
+        tool_mentions=list(inp.get("tool_mentions") or []),
+        command_prefix=inp.get("command_prefix") or None,
         stratum=dict(record.get("stratum") or {}),
         raw=record,
     )

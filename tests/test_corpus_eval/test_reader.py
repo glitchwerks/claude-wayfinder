@@ -84,13 +84,19 @@ class TestLoadCorpus:
         import json
 
         corpus_file = tmp_path / "corpus.jsonl"
+        # Use the real nested shape emitted by the builder
         record = {
+            "type": "matcher_decision",
+            "session_id": "session-blank-test",
+            "input": {
+                "task_description": "hello",
+                "file_paths": [],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            },
+            "output": {"decision": "delegate"},
             "corpus_id": 1,
-            "task_description": "hello",
-            "file_paths": [],
-            "agent_mentions": [],
-            "tool_mentions": [],
-            "command_prefix": None,
             "stratum": {
                 "decision_band": "delegate",
                 "td_length_band": "short",
@@ -174,3 +180,168 @@ class TestLoadLabels:
         """load_labels(None) returns an empty dict (labels optional)."""
         labels = load_labels(None)
         assert labels == {}
+
+
+# ---------------------------------------------------------------------------
+# Contract test: reader must parse the real builder-emitted shape
+# ---------------------------------------------------------------------------
+
+
+class TestBuilderShapeContract:
+    """Reader must parse the phase-A corpus shape produced by builder.py.
+
+    The builder emits original log entry fields (including ``input`` nested
+    dict) PLUS ``corpus_id`` and ``stratum`` at the top level.  Dispatch-
+    context fields (task_description, file_paths, agent_mentions,
+    tool_mentions, command_prefix) live inside ``input``, NOT at top level.
+    """
+
+    # Minimal record hand-constructed from builder augmentation logic:
+    # - original log entry has top-level: type, session_id, input{}, output{}
+    # - builder adds: corpus_id (line number), stratum dict
+    _BUILDER_EMITTED_RECORD = {
+        "type": "matcher_decision",
+        "session_id": "session-contract-001",
+        "input": {
+            "task_description": "Implement the new cache module.",
+            "file_paths": ["src/cache.py", "tests/test_cache.py"],
+            "agent_mentions": ["code-writer"],
+            "tool_mentions": ["Read"],
+            "command_prefix": None,
+        },
+        "output": {
+            "decision": "delegate",
+            "agent": "code-writer",
+            "confidence": 0.9,
+        },
+        "corpus_id": 42,
+        "stratum": {
+            "decision_band": "delegate",
+            "td_length_band": "short",
+            "file_paths_present": True,
+        },
+    }
+
+    def test_parses_task_description_from_input(
+        self, tmp_path: Path
+    ) -> None:
+        """task_description must be read from record['input'], not top level."""
+        import json
+
+        corpus_file = tmp_path / "contract.jsonl"
+        corpus_file.write_text(
+            json.dumps(self._BUILDER_EMITTED_RECORD) + "\n",
+            encoding="utf-8",
+        )
+        entries = load_corpus(corpus_file)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.task_description == "Implement the new cache module."
+
+    def test_parses_file_paths_from_input(self, tmp_path: Path) -> None:
+        """file_paths must be read from record['input']['file_paths']."""
+        import json
+
+        corpus_file = tmp_path / "contract.jsonl"
+        corpus_file.write_text(
+            json.dumps(self._BUILDER_EMITTED_RECORD) + "\n",
+            encoding="utf-8",
+        )
+        entries = load_corpus(corpus_file)
+        entry = entries[0]
+        assert entry.file_paths == ["src/cache.py", "tests/test_cache.py"]
+
+    def test_parses_agent_mentions_from_input(self, tmp_path: Path) -> None:
+        """agent_mentions must be read from record['input']."""
+        import json
+
+        corpus_file = tmp_path / "contract.jsonl"
+        corpus_file.write_text(
+            json.dumps(self._BUILDER_EMITTED_RECORD) + "\n",
+            encoding="utf-8",
+        )
+        entries = load_corpus(corpus_file)
+        entry = entries[0]
+        assert entry.agent_mentions == ["code-writer"]
+
+    def test_parses_tool_mentions_from_input(self, tmp_path: Path) -> None:
+        """tool_mentions must be read from record['input']."""
+        import json
+
+        corpus_file = tmp_path / "contract.jsonl"
+        corpus_file.write_text(
+            json.dumps(self._BUILDER_EMITTED_RECORD) + "\n",
+            encoding="utf-8",
+        )
+        entries = load_corpus(corpus_file)
+        entry = entries[0]
+        assert entry.tool_mentions == ["Read"]
+
+    def test_parses_command_prefix_from_input(self, tmp_path: Path) -> None:
+        """command_prefix must be read from record['input']."""
+        import json
+
+        # A record where input has a command_prefix set
+        record_with_prefix = {
+            **self._BUILDER_EMITTED_RECORD,
+            "input": {
+                **self._BUILDER_EMITTED_RECORD["input"],
+                "command_prefix": "gh",
+            },
+        }
+        corpus_file = tmp_path / "contract.jsonl"
+        corpus_file.write_text(
+            json.dumps(record_with_prefix) + "\n",
+            encoding="utf-8",
+        )
+        entries = load_corpus(corpus_file)
+        entry = entries[0]
+        assert entry.command_prefix == "gh"
+
+    def test_corpus_id_and_stratum_stay_top_level(
+        self, tmp_path: Path
+    ) -> None:
+        """corpus_id and stratum remain top-level fields (not in input)."""
+        import json
+
+        corpus_file = tmp_path / "contract.jsonl"
+        corpus_file.write_text(
+            json.dumps(self._BUILDER_EMITTED_RECORD) + "\n",
+            encoding="utf-8",
+        )
+        entries = load_corpus(corpus_file)
+        entry = entries[0]
+        assert entry.corpus_id == 42
+        assert entry.stratum == {
+            "decision_band": "delegate",
+            "td_length_band": "short",
+            "file_paths_present": True,
+        }
+
+    def test_missing_input_dict_yields_empty_defaults(
+        self, tmp_path: Path
+    ) -> None:
+        """When 'input' key is absent, all context fields default to empty."""
+        import json
+
+        record_no_input = {
+            "type": "matcher_decision",
+            "session_id": "session-no-input",
+            "corpus_id": 99,
+            "stratum": {
+                "decision_band": "advisory",
+                "td_length_band": "empty",
+                "file_paths_present": False,
+            },
+        }
+        corpus_file = tmp_path / "contract.jsonl"
+        corpus_file.write_text(
+            json.dumps(record_no_input) + "\n", encoding="utf-8"
+        )
+        entries = load_corpus(corpus_file)
+        entry = entries[0]
+        assert entry.task_description == ""
+        assert entry.file_paths == []
+        assert entry.agent_mentions == []
+        assert entry.tool_mentions == []
+        assert entry.command_prefix is None
