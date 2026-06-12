@@ -94,23 +94,32 @@ def _print_profile_report(profile: dict, output_file=None) -> None:
     inp = profile.get("input_field_presence", {})
     for field, info in sorted(inp.items(), key=lambda x: -x[1]["rate"]):
         pct = info["rate"] * 100
-        flag = " *** FLAGGED" if info["rate"] < NEAR_EMPTY_THRESHOLD else ""
-        p(f"  input.{field:<25} {info['count']:>4}/{total_organic}  ({pct:5.1f}%){flag}")
+        pop_rate = info.get("nonempty_count", 0) / total_organic
+        flag = " *** FLAGGED" if pop_rate < NEAR_EMPTY_THRESHOLD else ""
+        p(
+            f"  input.{field:<25} {info['count']:>4}/{total_organic}"
+            f"  ({pct:5.1f}% present, {pop_rate * 100:5.1f}% populated){flag}"
+        )
     p()
 
     p("--- output field presence (organic) ---")
     outp = profile.get("output_field_presence", {})
     for field, info in sorted(outp.items(), key=lambda x: -x[1]["rate"]):
         pct = info["rate"] * 100
-        flag = " *** FLAGGED" if info["rate"] < NEAR_EMPTY_THRESHOLD else ""
-        p(f"  output.{field:<24} {info['count']:>4}/{total_organic}  ({pct:5.1f}%){flag}")
+        pop_rate = info.get("nonempty_count", 0) / total_organic
+        flag = " *** FLAGGED" if pop_rate < NEAR_EMPTY_THRESHOLD else ""
+        p(
+            f"  output.{field:<24} {info['count']:>4}/{total_organic}"
+            f"  ({pct:5.1f}% present, {pop_rate * 100:5.1f}% populated){flag}"
+        )
     p()
 
-    p("--- Flagged fields (0% or near-empty in organic) ---")
+    p("--- Flagged fields (0% or near-empty populated in organic) ---")
     flagged = profile.get("flagged_fields", [])
     if flagged:
         for item in flagged:
-            p(f"  {item['field']:<40} {item['rate'] * 100:5.1f}%  — {item['reason']}")
+            pop_pct = item["populated_rate"] * 100
+            p(f"  {item['field']:<40} {pop_pct:5.1f}% populated  — {item['reason']}")
     else:
         p("  (none)")
     p()

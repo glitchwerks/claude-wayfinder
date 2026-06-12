@@ -16,7 +16,8 @@ The profile is JSON-serialisable and carries:
   - td_length_bands  (empty / short / medium / long / very_long)
   - input_field_presence  (per-field: count + rate)
   - output_field_presence (per-field: count + rate)
-  - flagged_fields         (list of {field, count, rate, reason})
+  - flagged_fields         (list of {field, presence_count, presence_rate,
+                            nonempty_count, populated_rate, reason})
 
 Privacy constraint (issue #338 §HC-3):
   Field names, structural lengths, and population rates are collected.
@@ -124,7 +125,9 @@ def field_profile(path: Path) -> dict[str, Any]:
         - ``td_length_bands``        — band → count for organic entries
         - ``input_field_presence``   — field → {count, rate} for organic
         - ``output_field_presence``  — field → {count, rate} for organic
-        - ``flagged_fields``         — list of {field, count, rate, reason}
+        - ``flagged_fields``         — list of {field, presence_count,
+                                       presence_rate, nonempty_count,
+                                       populated_rate, reason}
     """
     if not path.exists():
         return _empty_profile()
@@ -255,39 +258,52 @@ def _compute_flagged_fields(
     output_fp: dict[str, dict[str, Any]],
     organic_count: int,
 ) -> list[dict[str, Any]]:
-    """Return flagged-field records for fields with 0% or near-empty population.
+    """Return flagged-field records for fields with 0% or near-empty POPULATED rate.
+
+    Flagging is based on ``nonempty_count / organic_count`` (the populated rate),
+    NOT on key-presence rate.  A field that is always present but always empty
+    (e.g. ``lanes: []``, ``command_prefix: ""``) has presence_rate=1.0 but
+    populated_rate=0.0 — it must be flagged.
 
     Args:
-        input_fp:      input sub-field presence dict (field → {count, rate, ...}).
+        input_fp:      input sub-field presence dict (field → {count, rate,
+                       nonempty_count}).
         output_fp:     output sub-field presence dict.
-        organic_count: Total organic entry count (denominator).
+        organic_count: Total organic entry count (denominator for populated rate).
 
     Returns:
-        List of {field, count, rate, reason} dicts, sorted by rate ascending.
+        List of {field, presence_count, presence_rate, nonempty_count,
+        populated_rate, reason} dicts, sorted by populated_rate ascending.
     """
     flagged: list[dict[str, Any]] = []
+    n = organic_count if organic_count > 0 else 1  # guard against /0
 
     for prefix, fp in (("input", input_fp), ("output", output_fp)):
         for field, info in fp.items():
-            rate = info["rate"]
+            nonempty = info.get("nonempty_count", 0)
+            populated_rate = nonempty / n
             qualified = f"{prefix}.{field}"
-            if rate == 0.0:
+            if populated_rate == 0.0:
                 flagged.append({
                     "field": qualified,
-                    "count": info["count"],
-                    "rate": rate,
+                    "presence_count": info["count"],
+                    "presence_rate": info["rate"],
+                    "nonempty_count": nonempty,
+                    "populated_rate": populated_rate,
                     "reason": "100% empty / never populated in organic entries",
                 })
-            elif rate < NEAR_EMPTY_THRESHOLD:
+            elif populated_rate < NEAR_EMPTY_THRESHOLD:
                 flagged.append({
                     "field": qualified,
-                    "count": info["count"],
-                    "rate": rate,
+                    "presence_count": info["count"],
+                    "presence_rate": info["rate"],
+                    "nonempty_count": nonempty,
+                    "populated_rate": populated_rate,
                     "reason": (
-                        f"near-empty: {rate * 100:.1f}% "
-                        f"< {NEAR_EMPTY_THRESHOLD * 100:.0f}% threshold"
+                        f"near-empty: {populated_rate * 100:.1f}% populated"
+                        f" < {NEAR_EMPTY_THRESHOLD * 100:.0f}% threshold"
                     ),
                 })
 
-    flagged.sort(key=lambda x: x["rate"])
+    flagged.sort(key=lambda x: x["populated_rate"])
     return flagged

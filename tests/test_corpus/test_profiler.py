@@ -295,6 +295,128 @@ def test_flagged_fields_includes_zero_population(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 6b. present-but-empty fields: populated_rate vs presence_rate
+# ---------------------------------------------------------------------------
+
+
+def test_flagged_always_present_but_always_empty(tmp_path: Path) -> None:
+    """A field always present but always empty (e.g. lanes: []) must be flagged.
+
+    This is the core fix: key-presence rate != populated rate.
+    A field with presence_rate=1.0 but populated_rate=0.0 should flag.
+    """
+    from scripts.corpus.profiler import field_profile
+
+    # Build entries where 'lanes' is always present but always empty list
+    entries = [
+        _md(
+            session_id=f"s{i}",
+            extra_output={"lanes": []},  # always present, always empty
+        )
+        for i in range(5)
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    profile = field_profile(log)
+
+    flagged_names = [f["field"] for f in profile["flagged_fields"]]
+    assert "output.lanes" in flagged_names, (
+        "output.lanes is always present but always empty — must be flagged"
+    )
+
+
+def test_flagged_always_present_always_empty_string(tmp_path: Path) -> None:
+    """A field always present as empty string must flag as 100% empty."""
+    from scripts.corpus.profiler import field_profile
+
+    entries = [
+        _md(
+            session_id=f"s{i}",
+            extra_input={"command_prefix": ""},  # always present, always ""
+        )
+        for i in range(5)
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    profile = field_profile(log)
+
+    flagged_names = [f["field"] for f in profile["flagged_fields"]]
+    assert "input.command_prefix" in flagged_names, (
+        "command_prefix always '' — must be flagged even though key is always present"
+    )
+
+
+def test_flagged_near_empty_populated_rate(tmp_path: Path) -> None:
+    """A field present 100% but populated <5% of the time flags as near-empty.
+
+    Simulates command_prefix present on all entries but non-empty only 2/100
+    (2%), which is below the 5% threshold.
+    """
+    from scripts.corpus.profiler import field_profile
+
+    # 50 entries: command_prefix present on all, non-empty on only 1
+    entries = [
+        _md(session_id=f"s{i}", extra_input={"command_prefix": "" if i != 0 else "/run"})
+        for i in range(50)
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    profile = field_profile(log)
+
+    flagged_names = [f["field"] for f in profile["flagged_fields"]]
+    assert "input.command_prefix" in flagged_names, (
+        "command_prefix populated 1/50=2% — below threshold, must flag"
+    )
+    # Check it flags as near-empty (not 100%-empty since 1 entry is populated)
+    flagged_entry = next(
+        f for f in profile["flagged_fields"] if f["field"] == "input.command_prefix"
+    )
+    assert (
+        "near-empty" in flagged_entry["reason"].lower()
+        or "100%" in flagged_entry["reason"]
+    )
+
+
+def test_presence_and_populated_rates_both_in_output(tmp_path: Path) -> None:
+    """Field presence dict must contain both presence_rate and nonempty_count."""
+    from scripts.corpus.profiler import field_profile
+
+    entries = [
+        _md(session_id="s1", extra_output={"lanes": []}),
+        _md(session_id="s2", extra_output={"lanes": ["route-a"]}),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    profile = field_profile(log)
+
+    lanes_info = profile["output_field_presence"]["lanes"]
+    # Must have both key-presence count AND nonempty_count
+    assert "count" in lanes_info, "count (presence) must be in field info"
+    assert "nonempty_count" in lanes_info, "nonempty_count must be in field info"
+    assert lanes_info["count"] == 2        # both entries have the key
+    assert lanes_info["nonempty_count"] == 1  # only one is non-empty
+
+
+def test_flagged_fields_flag_uses_populated_rate_not_presence(tmp_path: Path) -> None:
+    """Flagged fields reason reflects populated_rate, not presence rate.
+
+    A field with presence_rate=1.0 but populated_rate=0.0 must produce
+    a '100% empty' reason (not be absent from flagged list).
+    """
+    from scripts.corpus.profiler import field_profile
+
+    entries = [
+        _md(session_id=f"s{i}", extra_output={"unassigned_paths": {}})
+        for i in range(10)
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    profile = field_profile(log)
+
+    flagged = {f["field"]: f for f in profile["flagged_fields"]}
+    assert "output.unassigned_paths" in flagged, (
+        "unassigned_paths always present as {} — populated_rate=0 — must flag"
+    )
+    entry = flagged["output.unassigned_paths"]
+    assert "100%" in entry["reason"] or "empty" in entry["reason"].lower()
+
+
+# ---------------------------------------------------------------------------
 # 7. profile is JSON-serialisable
 # ---------------------------------------------------------------------------
 
