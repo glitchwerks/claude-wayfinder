@@ -154,6 +154,7 @@ with `notes`.
 - **GitHub read queries** (list, search, CI status — no write intent): `gold_agent: "ops"`.
 - **Adversarial harsh review of existing code/architecture** (including "give PR #N a harsh review"): `gold_agent: "inquisitor"`, not `code-reviewer`, per the routing table's explicit delineation (Spec E §11 P9 / §12.3 R4).
 - **Known-cause fix** (cause stated in prompt, E6 flip): `gold_agent: "code-writer"` even if failure vocabulary is present.
+- **Explicit agent mention (E11 pass-through analog).** When the prompt *directively* names a routable agent — "delegate to ops", "have the inquisitor review this", "use code-writer", or the `agent_mentions` field is non-empty with directive intent — `gold_agent` is the named agent, provided it appears in the Appendix A vocabulary. Domain and posture are still labeled from the prompt's own evidence (the mention overrides only the agent, not the axes). A merely *descriptive* mention (an agent named as context — "code-writer returned X, now…" — not as an instruction) does not override; in that case derive `gold_agent` normally. Source: Spec E §10.2 E11 (`agent_mentions`, Tier A, "near-dispositive pass-through").
 
 ### Step 4 — Confidence
 
@@ -242,6 +243,19 @@ These examples use **invented prompts**. No raw corpus prompt text appears in th
   without a decisive signal.
 - **Label:** `disputed: true`, `dispute_reason: "researcher (prior-art reading: 'what already exists?') vs approach-critic (soundness reading: 'is this idea reasonable?'); routing table delineation does not resolve a prompt that mixes both intents"`.
 - **Confidence:** `"low"`.
+
+### Ex 7 — Explicit agent mention (directive vs descriptive)
+
+> "Have the inquisitor do a harsh pass over the dispatch module before we merge."
+> `file_paths: [src/dispatch/]`, `agent_mentions: ["inquisitor"]`
+
+- **Posture:** Challenge frame + code artifact present → `posture: "critique"`.
+- **Domain:** `src/` path → `domain: "code"`.
+- **Grid cell:** `code × critique` → `inquisitor` (grid result and E11 agree; override is unambiguous).
+- **Gold agent:** `agent_mentions` is non-empty with clear directive intent ("have the inquisitor do…") → E11 pass-through → `gold_agent: "inquisitor"`. The mention overrides only the agent; domain and posture are derived from the prompt's own evidence as above.
+- **Confidence:** `"high"`.
+
+**Contrast — descriptive mention (no override).** A prompt like "code-writer already added the flag; now verify it matches the spec in `docs/api.md`" with `agent_mentions: ["code-writer"]` names code-writer as background context, not as a routing instruction. E11 does not fire. Derive normally: E5 (two artifact refs + "matches") → `posture: "verify"`; `domain: "docs_prose"` or `"code"` depending on which artifact anchors the question → `gold_agent: "auditor"`.
 
 ---
 
