@@ -581,3 +581,114 @@ def test_write_artifact_empty_corpus(tmp_path: Path) -> None:
     assert artifact_path.exists()
     content = artifact_path.read_text(encoding="utf-8").strip()
     assert content == ""
+
+
+# ---------------------------------------------------------------------------
+# 14. _home_relative() — path redaction helper
+# ---------------------------------------------------------------------------
+
+
+def test_home_relative_windows_path_under_home() -> None:
+    """A Windows absolute path under the user's home is rewritten to ~/... (POSIX slashes)."""
+    from scripts.corpus.builder import _home_relative
+
+    home = Path.home()
+    # Construct a path that is definitely under home
+    under_home = home / ".claude" / "state" / "dispatch-log.jsonl"
+    result = _home_relative(under_home)
+
+    assert result.startswith("~/"), f"Expected ~/... prefix, got: {result!r}"
+    assert "\\" not in result, f"Expected no backslashes (POSIX form), got: {result!r}"
+    assert result == "~/.claude/state/dispatch-log.jsonl"
+
+
+def test_home_relative_posix_path_under_home() -> None:
+    """A POSIX path under home (including nested dirs) is rewritten to ~/... (POSIX slashes)."""
+    from scripts.corpus.builder import _home_relative
+
+    home = Path.home()
+    under_home = (
+        home / ".claude" / "state" / "wayfinder-corpus" / "2026-06-12" / "wayfinder-corpus.jsonl"
+    )
+    result = _home_relative(under_home)
+
+    assert result.startswith("~/")
+    assert "\\" not in result
+    assert result == "~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl"
+
+
+def test_home_relative_non_home_path_unchanged() -> None:
+    """A path NOT under the user's home directory is returned as a POSIX string, unchanged."""
+    from scripts.corpus.builder import _home_relative
+
+    # Use a well-known non-home path
+    non_home = Path("/tmp/some/file.jsonl")
+    result = _home_relative(non_home)
+
+    # Must not start with ~/
+    assert not result.startswith("~/"), (
+        f"Non-home path should not get ~/ prefix, got: {result!r}"
+    )
+    # Must not touch filesystem — just string ops; ends with the filename in some form
+    assert result.endswith("file.jsonl")
+
+
+def test_home_relative_does_not_touch_filesystem(tmp_path: Path) -> None:
+    """_home_relative must not read from or write to the filesystem (pure string op)."""
+    from scripts.corpus.builder import _home_relative
+
+    home = Path.home()
+    # Construct a path that does NOT exist on disk
+    nonexistent = home / ".claude" / "state" / "nonexistent-xyzzy" / "ghost.jsonl"
+    assert not nonexistent.exists(), "Precondition: path must not exist for this test"
+
+    # Must not raise even though the path doesn't exist
+    result = _home_relative(nonexistent)
+    assert result.startswith("~/")
+    assert "nonexistent-xyzzy" in result
+    assert "ghost.jsonl" in result
+
+
+def test_manifest_artifact_path_is_home_relative() -> None:
+    """build_manifest artifact_path must be a string (~/... when under home, posix otherwise)."""
+    import tempfile
+
+    from scripts.corpus.builder import build_corpus, build_manifest, write_corpus_artifact
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        log_path = tmp / "dispatch-log.jsonl"
+        with log_path.open("w") as fh:
+            fh.write(json.dumps(_md(session_id="s1")) + "\n")
+
+        out_dir = tmp / "out"
+        out_dir.mkdir()
+
+        result = build_corpus(log_path, output_dir=None)
+        artifact_path = write_corpus_artifact(result, out_dir)
+        manifest = build_manifest(result, artifact_path)
+
+        ap = manifest["artifact_path"]
+        # artifact_path is NOT under home (it's in tmp), so it should pass through unchanged.
+        # The key contract: no backslashes (POSIX form) and it's a string.
+        assert isinstance(ap, str)
+        assert "\\" not in ap, f"artifact_path must use POSIX slashes, got: {ap!r}"
+
+
+def test_manifest_log_path_is_home_relative() -> None:
+    """build_corpus generation_params.log_path is home-relativized when under home."""
+    from scripts.corpus.builder import build_corpus
+
+    home = Path.home()
+    # Use the canonical dispatch-log path (under home)
+    dispatch_log = home / ".claude" / "state" / "dispatch-log.jsonl"
+
+    # Provide a non-existent path that IS under home — _load_organic_entries handles missing
+    result = build_corpus(dispatch_log, output_dir=None)
+
+    log_path_val = result["generation_params"]["log_path"]
+    # Must be home-relative form
+    assert log_path_val.startswith("~/"), (
+        f"Expected log_path to start with ~/, got: {log_path_val!r}"
+    )
+    assert "\\" not in log_path_val, "log_path must use POSIX slashes"

@@ -41,12 +41,40 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 # Import profiler for length-band classification
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from profiler import td_length_band  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Path utilities
+# ---------------------------------------------------------------------------
+
+
+def _home_relative(path: Path) -> str:
+    """Return a portable ``~/``-prefixed POSIX form for paths under the home dir.
+
+    Paths that are not under the user's home directory are returned as their
+    POSIX string representation unchanged.  This helper is a pure string
+    operation and does not touch the filesystem.
+
+    Args:
+        path: Absolute (or relative) :class:`~pathlib.Path` to rewrite.
+
+    Returns:
+        ``~/rest/of/path`` when ``path`` is under :func:`Path.home`;
+        otherwise ``path.as_posix()``.
+    """
+    home = Path.home()
+    try:
+        relative = path.relative_to(home)
+        return "~/" + PurePosixPath(relative).as_posix()
+    except ValueError:
+        # path is not relative to home — return as POSIX without modification
+        return path.as_posix()
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -216,7 +244,7 @@ def build_corpus(
         "shortfall_table": shortfall_table,
         "generation_params": {
             "sample_floor": sample_floor,
-            "log_path": str(log_path),
+            "log_path": _home_relative(log_path),
             "filter_rules": [
                 "include: type == matcher_decision",
                 "include: session_id non-empty (organic only)",
@@ -377,6 +405,6 @@ def build_manifest(
         "shortfall_table": result["shortfall_table"],
         "format_spec": FORMAT_SPEC,
         "sha256": sha256,
-        "artifact_path": str(artifact_path),
+        "artifact_path": _home_relative(artifact_path),
         "generation_params": result["generation_params"],
     }

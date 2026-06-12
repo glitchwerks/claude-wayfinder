@@ -1,6 +1,6 @@
 {
   "total_in_corpus": 168,
-  "total_organic": 259,
+  "total_organic": 265,
   "total_filtered_empty_td": 28,
   "strata_table": {
     "needs_more_detail|short|fp=no": 30,
@@ -109,10 +109,10 @@
   ],
   "format_spec": "JSONL; one JSON object per line; fields: original log entry fields + corpus_id (int, 1-based line number in the source dispatch-log.jsonl at generation time; unique and traceable, NOT dense/sequential \u2014 excluded rows still consume line numbers) + stratum (dict: decision_band str, td_length_band str, file_paths_present bool); encoding: UTF-8; entries: organic matcher_decision only, non-empty task_description, capped at sample_floor per (decision_band, td_length_band, file_paths_present) cell; ordering: file order within each cell (first N kept when cap applied)",
   "sha256": "98454ca6544181118b7fb4870d3745be3146f56478f9b95c13f3c99ffa6cb090",
-  "artifact_path": "C:\\Users\\chris\\.claude\\state\\wayfinder-corpus\\2026-06-12\\wayfinder-corpus.jsonl",
+  "artifact_path": "~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl",
   "generation_params": {
     "sample_floor": 30,
-    "log_path": "C:\\Users\\chris\\.claude\\state\\dispatch-log.jsonl",
+    "log_path": "~/.claude/state/dispatch-log.jsonl",
     "filter_rules": [
       "include: type == matcher_decision",
       "include: session_id non-empty (organic only)",

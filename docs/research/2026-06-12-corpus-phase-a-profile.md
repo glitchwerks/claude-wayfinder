@@ -12,11 +12,11 @@
 The substrate is adequate for phase B labeling.  Phase A produced:
 
 - A **per-field population profile** of the dispatch log (structural only — field names, lengths, rates).
-- A **filtered organic set** of 231 entries (259 organic, 28 excluded for empty `task_description`).
+- A **filtered organic set** of 237 entries (265 organic, 28 excluded for empty `task_description`).
 - A **stratified corpus** of 168 entries frozen locally.  Only 3 of 17 cells meet the floor of 30.
 - A **committed manifest** at `docs/research/2026-06-12-corpus-manifest.json`.
 
-**Stop-gate verdict**: the substrate is marginal but not gate-triggering.  `task_description` is populated in 89.2% of organic entries (231/259); the 28 empty-td entries were excluded, not flagged as a collection bug.  The posture extractor proxy stratifiers fire at < 4% on organic entries and are not viable as strata dimensions — documented below.
+**Stop-gate verdict**: the substrate is marginal but not gate-triggering.  `task_description` is populated in 89.4% of organic entries (237/265); the 28 empty-td entries were excluded, not flagged as a collection bug.  The posture extractor proxy stratifiers fire at < 4% on organic entries and are not viable as strata dimensions — documented below.
 
 **Regeneration note (2026-06-12)**: artifact regenerated after two review fixes to `scripts/corpus/`:
 - Fix 1 — `profiler.py` `_compute_flagged_fields` now flags from `nonempty_count / organic_count`
@@ -25,6 +25,8 @@ The substrate is adequate for phase B labeling.  Phase A produced:
 - Fix 2 — `builder.py` `_load_organic_entries` now carries the 1-based raw line number of each
   entry through to `corpus_id`.  IDs are now stable join keys to the source log, not compact
   ranks over the filtered list.
+- Fix 3 — `builder.py` `_home_relative` now home-relativizes absolute paths before manifest
+  serialization.  `artifact_path` and `generation_params.log_path` emit portable `~/…` form.
 
 ---
 
@@ -32,61 +34,61 @@ The substrate is adequate for phase B labeling.  Phase A produced:
 
 | Metric | Value |
 |---|---|
-| Total `matcher_decision` entries | 33,477 |
-| Organic (non-empty `session_id`) | 259 |
-| Fixture / pre-fix (empty `session_id`) | 33,218 |
+| Total `matcher_decision` entries | 33,900 |
+| Organic (non-empty `session_id`) | 265 |
+| Fixture / pre-fix (empty `session_id`) | 33,635 |
 | Fixture share | 99.2% |
 | Organic time range | 2026-05-29 to 2026-06-12 |
 
-The fixture/organic ratio (99.2% fixture) confirms the #293 finding.  The 259 organic entries represent ~2.5 weeks of post-v1.1.0 session-attribution.
+The fixture/organic ratio (99.2% fixture) confirms the #293 finding.  The 265 organic entries represent ~2.5 weeks of post-v1.1.0 session-attribution.
 
 ---
 
 ## 2. Per-Field Population Profile — `matcher_decision` Entries
 
-### 2.1 Top-level fields (across all 33,477 entries)
+### 2.1 Top-level fields (across all 33,900 entries)
 
 | Field | Present | Rate | Non-empty string |
 |---|---|---|---|
-| `type` | 33,477 | 100% | 100% |
-| `ts` | 33,477 | 100% | 100% |
-| `session_id` | 33,477 | 100% | **0.8%** (only 259 organic) |
-| `input` | 33,477 | 100% | — |
-| `output` | 33,477 | 100% | — |
-| `catalog_hash` | 33,477 | 100% | 99.6% |
-| `matcher_version` | 33,477 | 100% | 99.6% |
+| `type` | 33,900 | 100% | 100% |
+| `ts` | 33,900 | 100% | 100% |
+| `session_id` | 33,900 | 100% | **0.8%** (only 265 organic) |
+| `input` | 33,900 | 100% | — |
+| `output` | 33,900 | 100% | — |
+| `catalog_hash` | 33,900 | 100% | 99.6% |
+| `matcher_version` | 33,900 | 100% | 99.6% |
 
 **Flagged**: `session_id` is present on all entries but non-empty on only 0.8%.  This is the known v1.1.0 attribution bug (fixture contamination) — the filter handles it.
 
-### 2.2 `input.*` sub-fields (organic entries only, n=259)
+### 2.2 `input.*` sub-fields (organic entries only, n=265)
 
 | Field | Present | Presence rate | Non-empty | Populated rate | Flagged |
 |---|---|---|---|---|---|
-| `task_description` | 231 | 89.2% | 231 | 89.2% | |
-| `file_paths` | 164 | 63.3% | 130 | 50.2% | |
-| `agent_mentions` | 110 | 42.5% | 34 | 13.1% | |
-| `command_prefix` | 110 | 42.5% | 2 | 0.8% | **NEAR-EMPTY (populated)** |
-| `tool_mentions` | 110 | 42.5% | 70 | 27.0% | |
-| `active_skills` | 3 | 1.2% | 0 | 0.0% | *** 100% EMPTY |
-| `prompt` | 3 | 1.2% | 3 | 1.2% | *** NEAR-EMPTY |
-| `recent_agents` | 3 | 1.2% | 0 | 0.0% | *** 100% EMPTY |
+| `task_description` | 237 | 89.4% | 237 | 89.4% | |
+| `file_paths` | 167 | 63.0% | 133 | 50.2% | |
+| `agent_mentions` | 110 | 41.5% | 34 | 12.8% | |
+| `command_prefix` | 110 | 41.5% | 2 | 0.8% | **NEAR-EMPTY (populated)** |
+| `tool_mentions` | 110 | 41.5% | 70 | 26.4% | |
+| `active_skills` | 3 | 1.1% | 0 | 0.0% | *** 100% EMPTY |
+| `prompt` | 3 | 1.1% | 3 | 1.1% | *** NEAR-EMPTY |
+| `recent_agents` | 3 | 1.1% | 0 | 0.0% | *** 100% EMPTY |
 
 **Notes**:
-- `task_description` is 89.2% populated — adequate for corpus use.  The 28 empty-td entries are excluded from the corpus (structural gap, not a collection bug in the session-attribution).
-- `command_prefix` is present in 42.5% of entries but non-empty in only 2/259 (0.8%).  **Now automatically flagged by the corrected tooling** (Fix 1).  The field carries a slash-command only when one was typed; most dispatches have no command prefix.
+- `task_description` is 89.4% populated — adequate for corpus use.  The 28 empty-td entries are excluded from the corpus (structural gap, not a collection bug in the session-attribution).
+- `command_prefix` is present in 41.5% of entries but non-empty in only 2/265 (0.8%).  **Now automatically flagged by the corrected tooling** (Fix 1).  The field carries a slash-command only when one was typed; most dispatches have no command prefix.
 - `active_skills` / `recent_agents` / `prompt`: 3 entries use a legacy or alternate input schema.  Near-empty; ignored for stratification.
 
-### 2.3 `output.*` sub-fields (organic entries only, n=259)
+### 2.3 `output.*` sub-fields (organic entries only, n=265)
 
 | Field | Present | Presence rate | Non-empty | Populated rate | Flagged |
 |---|---|---|---|---|---|
-| `decision` | 259 | 100% | 259 | 100% | |
-| `confidence` | 259 | 100% | 259 | 100% | |
-| `rationale` | 259 | 100% | 259 | 100% | |
-| `alternatives` | 259 | 100% | 91 | 35.1% | |
-| `disposition_source` | 259 | 100% | 259 | 100% | |
-| `skills` | 191 | 73.7% | 63 | 24.3% | |
-| `agent` | 156 | 60.2% | 156 | 60.2% | |
+| `decision` | 265 | 100% | 265 | 100% | |
+| `confidence` | 265 | 100% | 265 | 100% | |
+| `rationale` | 265 | 100% | 265 | 100% | |
+| `alternatives` | 265 | 100% | 91 | 34.3% | |
+| `disposition_source` | 265 | 100% | 265 | 100% | |
+| `skills` | 194 | 73.2% | 63 | 23.8% | |
+| `agent` | 159 | 60.0% | 159 | 60.0% | |
 | `lanes` | 0 | 0% | 0 | **0%** | *** 100% EMPTY |
 | `override_id` | 0 | 0% | 0 | **0%** | *** 100% EMPTY |
 | `unassigned_paths` | 0 | 0% | 0 | **0%** | *** 100% EMPTY |
@@ -100,27 +102,27 @@ These fields cannot serve as strata dimensions.
 
 ---
 
-## 3. Decision Distribution (organic, n=259)
+## 3. Decision Distribution (organic, n=265)
 
 | Decision | Count | Share |
 |---|---|---|
-| `delegate` | 123 | 47.5% |
-| `needs_more_detail` | 65 | 25.1% |
-| `self_handle` | 35 | 13.5% |
-| `advisory` | 33 | 12.7% |
-| `self_handle_unaided` | 3 | 1.2% |
+| `delegate` | 126 | 47.5% |
+| `needs_more_detail` | 68 | 25.7% |
+| `self_handle` | 35 | 13.2% |
+| `advisory` | 33 | 12.5% |
+| `self_handle_unaided` | 3 | 1.1% |
 
-`delegate` and `needs_more_detail` together account for 72.6%.  `self_handle_unaided` is rare (3 entries).
+`delegate` and `needs_more_detail` together account for 73.2%.  `self_handle_unaided` is rare (3 entries).
 
 ### 3.1 `task_description` length bands (organic)
 
 | Band | Range | Count | Share |
 |---|---|---|---|
-| `empty` | 0 chars | 28 | 10.8% |
-| `short` | 1–49 chars | 122 | 47.1% |
-| `medium` | 50–199 chars | 9 | 3.5% |
-| `long` | 200–499 chars | 87 | 33.6% |
-| `very_long` | 500+ chars | 13 | 5.0% |
+| `empty` | 0 chars | 28 | 10.6% |
+| `short` | 1–49 chars | 128 | 48.3% |
+| `medium` | 50–199 chars | 9 | 3.4% |
+| `long` | 200–499 chars | 87 | 32.8% |
+| `very_long` | 500+ chars | 13 | 4.9% |
 
 Notable bimodal shape: most entries are either very short (slash-command dispatches, single-line instructions) or long (full task briefs pasted into the CLI).  The `medium` band (50–199) is near-empty (3.5%).
 
@@ -134,12 +136,12 @@ Run offline using `claude_wayfinder.posture` extractors on `task_description` + 
 
 | Signal | Fired | Rate |
 |---|---|---|
-| `extract_vcs_artifact_ref` (E3) | 9 / 259 | 3.5% |
-| `extract_prose_failure_mention` (E12) | 5 / 259 | 1.9% |
-| `extract_command_prefix` (E8) | 2 / 259 | 0.8% |
-| `extract_spec_plan_path` (E4) | 1 / 259 | 0.4% |
-| `extract_stacktrace_block` (E1) | 0 / 259 | 0.0% |
-| `extract_test_failure_output` (E2) | 0 / 259 | 0.0% |
+| `extract_vcs_artifact_ref` (E3) | 9 / 265 | 3.4% |
+| `extract_prose_failure_mention` (E12) | 5 / 265 | 1.9% |
+| `extract_command_prefix` (E8) | 2 / 265 | 0.8% |
+| `extract_spec_plan_path` (E4) | 1 / 265 | 0.4% |
+| `extract_stacktrace_block` (E1) | 0 / 265 | 0.0% |
+| `extract_test_failure_output` (E2) | 0 / 265 | 0.0% |
 
 **Finding**: posture extractors fire at < 4% on organic entries.  They are **not viable as strata dimensions** — any cell they define would be trivially small.  Reported per the issue-338 design instruction: "if you use proxy stratifiers, record in the report that sample design correlates with systems-under-test".
 
@@ -173,9 +175,9 @@ Applied in order (see `scripts/corpus/builder.py`):
 | Rule | Removed |
 |---|---|
 | Non-`matcher_decision` types | 7,260 entries (other event types) |
-| Fixture (empty `session_id`) | 33,218 entries |
+| Fixture (empty `session_id`) | 33,635 entries |
 | Empty `task_description` | 28 entries |
-| **Total excluded** | **40,506 entries** |
+| **Total excluded** | **40,923 entries** |
 | **Remaining in corpus** | **168 entries** |
 
 ---
@@ -240,9 +242,9 @@ Manifest at: `docs/research/2026-06-12-corpus-manifest.json` (aggregate stats on
 | `scripts/corpus/builder.py` | Corpus builder + manifest — `build_corpus()`, `write_corpus_artifact()`, `build_manifest()` |
 | `scripts/corpus/__main__.py` | CLI: `python -m scripts.corpus [options]` |
 | `tests/test_corpus/test_profiler.py` | 18 unit tests against synthetic fixtures |
-| `tests/test_corpus/test_builder.py` | 28 unit tests against synthetic fixtures |
+| `tests/test_corpus/test_builder.py` | 34 unit tests against synthetic fixtures |
 
-Tests run on CI with `.[dev]` only (no model2vec dependency).  All 46 corpus tests pass; baseline 1093 → 1102 (+9 new tests for Fix 1 and Fix 2), 14 skipped unchanged.
+Tests run on CI with `.[dev]` only (no model2vec dependency).  All 52 corpus tests pass; baseline 1093 → 1108 (+15 new tests for Fix 1, Fix 2, and Fix 3), 14 skipped unchanged.
 
 ---
 
@@ -260,5 +262,5 @@ Tests run on CI with `.[dev]` only (no model2vec dependency).  All 46 corpus tes
 ---
 
 *Report generated by `scripts/corpus/__main__.py` on 2026-06-12.*
-*Regenerated 2026-06-12 after review fixes (populated-rate flagging; corpus_id = raw line number).*
+*Regenerated 2026-06-12 after review fixes (populated-rate flagging; corpus_id = raw line number; home-relative path redaction).  Organic count updated to reflect log growth between generation runs; corpus artifact (sha256 unchanged) frozen at 168 entries.*
 *Aggregates only — no raw prompt text in this file.*
