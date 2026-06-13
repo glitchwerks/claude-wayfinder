@@ -268,8 +268,9 @@ in centroid placement.
 
 ## Salvage recommendation
 
-**The domain encoder axis is a dead end for organic dispatch prompts with the
-current model family and hand-authored seed-phrase approach.**
+**The domain encoder axis is a dead end *as tested* — potion-base-8M with
+hand-authored seed-phrase centroids — on organic dispatch prompts.** (Larger and
+contextual models remain untested on the organic distribution; see path 2.)
 
 The specific failure mode is that organic dispatch prompts — though no less domain-dense
 than the spike prompts — do not share the *specific* seed-phrase token vocabulary the
@@ -318,10 +319,14 @@ Viable paths forward (ranked by expected cost):
    and a held-out evaluation set — the 168-entry corpus is too small for a
    reliable train/test split.
 
-**The domain axis is not inherently a dead end** — it is a dead end for this model
-family and this test set design. The core finding is methodological: validating a
-semantic encoder on a test set derived from the same vocabulary as the training signal
-(seed phrases) produces optimistic accuracy that does not transfer to organic data.
+**The domain axis is not inherently a dead end.** What is established is narrower: *the
+tested setup* — potion-base-8M with hand-authored seed-phrase centroids — fails on
+organic prompts. Larger or contextual embedding models have **not** been measured on the
+organic distribution (only 8M-vs-32M on the 14-prompt spike set), so the model-family
+ceiling is suggested, not proven (see H2 verdict, path 2). The core finding is
+methodological: validating a semantic encoder on a test set derived from the same
+vocabulary as the training signal (seed phrases) produces optimistic accuracy that does
+not transfer to organic data.
 
 ---
 
