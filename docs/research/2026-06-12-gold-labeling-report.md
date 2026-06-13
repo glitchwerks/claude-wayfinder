@@ -224,14 +224,27 @@ organic corpus. The #330 measurement run cannot assess matcher performance on Ti
 decisiveness or brake quality (E12 modifier, R2/R3 rules) from organic data alone; it
 must rely on the P1–P14 synthetic fixtures for those postures.
 
-### 4. E11 dominance — directive mentions drive most gold labels
+### 4. E11 is the largest single override class; non-mention subset is 134 rows
 
-109 of 168 records (64.9%) carry a non-empty `agent_mentions` field with directive
-intent. E11 pass-through is therefore the largest single gold-agent determinant in this
-corpus. The encoder and extractor signal paths (domain classification, posture extraction)
-add value primarily on the non-mention subset (59 records). Issue #330 should report
-matcher accuracy separately on the mention and non-mention subsets to measure the
-contribution of each signal path.
+The `agent_mentions` key is present on 109/168 rows, but the field is non-empty (i.e.
+carries directive intent) on only **34/168 (20.2%)** rows. The earlier count of 109 was
+a key-presence count that included empty lists; it was caught in the PR #348 review
+against the phase-A population profile.
+
+E11 directive pass-through determined or confirmed `gold_agent` on **31 rows (18.5%)**,
+all within the 34 non-empty rows — E11 was never applied to a row with an empty
+mentions list, so gold labels are unaffected; only the reported count was wrong. The
+non-empty mention values break down as: ops x21, code-writer x5, investigator x3,
+project-planner x2, plus 2 rows mentioning claude-code-guide (not in the gold
+vocabulary; E11 did not fire on the not-routable mention alone).
+
+E11 remains the largest single gold-agent override class, driving most `ops` gold labels.
+The non-mention subset — rows where E11 did not fire — is 134 rows (not 59 as previously
+stated), which strengthens rather than weakens the #330 subset design: a larger
+non-mention population gives the encoder and extractor signal paths more statistical
+power in the Issue #330 measurement. Issue #330 should report matcher accuracy
+separately on the mention and non-mention subsets to measure the contribution of each
+signal path.
 
 ### 5. Disputed rate is low post-adjudication
 
@@ -245,9 +258,19 @@ disputes were procedural rather than substantive routing ambiguities.
 
 ## Freeze Statement
 
-Labels freeze on this PR's merge into the default branch (rubric §8). The frozen
-artifact is `~/.claude/state/wayfinder-corpus/2026-06-12/gold-labels.jsonl`; it is
-local-only and is never committed to the repository. The aggregate counts in this report
-and in `docs/research/2026-06-12-corpus-manifest.json` are the committed record. No
-label record may be amended after freeze except via a new issue with documented
-justification (rubric §8).
+Labels freeze on this PR's merge into the default branch (rubric §8). Label artifacts
+follow a two-tier placement rule (PR #348 review; rubric §8 amended 2026-06-12):
+
+- **Full artifact (local-only):** `~/.claude/state/wayfinder-corpus/2026-06-12/gold-labels.jsonl`
+  — all fields including free-text `notes` and `dispute_reason`; never committed to the
+  repository. SHA-256: `c38be6564b78e0de8a5358315783189bc9ff7ee548bb53924584e590c8de4cad`.
+- **Redacted artifact (committed):** `docs/research/2026-06-12-gold-labels-redacted.jsonl`
+  — axes-only fields (`corpus_id, domain, is_any, posture, gold_agent, confidence,
+  disputed`); free-text fields stripped to avoid paraphrasing private work content.
+  Join-compatible with the eval harness `--labels` input so a clean checkout can run the
+  #330 gold-dependent metrics. SHA-256:
+  `e2be279be40037557d61a2079ca69d225fb323347e5815e4f7d69382a6e989d3`.
+
+The aggregate counts in this report and in `docs/research/2026-06-12-corpus-manifest.json`
+are the committed record. No label record may be amended after freeze except via a new
+issue with documented justification (rubric §8).

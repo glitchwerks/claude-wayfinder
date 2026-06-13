@@ -56,10 +56,20 @@ Dispatch-context fields live under `record["input"]` in the corpus JSONL. Releva
 fields: `task_description` (required), `file_paths`, `agent_mentions`, `tool_mentions`,
 `command_prefix` (all optional per Spec E §10.2 extractor input contracts).
 
-**Artifact placement.** The label file is LOCAL: `~/.claude/state/wayfinder-corpus/2026-06-12/gold-labels.jsonl`.
-It is never committed to the repository. After the user checkpoint and label freeze, the
-committed manifest (`docs/research/2026-06-12-corpus-manifest.json`) gains aggregate counts:
-total labeled, disputed count, per-posture distribution, and reliability statistics.
+**Artifact placement.** Label artifacts follow a two-tier rule (PR #348 review finding):
+
+- **Full artifact (local-only):** `~/.claude/state/wayfinder-corpus/2026-06-12/gold-labels.jsonl`
+  — all schema fields including free-text `notes` and `dispute_reason`. Never committed to
+  the repository (free-text fields paraphrase private work content).
+- **Redacted artifact (committed):** `docs/research/2026-06-12-gold-labels-redacted.jsonl`
+  — axes-only fields (`corpus_id, domain, is_any, posture, gold_agent, confidence,
+  disputed`); free-text fields stripped. Join-compatible with the eval harness `--labels`
+  input so a clean checkout can run the #330 gold-dependent metrics without requiring
+  the full local artifact.
+
+After the user checkpoint and label freeze, the committed manifest
+(`docs/research/2026-06-12-corpus-manifest.json`) gains aggregate counts: total labeled,
+disputed count, per-posture distribution, and reliability statistics.
 
 ---
 
@@ -340,9 +350,11 @@ Before freeze, the following must be satisfied:
    per-posture distribution, reliability statistics.
 
 After freeze, no label record may be amended except via a new issue with a documented
-justification. The `gold-labels.jsonl` file at
-`~/.claude/state/wayfinder-corpus/2026-06-12/gold-labels.jsonl` is the frozen artifact;
-it is never committed to the repository.
+justification. Label artifacts follow the two-tier placement rule in §2: the full
+artifact at `~/.claude/state/wayfinder-corpus/2026-06-12/gold-labels.jsonl` is local-only
+and never committed; the redacted axes-only copy at
+`docs/research/2026-06-12-gold-labels-redacted.jsonl` is committed and is the artifact
+the #330 eval harness consumes via `--labels`.
 
 ---
 
@@ -378,5 +390,6 @@ assigned retain their validity unless the amendment entry says otherwise.
 
 | Date | Change | Commit / authority | Labels affected |
 |------|--------|--------------------|-----------------|
-| 2026-06-12 | **E11 explicit-agent-mention override added** (§3 Step 3, routing-table overrides): directive `agent_mentions` field now constitutes near-dispositive pass-through; descriptive mentions distinguished and excluded. Added pre-labeling, before pass 1 began. | commit `5e5c57e`; issue #339 | Applies to all records with non-empty `agent_mentions` (109/168 records in pass 1 carried directive mentions) |
+| 2026-06-12 | **E11 explicit-agent-mention override added** (§3 Step 3, routing-table overrides): directive `agent_mentions` field now constitutes near-dispositive pass-through; descriptive mentions distinguished and excluded. Added pre-labeling, before pass 1 began. | commit `5e5c57e`; issue #339 | Applies to rows with non-empty `agent_mentions` (34/168 rows have non-empty directive mentions; 109/168 have the key present including empty lists — see PR #348 correction) |
 | 2026-06-12 | **Domain-of-operate clarification added to §3 Step 2** (post-reliability, checkpoint-ratified): GitHub/VCS state operations carry `domain: "project_meta"` per §9.1 ops row; `is_any` reserved for no-subject-signal prompts. Ratified at user checkpoint after reliability pass yielded 0.775 domain agreement (target 0.85) traced to this ambiguity. | user checkpoint 2026-06-12; issue #339 | Gold labels unchanged — pass-1 labelers already applied the `project_meta` reading; amendment documents the ruling rather than correcting labels |
+| 2026-06-12 | **Two-tier label placement rule adopted** (§2 Artifact placement, §8 Freeze Semantics): full label file (all fields) stays local-only; a redacted axes-only copy (`corpus_id, domain, is_any, posture, gold_agent, confidence, disputed`) is committed at `docs/research/2026-06-12-gold-labels-redacted.jsonl` so a clean checkout can run the #330 gold-dependent metrics. Prior wording made labels frozen on one machine only. Also corrects the E11 coverage count: non-empty `agent_mentions` on 34/168 rows (not 109), E11 fired on 31 rows. | PR #348 review; issue #339 | Gold labels unchanged; only placement rule and reported count corrected |
