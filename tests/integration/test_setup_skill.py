@@ -220,6 +220,35 @@ def test_compute_plugin_data_dir_cross_plugin_leak_rejected(
     )
 
 
+def test_compute_plugin_data_dir_prefix_collision_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prefix-colliding sibling plugin is rejected; computed slug is used.
+
+    When $CLAUDE_PLUGIN_DATA has a basename of
+    ``claude-wayfinder-helper-inline`` — which starts with the
+    ``claude-wayfinder-`` prefix but carries a two-segment remainder
+    (``helper-inline``) — the guard rejects it and falls back to the
+    computed ``claude-wayfinder-glitchwerks`` slug. A sibling plugin
+    named ``claude-wayfinder-helper`` must not be able to leak its data
+    dir into this plugin's Step 1 resolution.
+
+    Args:
+        monkeypatch: pytest fixture for env-var manipulation.
+    """
+    env_path = "/tmp/x/claude-wayfinder-helper-inline"
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", env_path)
+
+    result = setup_pipeline.compute_plugin_data_dir()
+
+    assert result.name == "claude-wayfinder-glitchwerks", (
+        f"Expected computed slug after prefix-collision rejection; got {result}"
+    )
+    assert result != Path(env_path), (
+        "Prefix-colliding sibling path must NOT be returned"
+    )
+
+
 def test_compute_plugin_data_dir_env_unset_uses_slug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

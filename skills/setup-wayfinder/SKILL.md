@@ -21,7 +21,7 @@ The behavior described below is mirrored by `tests/integration/setup_pipeline.py
 
 The plugin data directory path is keyed `<plugin>-<marketplace>` by the harness, and the **same plugin resolves under different marketplace keys across surfaces** — `claude-wayfinder-glitchwerks` on a CLI surface, `claude-wayfinder-inline` on a desktop/ccd surface. Two sources are available, in priority order:
 
-- **Runtime env var** `$CLAUDE_PLUGIN_DATA` (no braces) — the test seam, but the harness sets it to whichever plugin invoked the current surface, so **another plugin's data dir can leak in** (e.g. `codex-inline`). Honor it **only when its basename is a same-plugin key** matching `claude-wayfinder-*`; that admits every marketplace variant (`-glitchwerks`, `-inline`, …) while rejecting cross-plugin leaks. Do **not** require an exact `-glitchwerks` match — that is the bug this guard replaces (it rejected the legitimate `-inline` desktop key and silently misinstalled into the CLI-keyed dir, leaving every desktop session stuck on the "requires setup" banner).
+- **Runtime env var** `$CLAUDE_PLUGIN_DATA` (no braces) — the test seam, but the harness sets it to whichever plugin invoked the current surface, so **another plugin's data dir can leak in** (e.g. `codex-inline`). Honor it **only when its basename is a same-plugin key**: `claude-wayfinder-<marketplace>` with exactly **one** marketplace segment after the plugin name (`-glitchwerks`, `-inline`, …). This admits every marketplace variant while rejecting two leak classes — unrelated plugins (`codex-inline`) **and prefix-colliding sibling plugins** whose own name starts with `claude-wayfinder-` (e.g. `claude-wayfinder-helper` → key `claude-wayfinder-helper-inline`, which has a second `-` segment). Do **not** require an exact `-glitchwerks` match — that is the bug this guard replaces (it rejected the legitimate `-inline` desktop key and silently misinstalled into the CLI-keyed dir, leaving every desktop session stuck on the "requires setup" banner). Do **not** loosen it to a bare `claude-wayfinder-*` prefix either — that re-admits the sibling-plugin collision.
 - **Harness-rendered literal** `${CLAUDE_PLUGIN_DATA}` (braces) — the harness substitutes this token in the skill body at load time with **this session's** correct data dir. Prefer it over a hardcoded `-glitchwerks` slug whenever the runtime env var is unusable (cross-plugin leak, or unset).
 - **Computed slug** (`claude-wayfinder-glitchwerks`) — last resort only, for raw execution outside the harness where neither source above is available.
 
@@ -39,8 +39,17 @@ HARNESS_DATA="${CLAUDE_PLUGIN_DATA}"
 if [ -n "$CLAUDE_PLUGIN_DATA" ]; then
   ACTUAL_SLUG=$(basename "$CLAUDE_PLUGIN_DATA")
   case "$ACTUAL_SLUG" in
+    ${PLUGIN_NAME}-*-*)
+      # Prefix-colliding SIBLING plugin: a different plugin whose name starts with
+      # "claude-wayfinder-" (e.g. claude-wayfinder-helper → key
+      # claude-wayfinder-helper-inline) leaves TWO segments after the plugin name.
+      # Our own keys are exactly claude-wayfinder-<marketplace> (one segment, e.g.
+      # -inline | -glitchwerks). Reject the collision — use the harness literal.
+      echo "Warning: \$CLAUDE_PLUGIN_DATA basename '$ACTUAL_SLUG' has extra segments after '${PLUGIN_NAME}-' (prefix-colliding sibling plugin?). Using harness-rendered data dir." >&2
+      PLUGIN_DATA="$HARNESS_DATA" ;;
     ${PLUGIN_NAME}-*)
-      # Same-plugin key (e.g. claude-wayfinder-inline | -glitchwerks) — honor it.
+      # Same-plugin key, single marketplace segment (e.g. claude-wayfinder-inline |
+      # -glitchwerks) — honor it.
       PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" ;;
     *)
       # Cross-plugin leak (e.g. codex-inline) — fall back to the harness literal.
@@ -74,7 +83,7 @@ mkdir -p "$PLUGIN_DATA"
 echo "$PLUGIN_DATA"
 ```
 
-The test seam is preserved: tests that want to override the path can still set `$CLAUDE_PLUGIN_DATA` to any directory whose basename matches the same-plugin prefix `claude-wayfinder-*` (e.g., a tmpdir created as `…/claude-wayfinder-XXXX/`). Cross-plugin leaks (a basename like `codex-inline`) are rejected and no longer cause silent misinstall into another plugin's data dir.
+The test seam is preserved: tests that want to override the path can still set `$CLAUDE_PLUGIN_DATA` to any directory whose basename is a single-segment same-plugin key `claude-wayfinder-<seg>` (e.g., a tmpdir created as `…/claude-wayfinder-XXXX/`, where `XXXX` has no further `-`). Cross-plugin leaks (`codex-inline`) and prefix-colliding sibling plugins (`claude-wayfinder-helper-inline`) are rejected and no longer cause silent misinstall into another plugin's data dir.
 
 ## Step 2: Discover Python ≥3.11
 

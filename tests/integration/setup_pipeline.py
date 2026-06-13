@@ -35,10 +35,15 @@ def compute_plugin_data_dir(
 
     Honors $CLAUDE_PLUGIN_DATA when its basename matches the same-plugin
     prefix ``<plugin_name>-`` (e.g. ``claude-wayfinder-inline``,
-    ``claude-wayfinder-glitchwerks``). On a cross-plugin leak — where the
-    basename starts with a *different* plugin's name (e.g. ``codex-inline``)
-    — or when the variable is unset, falls back to the computed slug
-    ``~/.claude/plugins/data/claude-wayfinder-glitchwerks``.
+    ``claude-wayfinder-glitchwerks``) **and** the remainder after the
+    prefix contains no ``-`` (exactly one marketplace segment). Rejects
+    two leak classes: unrelated plugins whose basename starts with a
+    *different* plugin's name (e.g. ``codex-inline``), and prefix-
+    colliding sibling plugins whose name begins with the same prefix but
+    has an extra segment (e.g. ``claude-wayfinder-helper-inline`` has two
+    segments after ``claude-wayfinder``). Falls back to the computed slug
+    ``~/.claude/plugins/data/claude-wayfinder-glitchwerks`` in all
+    rejected cases.
 
     This guards against the harness keying plugin data dirs as
     ``<plugin>-<marketplace>`` and a desktop/ccd session injecting
@@ -73,9 +78,11 @@ def compute_plugin_data_dir(
     env_override = os.environ.get("CLAUDE_PLUGIN_DATA")
     if env_override:
         basename = os.path.basename(os.path.normpath(env_override))
-        if basename.startswith(same_plugin_prefix):
+        segment = basename[len(same_plugin_prefix):]
+        if basename.startswith(same_plugin_prefix) and "-" not in segment:
             return Path(env_override)
-        # Cross-plugin leak or non-matching key — fall through to slug.
+        # Cross-plugin leak, prefix-collision, or non-matching key —
+        # fall through to slug.
 
     slug = re.sub(r"[^a-zA-Z0-9_\-]", "-", plugin_id)
     return Path.home() / ".claude" / "plugins" / "data" / slug
