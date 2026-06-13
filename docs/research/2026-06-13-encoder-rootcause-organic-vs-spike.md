@@ -299,16 +299,18 @@ Viable paths forward (ranked by expected cost):
    catastrophic. However: (a) cold-start budget is already exceeded, and (b) the
    accuracy improvement is unknown — the same organic corpus must be re-measured.
 
-3. **Re-design seed phrases to match organic phrasing.** Use the organic corpus
-   (168 entries) as training data for the centroid head — average the embeddings of
-   organic prompts per gold domain label, rather than hand-authoring seed phrases.
-   This directly addresses H1 (distribution mismatch) without changing the model.
-   Risk: the gold distribution is small **and highly uneven** — code 74, docs_prose 43,
-   project_meta 30, infra_deploy 5, **data 0** (gold-labeling report §Domain
-   distribution; `is_any` 16 are unlabeled-for-domain). So this path **cannot build a
-   `data` centroid at all** and has only **5** `infra_deploy` examples — it is
-   structurally blocked for 2 of the 5 domains, not merely "noisy". Viable only for
-   code / docs_prose / project_meta without sourcing more labeled data.
+3. **Re-build centroids from organic prompts.** Average the embeddings of organic
+   prompts per gold domain label as the centroid head, rather than hand-authoring seed
+   phrases. **Use the no-smoke subset only** — drop the 59 duplicated harness probes
+   (29× "implement the new module" → `code`, 30× "update the docs" → `docs_prose`).
+   Training on all 168 would let those duplicates dominate the `code`/`docs_prose`
+   centroids and reintroduce the very synthetic-vocabulary bias this report identifies
+   as the root cause. This addresses H1 without changing the model. Risk: the no-smoke
+   labeled distribution is small **and highly uneven** — non-any counts are code 45,
+   project_meta 30, docs_prose 13, infra_deploy 5, **data 0** (the 16 `is_any` rows carry
+   no single domain). So this path **cannot build a `data` centroid at all**, and
+   `docs_prose` (13) and `infra_deploy` (5) are too sparse for stable centroids —
+   workable only for code / project_meta without sourcing more labeled data.
 
 4. **A trained classification head** (logistic regression or similar) over frozen
    potion-base-8M embeddings, trained on the organic labels. This converts the
