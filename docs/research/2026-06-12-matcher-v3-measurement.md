@@ -3,13 +3,17 @@ title: Matcher v3 Measurement Report — Semantic Two-Axis
 date: 2026-06-12
 issue: glitchwerks/claude-wayfinder#330
 milestone: "Milestone 14 — Matcher v3 — semantic two-axis"
-status: PRE-REGISTERED — thresholds committed before measurement run
+status: |
+  PRE-REGISTERED — thresholds committed before measurement run
+  MEASURED 2026-06-12 — verdict: NO-GO (see §7.5)
 ---
 
 # Matcher v3 Measurement Report — Semantic Two-Axis (#330)
 
-**PRE-REGISTERED — thresholds committed before measurement run.**
-Do not fill results sections until the harness has executed against the frozen artifacts below.
+**PRE-REGISTERED — thresholds committed before measurement run (commit `ec2251d`, §1–§6).**
+**MEASURED 2026-06-12 — verdict: NO-GO (§7.5).** §1–§6 are the frozen pre-registration; §7 holds the results.
+
+**MEASURED 2026-06-12 — verdict: NO-GO (see §7.5).**
 
 ---
 
@@ -232,55 +236,120 @@ Source: `docs/research/2026-06-12-gold-labeling-report.md` §Findings §3.
 
 ---
 
-## 7. Results — EMPTY PLACEHOLDERS
+## 7. Results
 
-_All sections below are to be filled after the measurement run. Do not populate before the
-harness executes against the frozen artifacts in §2._
+_Measured 2026-06-12 against the frozen artifacts in §2. Numbers cross-checked three ways
+(§7.6). The pre-registered thresholds in §5 were not altered after seeing these results._
 
 ### 7.1 Per-System Metrics Table
 
 | Metric | Lexical (1) | Encoder (2) | Extractors (3) | Composed (4) |
 |---|---|---|---|---|
-| M1 Phi(sys, lexical) | — | — | — | — |
-| M3 Tier-C decisiveness | n/a | n/a | — | — |
-| M4 False-default-build rate | n/a | n/a | — | — |
-| M5 Braked candidate quality | n/a | n/a | — | — |
-| M6 Confident-wrong rate | — | — | — | — |
+| M1 Phi(sys, lexical) | n/a (baseline) | 0.0000 (degenerate — see §7.2) | −0.0040 | −0.0040 |
+| M3 Tier-C decisiveness | n/a | n/a | 0.0357 | 0.0357 |
+| M4 False-default-build rate | n/a | n/a | 0.5625 | 0.5625 |
+| M5 Braked candidate quality | n/a | n/a | 0.0000 | 0.0000 |
+| M6 Confident-wrong rate | 0.1507 | n/a (0 delegate decisions) | 0.3585 | 0.3585 |
 
-_— to be filled after the measurement run —_
+_Delegate-band counts: Lexical 73, Extractors 53, Encoder 0, Composed 53 (of 168 entries)._
 
 ### 7.2 Decisive Phi — Encoder vs Extractors
 
 | Comparison pair | Phi | Entries in intersection (delegate band) |
 |---|---|---|
-| Encoder (2) vs Extractors (3) | — | — |
-| Lexical (1) vs Extractors (3) | — | — |
+| Encoder (2) vs Extractors (3) | 0.0000 | 0 (degenerate — see note) |
+| Lexical (1) vs Extractors (3) | −0.0040 | secondary baseline |
 
-_— to be filled after the measurement run —_
+The decisive §8.4 test requires both axes to enter the delegate band so their error vectors can co-occur; because the encoder delegated on 0 of 168 entries, its error-indicator vector is all-zeros and Phi is mathematically undefined — the `metric_error_correlation` implementation hits its `denom_sq <= 0 → return 0.0` branch and returns 0.0000. Per the pre-registered §5.1 escape clause (the nan / insufficient-data case), this result is recorded as **"insufficient data — the premise was neither confirmed nor falsified"**, not as a Phi < 0.35 pass. The 0.0000 figure is a degenerate/undefined result, not a decorrelation pass.
 
 ### 7.3 Error Severity Distribution (Composed System)
 
 | Severity class | Count | Share of delegate errors |
 |---|---|---|
-| adjacent | — | — |
-| cross_posture | — | — |
-| cross_domain | — | — |
+| adjacent | 0 | 0% |
+| cross_posture | 16 | ~84.2% |
+| cross_domain | 3 | ~15.8% |
 
-_— to be filled after the measurement run —_
+Total delegate-band errors: 19. Composed severity is identical to extractors-alone across all three buckets — a direct consequence of the encoder delegating 0 times (§7.6): the composed system received only "domain-any" from the encoder axis and collapsed to pure posture routing, making it byte-identical to extractors-alone.
 
 ### 7.4 Per-Criterion Verdicts
 
 | Criterion | Threshold | Measured value | Verdict |
 |---|---|---|---|
-| 5.1 Correlation kill | Phi(encoder, extractors) ≥ 0.60 | — | — |
-| 5.2 Tier-C decisiveness kill | > 0.30 | — | — |
-| 5.3 Confident-wrong no-go | composed > lexical | — | — |
-
-_— to be filled after the measurement run —_
+| §5.1 Correlation kill | Phi(encoder, extractors) ≥ 0.60 | 0.0000 (degenerate — 0 shared delegate entries) | INSUFFICIENT DATA — not killed, not passed (premise untestable on this corpus) |
+| §5.2 Tier-C decisiveness kill | > 0.30 | 0.0357 | PASS (well under threshold) |
+| §5.3 Confident-wrong no-go | composed ≤ lexical | composed 0.3585 vs lexical 0.1507 | NO-GO (composed is 2.38× the baseline confident-wrong rate) |
 
 ### 7.5 Go / No-Go Recommendation
 
-_— to be filled after the measurement run —_
+**NO-GO.**
+
+The pre-registered §5.3 confident-wrong criterion is triggered: the composed system's
+confident-wrong rate (0.3585) exceeds the lexical baseline (0.1507) by a factor of 2.38.
+No hot-path integration proceeds. This finding is consistent with §8 Out of Scope — the
+no-go and the out-of-scope rule independently reach the same conclusion.
+
+**Dominant mechanism: the domain encoder is empirically inert on organic data.**
+
+The potion-base-8M classifier produced a near-uniform 5-way domain distribution on every
+one of the 168 prompts. Measured entropy ranged 2.3095–2.3214 bits against a 5-class
+maximum of log₂5 ≈ 2.3219 bits; the top1−top2 margin had a median of 0.0193. Under the
+v0 calibration (entropy-any > 1.5, margin-any < 0.04, both fixed in #340 / encoder spike
+§7 and not tunable post-hoc), 100% of prompts were marked domain-any: 138 by both gates,
+30 by the entropy gate alone, 0 by the margin gate alone. Domain-any routes to advisory
+by construction (`run_encoder` only delegates on a confident domain), so the encoder
+delegated 0 times across all 168 entries.
+
+**Knock-on consequences.**
+
+(a) The composed system, receiving only "any" from the domain axis, collapsed to pure
+posture routing — it is byte-identical to extractors-alone across every metric (M1, M3,
+M4, M5, M6, and the error-severity distribution in §7.3). (b) The decisive §8.4
+correlation test (Phi(encoder, extractors)) could not be computed: with zero encoder
+delegate entries the error-indicator intersection is empty, Phi is mathematically
+undefined, and the §5.1 criterion is recorded as "insufficient data — premise untestable"
+(§7.2, §7.4). (c) The composed system therefore inherits the extractor posture-router's
+35.85% confident-wrong rate wholesale — worse than the lexical baseline's 15.07%.
+
+**Honest scoping of the encoder finding.**
+
+The near-uniform output must be reconciled against the accuracy reported in the #329 /
+#335 encoder spikes that selected potion-base-8M. Three live hypotheses, none resolved
+here: (i) the spikes' accuracy was measured on a synthetic or curated distribution that
+does not resemble organic dispatch prompts; (ii) the classifier's centroids are not
+loading or applying correctly in the harness path; (iii) potion-base-8M genuinely cannot
+separate these five domains on short organic prompts. Root-causing the encoder is
+explicitly out of scope for #330 (this issue measures; it does not fix) and belongs in a
+separate follow-up issue. The no-go verdict stands regardless of which hypothesis holds,
+because it rests on the composed system's measured confident-wrong rate, not on the
+encoder diagnosis.
+
+**What the kill criteria bought us.**
+
+Written before the run, the pre-registered thresholds converted an ambiguous "the composed
+numbers look bad" into a clean, unambiguous NO-GO with a precisely localized cause: the
+domain axis carries no signal on organic data. The secondary subset cuts confirm the
+picture rather than overturning it. On the 134-row no-mention cut (§6 "No-mention subset")
+the extractor/composed confident-wrong rate rises to 0.8571 — the mention signal was
+masking how often posture-only routing is wrong on genuinely hard prompts. On the no-smoke
+cut (59 probe rows dropped), composed is unchanged at 0.3585 while lexical rises to 0.2558
+— the gap narrows but composed remains materially worse. Neither subset cut reverses the
+verdict.
+
+### 7.6 Measurement Provenance
+
+Run date: 2026-06-12. Interpreter: worktree `.venv` (model2vec 0.8.2 present; encoder and
+composed systems both ran — no metric-skips due to missing dependencies).
+
+Numbers were cross-checked two independent ways: the `scripts/corpus/eval` harness CLI
+(#340) and a standalone driver `.tmp/run_330.py`; both produced identical per-system
+metrics for all four systems. A third direct encoder probe confirmed the 100%-domain-any
+finding and measured the entropy and margin distributions reported in §7.5.
+
+The scratch artifacts (`.tmp/run_330.py`, `.tmp/run_330_results.json`,
+`.tmp/probe_encoder.py`) are not committed — scratch-file discipline applies. The
+committed report is the durable record. Anyone can reproduce via the one-command harness
+CLI (`python -m scripts.corpus.eval`) in §2 against the frozen artifacts.
 
 ---
 
