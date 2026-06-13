@@ -87,10 +87,17 @@ The 14/14 result is real but driven by something about the test set, not the mod
 
 ### Probe 2: Organic corpus distribution (`.tmp/probe_353_spike_vs_organic.py`)
 
-- 168/168 organic entries have entropy > 2.30 bits (0% below 2.30).
-- Organic top-1 probability: min=0.208, median=0.232, max=0.248 (uniform = 0.200).
-- Organic margin: min=0.0003, median=0.019, max=0.045.
-- Organic top-1 accuracy on labeled non-smoke non-any entries (n=93): **51.6%**.
+The entropy/probability/margin stats below are over the **full 168-row corpus, which
+includes the 59 repeated harness-probe ("smoke") rows** (the #330 no-smoke cut drops
+these; gold-labeling report §Findings). They are full-corpus distribution stats, not
+no-smoke. Accuracy is reported separately on the no-smoke non-any subset; note the
+encoder's confident-wrong rate is **cut-sensitive** (#330: 0.2458 full → 0.4915 no-smoke),
+so do not read the full-corpus numbers as substantive-prompt behaviour.
+
+- 168/168 entries **(full corpus, incl. 59 smoke)** have entropy > 2.30 bits (0% below 2.30).
+- Top-1 probability **(full corpus)**: min=0.208, median=0.232, max=0.248 (uniform = 0.200).
+- Margin **(full corpus)**: min=0.0003, median=0.019, max=0.045.
+- Top-1 accuracy on labeled **non-smoke non-any** entries (n=93): **51.6%**.
 - Majority-class baseline (always predict "code"): **48.4%**.
 
 **Inference:** 51.6% vs 48.4% baseline is a 3.2pp lift — statistically indistinguishable
@@ -275,12 +282,16 @@ centroids fail on organic", **not** "no centroid can work".
 
 Viable paths forward (ranked by expected cost):
 
-1. **Do not fix; remove the domain axis.** The #330 measurement showed that the
-   architecture independence premise (Phi=0.06) holds — the domain and posture axes
-   are near-decorrelated. But the domain encoder itself is not accurate enough to
-   improve routing over the lexical baseline. Dropping the domain axis and relying
-   on posture extractors + lexical matching is the current state, and it may be the
-   correct long-term state until a better domain signal is available.
+1. **Do not fix; remove the domain axis.** The #330 measurement showed the architecture
+   independence premise (Phi=0.06) holds — the domain and posture axes are
+   near-decorrelated — but the domain encoder is not accurate enough to beat the lexical
+   baseline. **Current state (corrected):** the production matcher today is the **lexical
+   matcher alone** — neither the encoder nor the posture extractors are wired into the
+   hot path (the `src/claude_wayfinder/posture/` package is an offline library, not
+   imported by the matcher; #330 §8 keeps hot-path integration out of scope). So "drop
+   the domain axis" really means "do not integrate the encoder"; whether to *add* the
+   posture extractors is a separate, still-open integration question (see the posture
+   extractors' own 35.85% confident-wrong rate, #330 §7).
 
 2. **Replace static bag-of-tokens with a contextual embedding model** (e.g.
    sentence-transformers `all-MiniLM-L6-v2`, ~80MB). These models capture semantic
