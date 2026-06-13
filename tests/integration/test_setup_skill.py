@@ -25,11 +25,16 @@ from tests.integration import setup_pipeline
 def fake_plugin_data(monkeypatch: pytest.MonkeyPatch):
     """Provide a temp dir as $CLAUDE_PLUGIN_DATA for the duration of one test.
 
+    The prefix ``claude-wayfinder-`` satisfies the same-plugin guard in
+    :func:`~tests.integration.setup_pipeline.compute_plugin_data_dir`,
+    so the env var is honoured and the tmpdir is used as the plugin data
+    directory (rather than falling back to the real ``~/.claude/...`` dir).
+
     Yields:
         Path to a temporary directory that has been set as
         ``$CLAUDE_PLUGIN_DATA`` for the duration of the test.
     """
-    with tempfile.TemporaryDirectory(prefix="wayfinder-smoke-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="claude-wayfinder-") as tmp:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", tmp)
         yield Path(tmp)
 
@@ -135,3 +140,134 @@ def test_discover_python_finds_real_interpreter(fake_plugin_data: Path) -> None:
     """
     interpreter = setup_pipeline.discover_python()
     assert interpreter, "Should find at least one Python ≥3.11 on CI"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for compute_plugin_data_dir() same-plugin guard (issue #342)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_plugin_data_dir_inline_key_honored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-plugin alternate marketplace key is honored (issue #342 AC #1).
+
+    When $CLAUDE_PLUGIN_DATA points at a ``claude-wayfinder-inline`` dir,
+    the guard recognises it as the same plugin (prefix ``claude-wayfinder-``)
+    and returns it as-is.
+
+    Args:
+        monkeypatch: pytest fixture for env-var manipulation.
+    """
+    env_path = "/tmp/x/claude-wayfinder-inline"
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", env_path)
+
+    result = setup_pipeline.compute_plugin_data_dir()
+
+    assert result == Path(env_path), (
+        f"Expected env path to be honored; got {result}"
+    )
+
+
+def test_compute_plugin_data_dir_glitchwerks_key_honored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical glitchwerks marketplace key is honored (issue #342 AC #1).
+
+    When $CLAUDE_PLUGIN_DATA points at a ``claude-wayfinder-glitchwerks``
+    dir, the guard accepts it (prefix ``claude-wayfinder-`` matches) and
+    returns it unchanged.
+
+    Args:
+        monkeypatch: pytest fixture for env-var manipulation.
+    """
+    env_path = "/tmp/x/claude-wayfinder-glitchwerks"
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", env_path)
+
+    result = setup_pipeline.compute_plugin_data_dir()
+
+    assert result == Path(env_path), (
+        f"Expected env path to be honored; got {result}"
+    )
+
+
+def test_compute_plugin_data_dir_cross_plugin_leak_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross-plugin env leak is rejected and computed slug is used (issue #342 AC #4).
+
+    When $CLAUDE_PLUGIN_DATA has a basename of ``codex-inline``, the guard
+    rejects it (wrong plugin prefix) and falls back to the computed
+    ``claude-wayfinder-glitchwerks`` slug under ``~/.claude/plugins/data/``.
+    The leaked dir must NOT be returned.
+
+    Args:
+        monkeypatch: pytest fixture for env-var manipulation.
+    """
+    env_path = "/tmp/x/codex-inline"
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", env_path)
+
+    result = setup_pipeline.compute_plugin_data_dir()
+
+    assert result.name == "claude-wayfinder-glitchwerks", (
+        f"Expected computed slug after leak rejection; got {result}"
+    )
+    assert result.parent == Path.home() / ".claude" / "plugins" / "data", (
+        f"Expected slug under ~/.claude/plugins/data/; got {result}"
+    )
+    assert result != Path(env_path), (
+        "Leaked cross-plugin path must NOT be returned"
+    )
+
+
+def test_compute_plugin_data_dir_prefix_collision_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prefix-colliding sibling plugin is rejected; computed slug is used.
+
+    When $CLAUDE_PLUGIN_DATA has a basename of
+    ``claude-wayfinder-helper-inline`` — which starts with the
+    ``claude-wayfinder-`` prefix but carries a two-segment remainder
+    (``helper-inline``) — the guard rejects it and falls back to the
+    computed ``claude-wayfinder-glitchwerks`` slug. A sibling plugin
+    named ``claude-wayfinder-helper`` must not be able to leak its data
+    dir into this plugin's Step 1 resolution.
+
+    Args:
+        monkeypatch: pytest fixture for env-var manipulation.
+    """
+    env_path = "/tmp/x/claude-wayfinder-helper-inline"
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", env_path)
+
+    result = setup_pipeline.compute_plugin_data_dir()
+
+    assert result.name == "claude-wayfinder-glitchwerks", (
+        f"Expected computed slug after prefix-collision rejection; got {result}"
+    )
+    assert result != Path(env_path), (
+        "Prefix-colliding sibling path must NOT be returned"
+    )
+
+
+def test_compute_plugin_data_dir_env_unset_uses_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset env var falls back to computed slug (issue #342 AC #4).
+
+    When $CLAUDE_PLUGIN_DATA is not set, :func:`compute_plugin_data_dir`
+    returns the computed ``claude-wayfinder-glitchwerks`` slug under
+    ``~/.claude/plugins/data/``.
+
+    Args:
+        monkeypatch: pytest fixture for env-var manipulation.
+    """
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
+
+    result = setup_pipeline.compute_plugin_data_dir()
+
+    assert result.name == "claude-wayfinder-glitchwerks", (
+        f"Expected computed slug; got {result}"
+    )
+    assert result.parent == Path.home() / ".claude" / "plugins" / "data", (
+        f"Expected slug under ~/.claude/plugins/data/; got {result}"
+    )
