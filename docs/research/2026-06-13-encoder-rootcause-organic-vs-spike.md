@@ -261,15 +261,17 @@ in centroid placement.
 
 ## Salvage recommendation
 
-**The domain encoder axis is a dead end for short organic dispatch prompts with the
-current model family and seed-phrase approach.**
+**The domain encoder axis is a dead end for organic dispatch prompts with the
+current model family and hand-authored seed-phrase approach.**
 
 The specific failure mode is that organic dispatch prompts — though no less domain-dense
 than the spike prompts — do not share the *specific* seed-phrase token vocabulary the
-centroids were built from, and are ~3× longer. In this static embedding space the five
-domains are not linearly separable on organic phrasing: no centroid configuration
-resolves it without fundamentally more discriminative embeddings. (Whether a larger or
-contextual model *is* more discriminative on organic is untested — see path 2.)
+centroids were built from, and are ~3× longer. **The seed-phrase centroids tested here**
+do not separate the five domains on organic phrasing. This is scoped to the configuration
+actually measured — it does **not** rule out other centroid configurations:
+organic-derived centroids (path 3) and larger/contextual embedding models (path 2) are
+both untested on organic. The established claim is "the hand-authored seed-phrase
+centroids fail on organic", **not** "no centroid can work".
 
 Viable paths forward (ranked by expected cost):
 
@@ -290,8 +292,12 @@ Viable paths forward (ranked by expected cost):
    (168 entries) as training data for the centroid head — average the embeddings of
    organic prompts per gold domain label, rather than hand-authoring seed phrases.
    This directly addresses H1 (distribution mismatch) without changing the model.
-   Risk: organic corpus is small (n=168; ~45 entries per domain), so centroids will
-   be noisy. Known organic accuracy improvement is uncertain.
+   Risk: the gold distribution is small **and highly uneven** — code 74, docs_prose 43,
+   project_meta 30, infra_deploy 5, **data 0** (gold-labeling report §Domain
+   distribution; `is_any` 16 are unlabeled-for-domain). So this path **cannot build a
+   `data` centroid at all** and has only **5** `infra_deploy` examples — it is
+   structurally blocked for 2 of the 5 domains, not merely "noisy". Viable only for
+   code / docs_prose / project_meta without sourcing more labeled data.
 
 4. **A trained classification head** (logistic regression or similar) over frozen
    potion-base-8M embeddings, trained on the organic labels. This converts the
