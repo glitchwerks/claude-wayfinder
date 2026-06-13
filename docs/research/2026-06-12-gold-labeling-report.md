@@ -224,7 +224,7 @@ organic corpus. The #330 measurement run cannot assess matcher performance on Ti
 decisiveness or brake quality (E12 modifier, R2/R3 rules) from organic data alone; it
 must rely on the P1–P14 synthetic fixtures for those postures.
 
-### 4. E11 is the largest single override class; non-mention subset is 134 rows
+### 4. E11 is the largest single override class; two distinct non-mention subsets
 
 The `agent_mentions` key is present on 109/168 rows, but the field is non-empty (i.e.
 carries directive intent) on only **34/168 (20.2%)** rows. The earlier count of 109 was
@@ -239,12 +239,22 @@ project-planner x2, plus 2 rows mentioning claude-code-guide (not in the gold
 vocabulary; E11 did not fire on the not-routable mention alone).
 
 E11 remains the largest single gold-agent override class, driving most `ops` gold labels.
-The non-mention subset — rows where E11 did not fire — is 134 rows (not 59 as previously
-stated), which strengthens rather than weakens the #330 subset design: a larger
-non-mention population gives the encoder and extractor signal paths more statistical
-power in the Issue #330 measurement. Issue #330 should report matcher accuracy
-separately on the mention and non-mention subsets to measure the contribution of each
-signal path.
+Two distinct subsets are relevant for downstream measurement (correction per PR #348
+review round 2):
+
+- **No-mention subset: 134 rows** — no non-empty `agent_mentions` field; E11
+  structurally could not fire. Use this cut for measuring encoder/extractor value-add,
+  because these rows are entirely free of mention signal.
+- **E11-not-fired subset: 137 rows** — the 134 above plus corpus_ids 34627, 34659,
+  and 34779, which carry a non-empty `["ops"]` mention but whose gold was determined
+  by normal derivation, not pass-through (34779's gold is `self_handle`, differing
+  from the mentioned agent). This is the correct count for "gold not determined by
+  mention pass-through."
+
+Issue #330 should use the **134-row no-mention cut** for value-add measurement: the
+three additional rows still expose a mention that the matcher's E11 path may act on at
+eval time, so they do not cleanly isolate encoder/extractor signal. Use 137 only when
+the specific question is gold provenance rather than signal-path contribution.
 
 ### 5. Disputed rate is low post-adjudication
 
