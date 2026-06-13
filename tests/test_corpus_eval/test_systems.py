@@ -1116,3 +1116,327 @@ class TestE7HostGating:
             f"E1 + span≥2 → investigator; got agent={r.agent!r}, "
             f"postures={r.extras.get('postures')!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Fix #351: _is_domain_any — margin-only gate, no entropy parameter
+# ---------------------------------------------------------------------------
+
+
+class TestIsDomainAnyGate:
+    """Pure unit tests for the _is_domain_any helper.
+
+    The helper must gate domain-any detection on the top-1/top-2 margin
+    ONLY — the entropy parameter that caused every prompt to be forced
+    domain-any (#351 root cause) must not exist.
+
+    These tests are model-independent and carry no importorskip guard
+    because the helper itself has no heavy dependencies.
+    """
+
+    def test_below_threshold_is_domain_any(self) -> None:
+        """margin < _MARGIN_ANY_THRESHOLD (0.005) → domain-any."""
+        from scripts.corpus.eval._systems import _is_domain_any
+
+        assert _is_domain_any(0.005) is True
+
+    def test_zero_margin_is_domain_any(self) -> None:
+        """Degenerate zero margin → domain-any (widest possible ambiguity)."""
+        from scripts.corpus.eval._systems import _is_domain_any
+
+        assert _is_domain_any(0.0) is True
+
+    def test_above_threshold_is_not_domain_any(self) -> None:
+        """margin > _MARGIN_ANY_THRESHOLD (0.02) → domain-specific (routable)."""
+        from scripts.corpus.eval._systems import _is_domain_any
+
+        assert _is_domain_any(0.02) is False
+
+    def test_clearly_above_threshold_is_not_domain_any(self) -> None:
+        """Well-separated top-1/top-2 (0.05) → domain-specific, not any."""
+        from scripts.corpus.eval._systems import _is_domain_any
+
+        assert _is_domain_any(0.05) is False
+
+    def test_exactly_at_threshold_is_not_domain_any(self) -> None:
+        """Boundary: margin == 0.01 with strict < must NOT be domain-any.
+
+        This test pins the operator to strict less-than so the implementer
+        cannot silently flip < to <= without breaking a test.
+        """
+        from scripts.corpus.eval._systems import _is_domain_any
+
+        # threshold is 0.01; strict < means exactly-equal is NOT domain-any
+        assert _is_domain_any(0.01) is False
+
+    def test_entropy_not_in_signature(self) -> None:
+        """_is_domain_any must accept exactly one positional parameter.
+
+        The entropy gate (_ENTROPY_ANY_THRESHOLD) is the root cause of
+        bug #351: with max entropy ~2.31 always above threshold 1.5,
+        every prompt was forced domain-any.  This test hard-pins the
+        removal of entropy from the gate by asserting the helper's
+        signature has one parameter only.
+        """
+        import inspect
+
+        from scripts.corpus.eval._systems import _is_domain_any
+
+        sig = inspect.signature(_is_domain_any)
+        params = list(sig.parameters)
+        assert len(params) == 1, (
+            f"_is_domain_any must accept exactly one parameter (margin); "
+            f"got {params!r}.  Entropy must not gate domain-any detection."
+        )
+        # Confirm it works with a single positional call — no entropy arg
+        result = _is_domain_any(0.02)
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Fix #351: encoder behavioral regression — must emit delegate decisions
+# ---------------------------------------------------------------------------
+
+
+class TestEncoderNotAlwaysDomainAny:
+    """Integration regression guard for #351.
+
+    Before the fix, entropy > 1.5 was always True (encoder entropy on
+    5-class softmax is ~2.31, max 2.32), so 100% of prompts were forced
+    domain-any → decision = "advisory".  This class asserts that at
+    least one clearly domain-specific prompt produces decision="delegate"
+    post-fix.
+
+    Skipped when model2vec is absent (same pattern as TestRunEncoder).
+    """
+
+    def test_clear_code_prompt_produces_at_least_one_delegate(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """Clearly domain-specific prompts must yield at least one delegate.
+
+        Under the entropy-gate bug (entropy > 1.5 always True) every
+        result was "advisory".  Post-fix, wide-margin domain-specific
+        prompts must produce decision="delegate" — so this assertion
+        fails before the fix and passes after.
+
+        Prompts chosen from 8M spike §5.3 as consistently wide-margin:
+          - A null-pointer crash in src/auth/login.py  (code domain)
+          - Deploy Bicep template via azd              (infra_deploy domain)
+        """
+        import json
+
+        pytest.importorskip("model2vec")
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_encoder
+
+        # Two prompts the 8M spike showed have wide domain margins.
+        # Null-pointer in a Python auth module → clear code domain.
+        # Bicep deploy via azd → clear infra_deploy domain.
+        records = [
+            {
+                "type": "matcher_decision",
+                "session_id": "session-351-code-001",
+                "input": {
+                    "task_description": (
+                        "Fix the null-pointer crash in src/auth/login.py"
+                        " — the stack trace shows it fails when the user"
+                        " object is None after token expiry."
+                    ),
+                    "file_paths": ["src/auth/login.py"],
+                    "agent_mentions": [],
+                    "tool_mentions": [],
+                    "command_prefix": None,
+                },
+                "output": {
+                    "decision": "delegate",
+                    "agent": "code-writer",
+                    "confidence": 0.9,
+                },
+                "corpus_id": 1,
+                "stratum": {
+                    "decision_band": "delegate",
+                    "td_length_band": "short",
+                    "file_paths_present": True,
+                },
+            },
+            {
+                "type": "matcher_decision",
+                "session_id": "session-351-infra-001",
+                "input": {
+                    "task_description": (
+                        "Deploy the Bicep template to the prod resource"
+                        " group via azd — the pipeline is ready and the"
+                        " template has been reviewed."
+                    ),
+                    "file_paths": [],
+                    "agent_mentions": [],
+                    "tool_mentions": [],
+                    "command_prefix": None,
+                },
+                "output": {
+                    "decision": "delegate",
+                    "agent": "ops",
+                    "confidence": 0.9,
+                },
+                "corpus_id": 2,
+                "stratum": {
+                    "decision_band": "delegate",
+                    "td_length_band": "short",
+                    "file_paths_present": False,
+                },
+            },
+        ]
+        corpus_file = tmp_path / "encoder-351-corpus.jsonl"
+        lines = [json.dumps(r, ensure_ascii=False) for r in records]
+        corpus_file.write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+        entries = load_corpus(corpus_file)
+        results = run_encoder(entries, fixture_catalog_path)
+
+        delegate_count = sum(
+            1 for r in results if r.decision == "delegate"
+        )
+        # Pre-fix: entropy > 1.5 always True → all advisory → 0 delegates.
+        # Post-fix: wide-margin prompts route as delegate → count ≥ 1.
+        assert delegate_count >= 1, (
+            f"Expected at least one delegate decision for domain-specific "
+            f"prompts, got {delegate_count}.  "
+            f"Decisions: {[r.decision for r in results]!r}.  "
+            f"This assertion catches the entropy-gate bug (#351) where "
+            f"entropy > 1.5 always True forced every result advisory."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fix #351 (run_composed): composed domain gate must not always be "any"
+# ---------------------------------------------------------------------------
+
+
+class TestComposedDomainGate:
+    """Regression guard for the duplicate entropy-gate bug in run_composed.
+
+    run_composed (~lines 865-878 of _systems.py) contains a copy of the
+    broken gate from #351:
+
+        is_any = entropy > 1.5 or margin < 0.04
+
+    The encoder entropy on a 5-class softmax is always ~2.31, so
+    ``entropy > 1.5`` is always True, forcing every composed result to
+    ``extras["is_any"] = True``.  A delegate-count assertion does NOT
+    catch this because run_composed still routes via posture even when
+    domain is forced "any" (the "any" path yields advisory by design).
+    The correct regression is on the domain axis itself: at least one
+    clearly domain-specific prompt must survive the gate with
+    ``is_any = False``.
+
+    Skipped when model2vec is absent (same pattern as TestRunComposed).
+    """
+
+    def test_composed_domain_gate_not_always_any(
+        self,
+        tmp_path: Path,
+        fixture_catalog_path: Path,
+    ) -> None:
+        """At least one domain-specific prompt must have extras["is_any"]=False.
+
+        Prompts are the same wide-margin pair used in
+        TestEncoderNotAlwaysDomainAny, chosen because the 8M spike (§5.3)
+        confirmed they have wide margin on the encoder:
+          - Fix the null-pointer crash in src/auth/login.py  (code domain)
+          - Deploy the Bicep template via azd               (infra_deploy)
+
+        Under the entropy-gate bug (``entropy > 1.5 or margin < 0.04``),
+        entropy is always ~2.31 so the OR short-circuits and every result
+        has ``extras["is_any"] = True``.  This assertion fails pre-fix and
+        passes once run_composed adopts the margin-only gate
+        ``is_any = margin < 0.01`` (matching the fixed run_encoder).
+        """
+        import json
+
+        pytest.importorskip("model2vec")
+        from scripts.corpus.eval._reader import load_corpus
+        from scripts.corpus.eval._systems import run_composed
+
+        # Same wide-margin prompts as TestEncoderNotAlwaysDomainAny so the
+        # two regression guards stay consistent.
+        records = [
+            {
+                "type": "matcher_decision",
+                "session_id": "session-351-composed-code-001",
+                "input": {
+                    "task_description": (
+                        "Fix the null-pointer crash in src/auth/login.py"
+                        " — the stack trace shows it fails when the user"
+                        " object is None after token expiry."
+                    ),
+                    "file_paths": ["src/auth/login.py"],
+                    "agent_mentions": [],
+                    "tool_mentions": [],
+                    "command_prefix": None,
+                },
+                "output": {
+                    "decision": "delegate",
+                    "agent": "code-writer",
+                    "confidence": 0.9,
+                },
+                "corpus_id": 1,
+                "stratum": {
+                    "decision_band": "delegate",
+                    "td_length_band": "short",
+                    "file_paths_present": True,
+                },
+            },
+            {
+                "type": "matcher_decision",
+                "session_id": "session-351-composed-infra-001",
+                "input": {
+                    "task_description": (
+                        "Deploy the Bicep template to the prod resource"
+                        " group via azd — the pipeline is ready and the"
+                        " template has been reviewed."
+                    ),
+                    "file_paths": [],
+                    "agent_mentions": [],
+                    "tool_mentions": [],
+                    "command_prefix": None,
+                },
+                "output": {
+                    "decision": "delegate",
+                    "agent": "ops",
+                    "confidence": 0.9,
+                },
+                "corpus_id": 2,
+                "stratum": {
+                    "decision_band": "delegate",
+                    "td_length_band": "short",
+                    "file_paths_present": False,
+                },
+            },
+        ]
+        corpus_file = tmp_path / "composed-351-corpus.jsonl"
+        lines = [json.dumps(r, ensure_ascii=False) for r in records]
+        corpus_file.write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+        entries = load_corpus(corpus_file)
+        results = run_composed(entries, fixture_catalog_path)
+
+        # Under the entropy-gate bug every result has extras["is_any"]=True
+        # because entropy (~2.31) always exceeds the 1.5 threshold.
+        # Post-fix (margin-only gate), at least one wide-margin prompt
+        # escapes the "any" classification and the domain axis engages.
+        assert any(r.extras["is_any"] is False for r in results), (
+            f"Expected at least one result with extras['is_any']=False for "
+            f"clearly domain-specific prompts, but all results have "
+            f"is_any=True.  "
+            f"is_any values: {[r.extras.get('is_any') for r in results]!r}.  "
+            f"This catches the duplicate entropy-gate bug in run_composed "
+            f"(#351): 'entropy > 1.5 or margin < 0.04' forces is_any=True "
+            f"on every prompt because encoder entropy is always ~2.31."
+        )

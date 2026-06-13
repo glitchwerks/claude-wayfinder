@@ -11,19 +11,22 @@ Each runner accepts a list of ``CorpusEntry`` objects and a catalog path,
 and returns a list of ``SystemResult`` objects in the same order.
 
 v0 calibration decisions (flagged for #330 calibration run):
-- Encoder domain-any detection: entropy threshold > 1.5 bits (per spike
-  report §7; matches SPIKE_GOLD_FOR_EVAL verdicts).
+- Encoder domain-any detection: margin-only gate at < 0.01 (issue #351
+  data-driven sweep; F1=0.39 at margin<0.01, n=168, 16 gold-any).
+  Entropy is computed but treated as DIAGNOSTIC only — the encoder's
+  softmax entropy is ~2.31 on every prompt (near max-entropy for 5
+  classes), so it carries no domain-any signal (8M spike §5.3).
 - Extractor-posture → agent cell map: per §9.1 grid — each posture maps
   to a canonical agent; cells with domain split use the posture winner.
   When multiple postures fire, the first in priority order wins
   (priority: operate > diagnose > assess > verify > plan > research >
   idea-critique > build).
 - Composed system: domain from encoder top-1 (or domain-any when
-  entropy > 1.5); posture from extractors; cell lookup from §9.1 grid.
+  margin < 0.01); posture from extractors; cell lookup from §9.1 grid.
   When the cell is ambiguous (two agents share it), domain breaks the
   tie. When domain is "any", posture alone routes.
-- Encoder margin gate: < 0.04 → domain-any (per §7 pinned report best
-  threshold; consistent with spike gold set).
+- Encoder margin gate: < 0.01 → domain-any (issue #351 data-driven
+  best-F1 threshold; supersedes the 0.04 value the 8M spike floated).
 - Tier-C brake: when E12 fires and the winning posture is not diagnose,
   the result confidence is braked to advisory-band (0.5).
   Tier-A E8 (command_prefix) overrides all brakes: operate + E8 is
@@ -143,8 +146,41 @@ class SystemResult:
 
 
 # ---------------------------------------------------------------------------
+# Encoder gate constants
+# ---------------------------------------------------------------------------
+
+# Data-driven best-F1 on the organic gold ``is_any`` labels (issue #351
+# sweep: F1=0.39 at margin<0.01, n=168, 16 gold-any).  Supersedes the 0.04
+# value the 8M spike floated.  Strict less-than: exactly-at-threshold is NOT
+# domain-any.
+_MARGIN_ANY_THRESHOLD: float = 0.01
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _is_domain_any(margin: float) -> bool:
+    """Domain-any when the top-1/top-2 margin is below threshold.
+
+    Margin-only gate (issue #351).  Entropy does NOT gate — the encoder's
+    softmax entropy is ~2.31 on every prompt (near maximum for a 5-class
+    model), so entropy carries no domain-any signal (8M spike §5.3, rec
+    #2).  This helper is intentionally pure and dependency-free so it can
+    be unit-tested without model2vec.
+
+    Args:
+        margin: Difference between the top-1 and top-2 class probabilities
+            from the domain classifier (``top1_prob - top2_prob``).  A
+            small margin signals that the model is uncertain about the
+            top-1 domain.
+
+    Returns:
+        ``True`` when ``margin < _MARGIN_ANY_THRESHOLD`` (i.e. the prompt
+        is too ambiguous to route confidently to a single domain);
+        ``False`` otherwise.
+    """
+    return margin < _MARGIN_ANY_THRESHOLD
 
 
 def _entry_to_context(entry: CorpusEntry) -> dict[str, Any]:
@@ -674,16 +710,20 @@ def run_encoder(
     domain distribution per prompt.  Maps top-1 domain to an agent via the
     §9.1 grid, using posture="build" as the unmarked default (§10.4).
 
-    The margin gate (< 0.04) marks a prompt as domain-any and routes to a
-    posture-neutral advisory when domain evidence is too diffuse.
+    The margin gate (``_is_domain_any``) marks a prompt as domain-any and
+    routes to a posture-neutral advisory when domain evidence is too diffuse.
 
     Requires model2vec (``pip install '.[spike]'``).  Raises ImportError
     with a descriptive message if missing; callers use ``pytest.importorskip``
     or check availability before calling.
 
-    v0 calibration decisions (flagged for #330):
-    - Entropy threshold for domain-any: > 1.5 bits (per spike §7).
-    - Margin gate for domain-any: < 0.04 (per spike §7 best threshold).
+    v0 calibration decisions (updated for #351):
+    - Margin gate for domain-any: margin < 0.01 (issue #351 data-driven
+      best-F1 sweep; supersedes the 0.04 value the 8M spike floated).
+    - Entropy is computed and stored in ``extras["entropy"]`` as DIAGNOSTIC
+      metadata only — entropy does NOT gate domain-any.  The encoder's
+      softmax entropy is ~2.31 on every prompt (near max for 5 classes) and
+      carries no domain-any signal (8M spike §5.3, rec #2).
     - Encoder alone uses posture="build" default (no extractor context).
     - When domain is "any", decision is always advisory (encoder cannot
       route without posture).
@@ -714,9 +754,6 @@ def run_encoder(
         )
     }
 
-    _ENTROPY_ANY_THRESHOLD = 1.5
-    _MARGIN_ANY_THRESHOLD = 0.04
-
     results: list[SystemResult] = []
     for entry in entries:
         domain_result = clf.classify(entry.task_description)
@@ -725,10 +762,12 @@ def run_encoder(
         top1 = sorted_probs[0]
         top2 = sorted_probs[1] if len(sorted_probs) > 1 else 0.0
         margin = top1 - top2
+        # Entropy is kept as DIAGNOSTIC metadata only — it does not gate
+        # domain-any detection (see _is_domain_any docstring and issue #351).
         entropy = domain_result.entropy
 
-        # Domain-any detection: high entropy OR low margin
-        is_any = entropy > _ENTROPY_ANY_THRESHOLD or margin < _MARGIN_ANY_THRESHOLD
+        # Domain-any detection: margin-only gate (issue #351).
+        is_any = _is_domain_any(margin)
         domain = "any" if is_any else domain_result.top_label
 
         extras = {
@@ -788,7 +827,7 @@ def run_composed(
     Honors R1 (Tier-C select/brake only) and §10.4 (build default).
 
     v0 calibration decisions (flagged for #330):
-    - Domain from encoder (entropy + margin gate as in system 2).
+    - Domain from encoder (margin-only gate (issue #351) as in system 2).
     - Posture from extractors (E1-E12 + R1-R3 as in system 3).
     - Cell lookup: exact (domain, posture) first, then ("any", posture).
     - Diagnose + span≥2 → investigator regardless of domain.
@@ -823,9 +862,6 @@ def run_composed(
         )
     }
 
-    _ENTROPY_ANY_THRESHOLD = 1.5
-    _MARGIN_ANY_THRESHOLD = 0.04
-
     results: list[SystemResult] = []
     for entry in entries:
         # Encoder domain
@@ -835,7 +871,7 @@ def run_composed(
         top2 = sorted_probs[1] if len(sorted_probs) > 1 else 0.0
         margin = top1 - top2
         entropy = domain_result.entropy
-        is_any = entropy > _ENTROPY_ANY_THRESHOLD or margin < _MARGIN_ANY_THRESHOLD
+        is_any = _is_domain_any(margin)
         domain = "any" if is_any else domain_result.top_label
 
         # Extractor posture
