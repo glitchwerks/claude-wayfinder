@@ -356,7 +356,7 @@ CWR = confident-wrong rate (lower is better). RC = routing-correctness (higher i
 
 **Key observations by domain:**
 
-- **code (n=45):** Posture-only achieves perfect RC (1.0000) — posture completely resolves the within-`code` multi-agent ambiguity (debugger vs code-reviewer vs researcher vs code-writer vs ops). CellMap and Compose both reach 0.9111 (domain adds nothing here for code because posture is already fully discriminating). This is the main driver of posture's added value.
+- **code (n=45):** Posture-only achieves perfect RC (1.0000) — posture completely resolves the within-`code` multi-agent ambiguity (debugger vs code-reviewer vs researcher vs code-writer vs ops). CellMap and Compose both reach 0.9111, meaning adding the domain axis costs 4/45 code entries (the cell-map mis-routes them) relative to posture-only — the same `infra_deploy` mis-cell pattern discussed in §12.6 applies here. Posture alone is the main driver of code-domain routing accuracy; domain is additive in every other domain but is slightly costly on this slice. This is the main driver of posture's added value.
 
 - **docs_prose (n=13):** Domain+posture is essential. Posture-only collapses to 0.0769 because `(any, build) → code-writer`, but gold is `doc-writer` — posture "build" with `domain=any` always picks code-writer, never doc-writer. Domain disambiguates build→doc-writer. CellMap and Compose both reach 1.0000.
 
@@ -381,9 +381,10 @@ The cell-map routes `(infra_deploy, research) → researcher` but the gold agent
 
 **CellMap's elevated CWR (+0.1172 worse than domain-only):** Same cause — CellMap always delegates at confidence=0.9. The 21 wrong delegates (109 × 0.1927 ≈ 21) are the entries where the cell-map misses, mainly: (a) `self_handle` gold entries (no cell-map target), (b) the 2 infra_deploy/research→investigator mismatches.
 
-### 12.7 Compose gains: what posture resolves beyond domain-only (no-smoke, 33 gains)
+### 12.7 Compose gains: what posture resolves beyond domain-only (no-smoke, 37 gains)
 
-Compose gains 33 entries over domain-only. Pattern breakdown:
+Compose gains 37 entries over domain-only. Pattern breakdown:
+<!-- Total reconciled from row breakdown (16+12+5+1+1+2=37); prior text stated 33. -->
 
 | Pattern | Count | Description |
 |---|---|---|
