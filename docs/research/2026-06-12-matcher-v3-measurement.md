@@ -4,16 +4,14 @@ date: 2026-06-12
 issue: glitchwerks/claude-wayfinder#330
 milestone: "Milestone 14 — Matcher v3 — semantic two-axis"
 status: |
-  PRE-REGISTERED — thresholds committed before measurement run
-  MEASURED 2026-06-12 — verdict: NO-GO (see §7.5)
+  PRE-REGISTERED — thresholds committed before measurement run (commit ec2251d)
+  RE-MEASURED 2026-06-13 on the #351-corrected harness — verdict: NO-GO (see §7.5)
 ---
 
 # Matcher v3 Measurement Report — Semantic Two-Axis (#330)
 
 **PRE-REGISTERED — thresholds committed before measurement run (commit `ec2251d`, §1–§6).**
-**MEASURED 2026-06-12 — verdict: NO-GO (§7.5).** §1–§6 are the frozen pre-registration; §7 holds the results.
-
-**MEASURED 2026-06-12 — verdict: NO-GO (see §7.5).**
+**RE-MEASURED 2026-06-13 on the #351-corrected harness — verdict: NO-GO (§7.5).** §1–§6 are the frozen pre-registration; §7 holds the results. The first run (commit `cde78e9`, now superseded) used a buggy domain-any gate; see §7.0.
 
 ---
 
@@ -238,29 +236,63 @@ Source: `docs/research/2026-06-12-gold-labeling-report.md` §Findings §3.
 
 ## 7. Results
 
-_Measured 2026-06-12 against the frozen artifacts in §2. Numbers cross-checked three ways
-(§7.6). The pre-registered thresholds in §5 were not altered after seeing these results._
+_Re-measured 2026-06-13 against the frozen artifacts in §2, on the #351-corrected harness
+(§7.0). Numbers cross-checked three ways (§7.6). The pre-registered thresholds in §5 were
+not altered after seeing these results._
+
+### 7.0 Harness correction since pre-registration (#351)
+
+The first measurement run (commit `cde78e9`, now superseded) is **invalid** and its
+encoder/composed numbers must be disregarded. `run_encoder` / `run_composed` implemented
+the domain-any gate as `entropy > 1.5 OR margin < 0.04`. The encoder's entropy is ~2.31
+bits on every organic prompt (5-class max `log₂5 ≈ 2.32`), so `entropy > 1.5` was always
+true → 100% of prompts forced to domain-any → the encoder delegated **0** times and the
+composed system collapsed to extractors-alone. This contradicted the ratified design
+(#335 / encoder spike §5.3), which **drops** the inoperative entropy signal and gates on
+the **top-1 margin only**.
+
+[#351](https://github.com/glitchwerks/claude-wayfinder/issues/351) (merged `677a745`, PR
+#352) fixed the harness: entropy removed entirely (retained only as diagnostic `extras`),
+margin-only gate `margin < 0.01`. The 0.01 threshold is the best-F1 point from a sweep
+against the organic gold `is_any` labels (n=168; 16 is_any=True). This is a **bug-fix to
+the system under test executed as a separate reviewed issue**, not a post-hoc tuning of the
+kill criteria — §4 metric definitions and §5 kill thresholds are unchanged. Note: §3 (frozen
+pre-registration) describes the encoder with "margin gate at 0.02"; the harness as-run uses
+margin-only at **0.01** per #351. §7 below reflects the corrected harness.
+Source: `scripts/corpus/eval/_systems.py` `_is_domain_any` (commit `677a745`); issue #351;
+encoder spike §5.3.
 
 ### 7.1 Per-System Metrics Table
 
 | Metric | Lexical (1) | Encoder (2) | Extractors (3) | Composed (4) |
 |---|---|---|---|---|
-| M1 Phi(sys, lexical) | n/a (baseline) | 0.0000 (degenerate — see §7.2) | −0.0040 | −0.0040 |
+| M1 Phi(sys, lexical) | n/a (baseline) | 0.2438 | −0.0040 | −0.0040 |
 | M3 Tier-C decisiveness | n/a | n/a | 0.0357 | 0.0357 |
-| M4 False-default-build rate | n/a | n/a | 0.5625 | 0.5625 |
+| M4 False-default-build rate | n/a | n/a | 0.5625 | 0.2679 |
 | M5 Braked candidate quality | n/a | n/a | 0.0000 | 0.0000 |
-| M6 Confident-wrong rate | 0.1507 | n/a (0 delegate decisions) | 0.3585 | 0.3585 |
+| M6 Confident-wrong rate | 0.1507 | 0.2458 | 0.3585 | 0.3585 |
 
-_Delegate-band counts: Lexical 73, Extractors 53, Encoder 0, Composed 53 (of 168 entries)._
+_Delegate-band counts: Lexical 73, Encoder 118, Extractors 53, Composed 53 (of 168
+entries). The encoder now delegates (margin-only gate, §7.0); the composed delegate set
+tracks extractors (53), so the domain axis does not expand confident delegation beyond what
+posture routing already produces._
+Source: `.tmp/run_330_results.json` (driver) and harness CLI, cross-checked §7.6.
 
 ### 7.2 Decisive Phi — Encoder vs Extractors
 
 | Comparison pair | Phi | Entries in intersection (delegate band) |
 |---|---|---|
-| Encoder (2) vs Extractors (3) | 0.0000 | 0 (degenerate — see note) |
+| Encoder (2) vs Extractors (3) | **0.0613** | 145 (≥1 delegated, gold present); 26 both delegated |
 | Lexical (1) vs Extractors (3) | −0.0040 | secondary baseline |
 
-The decisive §8.4 test requires both axes to enter the delegate band so their error vectors can co-occur; because the encoder delegated on 0 of 168 entries, its error-indicator vector is all-zeros and Phi is mathematically undefined — the `metric_error_correlation` implementation hits its `denom_sq <= 0 → return 0.0` branch and returns 0.0000. Per the pre-registered §5.1 escape clause (the nan / insufficient-data case), this result is recorded as **"insufficient data — the premise was neither confirmed nor falsified"**, not as a Phi < 0.35 pass. The 0.0000 figure is a degenerate/undefined result, not a decorrelation pass.
+This is now a **valid** computation (the superseded run was degenerate at Phi=0.0000 / 0
+shared entries because the encoder never delegated). With the corrected gate the encoder
+delegates 118 times; the M1 intersection is 145 entries — well above the small-n noise
+caveat in §5.1. **Phi(encoder, extractors) = 0.0613 falls in the §5.1 pass band (< 0.35):
+the two error signals are nearly decorrelated (shared variance 0.0613² ≈ 0.4%). The §8.4
+architecture-independence premise is CONFIRMED on this corpus — not "untestable" as in the
+superseded run.**
+Source: intersection size from direct probe; Phi from `metric_error_correlation` (driver).
 
 ### 7.3 Error Severity Distribution (Composed System)
 
@@ -270,15 +302,20 @@ The decisive §8.4 test requires both axes to enter the delegate band so their e
 | cross_posture | 16 | ~84.2% |
 | cross_domain | 3 | ~15.8% |
 
-Total delegate-band errors: 19. Composed severity is identical to extractors-alone across all three buckets — a direct consequence of the encoder delegating 0 times (§7.6): the composed system received only "domain-any" from the encoder axis and collapsed to pure posture routing, making it byte-identical to extractors-alone.
+Total delegate-band errors: 19. Composed severity is identical to extractors-alone across
+all three buckets. Even though the encoder now delegates 118 times standalone, the composed
+delegate set still equals extractors (53) and its confident-wrong errors are the same 19 —
+the decorrelated domain axis does not change *which* confident delegations the composed
+system makes, only the false-default-build path (M4, §7.1: 0.2679 vs extractors 0.5625,
+where domain-any suppresses some wrong default-builds).
 
 ### 7.4 Per-Criterion Verdicts
 
 | Criterion | Threshold | Measured value | Verdict |
 |---|---|---|---|
-| §5.1 Correlation kill | Phi(encoder, extractors) ≥ 0.60 | 0.0000 (degenerate — 0 shared delegate entries) | INSUFFICIENT DATA — not killed, not passed (premise untestable on this corpus) |
+| §5.1 Correlation kill | Phi(encoder, extractors) ≥ 0.60 kill; < 0.35 pass | **0.0613** (145-entry intersection) | **PASS** — independence premise confirmed (Phi well inside pass band) |
 | §5.2 Tier-C decisiveness kill | > 0.30 | 0.0357 | PASS (well under threshold) |
-| §5.3 Confident-wrong no-go | composed ≤ lexical | composed 0.3585 vs lexical 0.1507 | NO-GO (composed is 2.38× the baseline confident-wrong rate) |
+| §5.3 Confident-wrong no-go | composed ≤ lexical | composed 0.3585 vs lexical 0.1507 | **NO-GO** (composed is 2.38× the baseline confident-wrong rate) |
 
 ### 7.5 Go / No-Go Recommendation
 
@@ -286,70 +323,82 @@ Total delegate-band errors: 19. Composed severity is identical to extractors-alo
 
 The pre-registered §5.3 confident-wrong criterion is triggered: the composed system's
 confident-wrong rate (0.3585) exceeds the lexical baseline (0.1507) by a factor of 2.38.
-No hot-path integration proceeds. This finding is consistent with §8 Out of Scope — the
-no-go and the out-of-scope rule independently reach the same conclusion.
+No hot-path integration proceeds. Unlike the superseded run, this verdict now rests on a
+**fully computed** evidence set — both decisive criteria (§5.1 and §5.3) were measurable on
+real delegate-band data.
 
-**Dominant mechanism: the domain encoder is empirically inert on organic data.**
+**The architecture premise holds; the encoder's accuracy does not.**
 
-The potion-base-8M classifier produced a near-uniform 5-way domain distribution on every
-one of the 168 prompts. Measured entropy ranged 2.3095–2.3214 bits against a 5-class
-maximum of log₂5 ≈ 2.3219 bits; the top1−top2 margin had a median of 0.0193. Under the
-v0 calibration (entropy-any > 1.5, margin-any < 0.04, both fixed in #340 / encoder spike
-§7 and not tunable post-hoc), 100% of prompts were marked domain-any: 138 by both gates,
-30 by the entropy gate alone, 0 by the margin gate alone. Domain-any routes to advisory
-by construction (`run_encoder` only delegates on a confident domain), so the encoder
-delegated 0 times across all 168 entries.
+The corrected harness separates two questions the buggy run conflated:
 
-**Knock-on consequences.**
+1. **Are the domain and posture axes decorrelated? — YES (§5.1 PASS).** Phi(encoder,
+   extractors) = 0.0613 over a 145-entry intersection. The §8.4 independence ideal (Phi ≈ 0)
+   is essentially achieved. The two signals make near-independent errors, exactly as Spec E
+   §8.2–§8.4 premised.
+2. **Does composing them beat the baseline? — NO (§5.3 NO-GO).** The composed confident-wrong
+   rate (0.3585) is more than double the lexical baseline (0.1507) and identical to
+   extractors-alone. Decorrelation is **necessary but not sufficient**: a domain signal that
+   is independent of the posture signal adds nothing if it is not itself *accurate*.
 
-(a) The composed system, receiving only "any" from the domain axis, collapsed to pure
-posture routing — it is byte-identical to extractors-alone across every metric (M1, M3,
-M4, M5, M6, and the error-severity distribution in §7.3). (b) The decisive §8.4
-correlation test (Phi(encoder, extractors)) could not be computed: with zero encoder
-delegate entries the error-indicator intersection is empty, Phi is mathematically
-undefined, and the §5.1 criterion is recorded as "insufficient data — premise untestable"
-(§7.2, §7.4). (c) The composed system therefore inherits the extractor posture-router's
-35.85% confident-wrong rate wholesale — worse than the lexical baseline's 15.07%.
+**The domain encoder is a weak classifier on organic prompts.**
 
-**Honest scoping of the encoder finding.**
+The encoder's own confident-wrong rate is 0.2458 on the full corpus and **0.4915 on the
+no-smoke subset** (§7.6) — i.e. when the encoder confidently delegates on a substantive
+organic prompt, it routes to the wrong domain nearly half the time. Its M6 swings widely
+across cuts (0.2458 full / 0.4915 no-smoke / 0.1827 no-mention), the signature of a
+classifier whose apparent accuracy tracks the base rate of each subset's dominant gold class
+rather than genuine domain discrimination — a "broken clock" effect. This is consistent with
+the #351 sweep caveat (margin-gate precision ≤ 0.26 at every threshold): a low margin does
+not signal genuine ambiguity, it signals that potion-base-8M cannot separate the five
+domains on short organic prompts. The margin-only gate makes the encoder delegate, but on a
+near-random top-1 domain.
 
-The near-uniform output must be reconciled against the accuracy reported in the #329 /
-#335 encoder spikes that selected potion-base-8M. Three live hypotheses, none resolved
-here: (i) the spikes' accuracy was measured on a synthetic or curated distribution that
-does not resemble organic dispatch prompts; (ii) the classifier's centroids are not
-loading or applying correctly in the harness path; (iii) potion-base-8M genuinely cannot
-separate these five domains on short organic prompts. Root-causing the encoder is
-explicitly out of scope for #330 (this issue measures; it does not fix) and belongs in a
-separate follow-up issue. The no-go verdict stands regardless of which hypothesis holds,
-because it rests on the composed system's measured confident-wrong rate, not on the
-encoder diagnosis.
+**Why composition can't rescue it.** The composed system inherits the posture extractor's
+delegate set and its 35.85% confident-wrong rate wholesale; the domain axis only gates the
+default-build path (M4 improves 0.5625 → 0.2679). A decorrelated-but-near-random domain
+signal cannot lower the confident-wrong rate of the confident delegations — decorrelated
+noise is still noise.
 
-**What the kill criteria bought us.**
+**Honest scoping of the encoder finding.** The weak accuracy must still be reconciled
+against the #329 / #335 spikes that selected potion-base-8M. Two live hypotheses remain
+(the third — "inert / never delegates" — is now refuted by the 118 delegations): (i) the
+spikes' accuracy was measured on a synthetic/curated distribution unlike organic dispatch
+prompts; (ii) potion-base-8M genuinely cannot separate these five domains on short organic
+prompts (the margin-precision evidence favors this). Root-causing the encoder is out of
+scope for #330 (this issue measures; it does not fix) and belongs in a follow-up issue. The
+no-go stands regardless of which holds, because it rests on the composed system's measured
+confident-wrong rate.
 
-Written before the run, the pre-registered thresholds converted an ambiguous "the composed
-numbers look bad" into a clean, unambiguous NO-GO with a precisely localized cause: the
-domain axis carries no signal on organic data. The secondary subset cuts confirm the
-picture rather than overturning it. On the 134-row no-mention cut (§6 "No-mention subset")
-the extractor/composed confident-wrong rate rises to 0.8571 — the mention signal was
-masking how often posture-only routing is wrong on genuinely hard prompts. On the no-smoke
-cut (59 probe rows dropped), composed is unchanged at 0.3585 while lexical rises to 0.2558
-— the gap narrows but composed remains materially worse. Neither subset cut reverses the
-verdict.
+**What the kill criteria bought us.** Pre-registering the thresholds — and then fixing the
+harness bug as a separate reviewed issue (#351) before re-measuring — converted a degenerate
+"can't even test it" first run into a clean, fully-evidenced NO-GO with a precisely
+localized cause: the domain axis is *independent* (good, §5.1) but *inaccurate* (fatal,
+§5.3). The secondary subset cuts confirm the picture. On the 134-row no-mention cut the
+extractor/composed confident-wrong rate rises to 0.8571 (denominator 21 delegations — the
+mention signal was driving most confident delegations and masking how often posture-only
+routing is wrong on genuinely hard prompts). On the no-smoke cut (59 probe rows dropped)
+composed is unchanged at 0.3585 while lexical rises to 0.2558 — the gap narrows but composed
+remains materially worse. Neither subset cut reverses the verdict.
 
 ### 7.6 Measurement Provenance
 
-Run date: 2026-06-12. Interpreter: worktree `.venv` (model2vec 0.8.2 present; encoder and
+Run date: 2026-06-13. Branch `feat/330-measurement-run` rebased onto `main` at `677a745`
+(the #351 fix). Interpreter: worktree `.venv` (model2vec 0.8.2 present; `_systems.__file__`
+verified to resolve inside the worktree, not a shadowing parent checkout; encoder and
 composed systems both ran — no metric-skips due to missing dependencies).
 
-Numbers were cross-checked two independent ways: the `scripts/corpus/eval` harness CLI
-(#340) and a standalone driver `.tmp/run_330.py`; both produced identical per-system
-metrics for all four systems. A third direct encoder probe confirmed the 100%-domain-any
-finding and measured the entropy and margin distributions reported in §7.5.
+Numbers were cross-checked three independent ways: (1) the standalone driver
+`.tmp/run_330.py` → `.tmp/run_330_results.json`; (2) the `scripts/corpus/eval` harness CLI
+(#340, `python -m scripts.corpus.eval`); both produced identical per-system metrics for all
+four systems (lexical cw 0.1507, encoder cw 0.2458, extractors/composed cw 0.3585; composed
+M4 0.2679). (3) A direct probe independently computed the M1 intersection size (145 entries;
+26 both-delegate) underlying the decisive Phi.
 
 The scratch artifacts (`.tmp/run_330.py`, `.tmp/run_330_results.json`,
-`.tmp/probe_encoder.py`) are not committed — scratch-file discipline applies. The
-committed report is the durable record. Anyone can reproduce via the one-command harness
-CLI (`python -m scripts.corpus.eval`) in §2 against the frozen artifacts.
+`.tmp/probe_encoder.py`, `.tmp/sweep_margin.py`) are not committed — scratch-file discipline
+applies. The committed report is the durable record. Anyone can reproduce via the one-command
+harness CLI (`python -m scripts.corpus.eval`) in §2 against the frozen artifacts, on a
+checkout at or after `677a745`.
 
 ---
 
@@ -370,5 +419,6 @@ experiment."
 ## 9. Related
 
 #330 (this measurement) · #338 (corpus phase A) · #339 (gold labeling) · #340 (eval harness)
+· #351 / #352 (entropy-gate bug fix → margin-only gate; made this re-measurement valid, §7.0)
 · #328 (extractor library) · #329 (potion-base-8M spike) · #335 (potion-base-32M spike)
 · #325 (design convergence) · #293 (original dispatch-log substrate) · Spec E §13.
