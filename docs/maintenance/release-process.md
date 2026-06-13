@@ -27,7 +27,7 @@ The **Quick reference card** at the end is the section to keep open during a rel
 | **Patch** (`x.y.Z`) | Bug fixes, doc-only, test-only | — | No |
 | **Minor** (`x.Y.0`) | New skills, new commands, backward-compatible additions | Update README skill section if applicable | No |
 | **Major** (`X.0.0`) | Breaking changes, schema migrations | Update README; note breaking changes in CHANGELOG | No |
-| **Repo move** | `source.repo` in `glitchwerks/claude-plugins` marketplace changes | All of major + cache wipe (step 12) | **Yes** |
+| **Repo move** | `source.repo` in `glitchwerks/claude-plugins` marketplace changes | All of major + cache wipe (step 13) | **Yes** |
 
 The cache wipe applies **only to repo moves**. Pure version bumps — including major bumps — do not need it. See the cache-wipe footgun entry below.
 
@@ -109,9 +109,42 @@ Confirm `sha` matches step 7 and `version` matches `X.Y.Z`.
 
 **11. Tell users to re-run `/setup-wayfinder`**
 
-The plugin venv pins an exact version. Without re-running `/setup-wayfinder`, consumers stay silently on the old version. This is the final step for every release. See the footgun entry below.
+The plugin venv pins an exact version. Without re-running `/setup-wayfinder`, consumers stay silently on the old version. See the footgun entry below.
 
-**12. [Repo move only] Wipe the per-plugin cache**
+**12. Sync the buildwithclaude listing (external marketplace)**
+
+`claude-wayfinder` is listed in the community marketplace [davepoon/buildwithclaude](https://github.com/davepoon/buildwithclaude) as a github-source entry (added in davepoon/buildwithclaude#181). That entry mirrors `version` (plus `description` / `keywords`) from this repo's `.claude-plugin/plugin.json`. Refresh it so the public listing stays accurate.
+
+> **Why this is manual — and stays out of `release.yml`.** The target is an *external* repo. A CI-driven cross-repo PR would require a long-lived PAT with write access to a buildwithclaude fork, which we do not want to provision or manage. This is a deliberate manual checklist step. **Do not automate it in `release.yml`.**
+>
+> **Scope.** For a github-source entry the listed `version` is display/discovery metadata only — installs resolve this repo's live `plugin.json`, so a stale entry never breaks installs. This step keeps the public listing accurate; it is not an install-correctness gate.
+
+a. Sync your `cbeaulieu-gt/buildwithclaude` fork's `main` with upstream:
+
+   ```bash
+   git -C <fork> fetch upstream
+   git -C <fork> push origin upstream/main:main
+   ```
+
+b. Create a branch, then edit `.claude-plugin/marketplace.json` → the `claude-wayfinder` entry → set `version` to `X.Y.Z` (and update `description` / `keywords` if they changed) so it matches this repo's `plugin.json`.
+
+c. Commit the change and push the branch to your fork:
+
+   ```bash
+   git -C <fork> add .claude-plugin/marketplace.json
+   git -C <fork> commit -m "Update claude-wayfinder to vX.Y.Z"
+   git -C <fork> push -u origin sync-claude-wayfinder-vX.Y.Z
+   ```
+
+d. Open the PR to upstream:
+
+   ```bash
+   gh pr create --repo davepoon/buildwithclaude --base main \
+     --head cbeaulieu-gt:sync-claude-wayfinder-vX.Y.Z \
+     --title "Update claude-wayfinder to vX.Y.Z"
+   ```
+
+**13. [Repo move only] Wipe the per-plugin cache**
 
 Runs only when `source.repo` changed in `marketplace.json`. Do not run for patch/minor/major.
 
@@ -189,7 +222,7 @@ Then open a new Claude Code session and run `/reload-plugins`.
 
 **Source of truth:** Verified during the claude-prospector spike when the plugin was split out of claude-configs; the cached `origin` did not update on a `source.repo` change, confirming the cache slot is keyed to the original repo path and must be wiped only when the path changes.
 
-**Comply:** Check the marketplace PR diff for a `source.repo` change. If unchanged, skip step 12.
+**Comply:** Check the marketplace PR diff for a `source.repo` change. If unchanged, skip step 13.
 
 ---
 
@@ -229,8 +262,17 @@ Pre-flight
 10. gh api repos/glitchwerks/claude-plugins/contents/.claude-plugin/marketplace.json \
       --jq '.content' | base64 -d | grep -A 6 '"claude-wayfinder"'
 11. Announce: users must run /setup-wayfinder to pick up the new version
+12. Sync buildwithclaude listing:
+    a. git -C <fork> fetch upstream && git -C <fork> push origin upstream/main:main
+    b. Edit .claude-plugin/marketplace.json → claude-wayfinder entry → version X.Y.Z
+    c. git -C <fork> add .claude-plugin/marketplace.json
+       git -C <fork> commit -m "Update claude-wayfinder to vX.Y.Z"
+       git -C <fork> push -u origin sync-claude-wayfinder-vX.Y.Z
+    d. gh pr create --repo davepoon/buildwithclaude --base main \
+         --head cbeaulieu-gt:sync-claude-wayfinder-vX.Y.Z \
+         --title "Update claude-wayfinder to vX.Y.Z"
 
 Repo move only (source.repo changed):
-12. rm -rf ~/.claude/plugins/cache/glitchwerks/claude-wayfinder/
+13. rm -rf ~/.claude/plugins/cache/glitchwerks/claude-wayfinder/
     /reload-plugins in a new Claude Code session
 ```
