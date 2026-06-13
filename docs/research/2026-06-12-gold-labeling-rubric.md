@@ -120,6 +120,17 @@ domain `*any*` in §9.1 (investigator, approach-critic, auditor, researcher) —
 routing to them need not be `is_any`; they may carry a clear domain and still route there
 via posture.
 
+**Post-reliability clarification (2026-06-12, checkpoint-ratified).** GitHub/VCS state
+operations — issue queries, PR queries and writes, repo metadata, CI status checks — carry
+`domain: "project_meta"` per the §9.1 grid's own `project_meta` ops row ("project_meta
+(VCS)"), even when no file paths are present in the prompt. `is_any` is reserved for prompts
+that carry no subject signal at all (pure-conversational, context-free). This resolves the
+domain-axis ambiguity that produced a below-target raw agreement of 0.775 on the
+n=40 reliability subsample: eight of the nine disagreements were labelers splitting between
+`project_meta` and `is_any` on GitHub-operate prompts with no file paths. All eight were
+adjudicated to `project_meta`, and the gold labels assigned in pass 1 already followed
+the `project_meta` reading; gold labels themselves were unchanged by this clarification.
+
 ### Step 3 — Gold agent (grid cell + routing-table overrides)
 
 Derive `gold_agent` in two sub-steps:
@@ -356,3 +367,16 @@ Condensed from Spec E §9.1 grid and `general-purpose.md § Mandatory Code Routi
 | `ops` | *any* | operate | command-shaped read; GitHub read queries |
 | `self_handle` | — | — | harness paths; GitHub writes |
 | `test-implementer` | code | build | Phase 1 test-first only — uncommon in organic logs |
+
+---
+
+## Amendment Log
+
+This log records all changes made to the rubric. Amendments that alter the labeling procedure
+are noted separately from those that only clarify existing wording. Gold labels already
+assigned retain their validity unless the amendment entry says otherwise.
+
+| Date | Change | Commit / authority | Labels affected |
+|------|--------|--------------------|-----------------|
+| 2026-06-12 | **E11 explicit-agent-mention override added** (§3 Step 3, routing-table overrides): directive `agent_mentions` field now constitutes near-dispositive pass-through; descriptive mentions distinguished and excluded. Added pre-labeling, before pass 1 began. | commit `5e5c57e`; issue #339 | Applies to all records with non-empty `agent_mentions` (109/168 records in pass 1 carried directive mentions) |
+| 2026-06-12 | **Domain-of-operate clarification added to §3 Step 2** (post-reliability, checkpoint-ratified): GitHub/VCS state operations carry `domain: "project_meta"` per §9.1 ops row; `is_any` reserved for no-subject-signal prompts. Ratified at user checkpoint after reliability pass yielded 0.775 domain agreement (target 0.85) traced to this ambiguity. | user checkpoint 2026-06-12; issue #339 | Gold labels unchanged — pass-1 labelers already applied the `project_meta` reading; amendment documents the ruling rather than correcting labels |

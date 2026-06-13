@@ -107,7 +107,7 @@
       "shortfall": 14
     }
   ],
-  "format_spec": "JSONL; one JSON object per line; fields: original log entry fields + corpus_id (int, 1-based line number in the source dispatch-log.jsonl at generation time; unique and traceable, NOT dense/sequential \u2014 excluded rows still consume line numbers) + stratum (dict: decision_band str, td_length_band str, file_paths_present bool); encoding: UTF-8; entries: organic matcher_decision only, non-empty task_description, capped at sample_floor per (decision_band, td_length_band, file_paths_present) cell; ordering: file order within each cell (first N kept when cap applied)",
+  "format_spec": "JSONL; one JSON object per line; fields: original log entry fields + corpus_id (int, 1-based line number in the source dispatch-log.jsonl at generation time; unique and traceable, NOT dense/sequential — excluded rows still consume line numbers) + stratum (dict: decision_band str, td_length_band str, file_paths_present bool); encoding: UTF-8; entries: organic matcher_decision only, non-empty task_description, capped at sample_floor per (decision_band, td_length_band, file_paths_present) cell; ordering: file order within each cell (first N kept when cap applied)",
   "sha256": "98454ca6544181118b7fb4870d3745be3146f56478f9b95c13f3c99ffa6cb090",
   "artifact_path": "~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl",
   "generation_params": {
@@ -117,7 +117,72 @@
       "include: type == matcher_decision",
       "include: session_id non-empty (organic only)",
       "exclude: empty task_description",
-      "cap: first sample_floor entries per (decision_band \u00d7 td_length_band \u00d7 file_paths_present) cell"
+      "cap: first sample_floor entries per (decision_band × td_length_band × file_paths_present) cell"
     ]
+  },
+  "gold_labels": {
+    "labeled": 168,
+    "disputed_retained": 1,
+    "disputed_rate": 0.006,
+    "label_artifact_path": "~/.claude/state/wayfinder-corpus/2026-06-12/gold-labels.jsonl",
+    "label_artifact_note": "local-only; never committed to repository",
+    "rubric": "docs/research/2026-06-12-gold-labeling-rubric.md",
+    "report": "docs/research/2026-06-12-gold-labeling-report.md",
+    "distributions": {
+      "gold_agent": {
+        "code-writer": 61,
+        "doc-writer": 43,
+        "ops": 31,
+        "self_handle": 13,
+        "investigator": 6,
+        "researcher": 6,
+        "project-planner": 5,
+        "auditor": 2,
+        "code-reviewer": 1,
+        "debugger": 0,
+        "inquisitor": 0,
+        "approach-critic": 0,
+        "devops": 0,
+        "test-implementer": 0
+      },
+      "domain": {
+        "code": 74,
+        "docs_prose": 43,
+        "project_meta": 30,
+        "is_any": 16,
+        "infra_deploy": 5,
+        "data": 0
+      },
+      "posture": {
+        "build": 111,
+        "operate": 36,
+        "research": 8,
+        "plan": 5,
+        "diagnose": 4,
+        "assess": 2,
+        "verify": 2,
+        "critique": 0
+      },
+      "confidence": {
+        "high": 112,
+        "medium": 49,
+        "low": 7
+      }
+    },
+    "reliability": {
+      "subsample_n": 40,
+      "seed": 339,
+      "posture_agreement": 0.975,
+      "domain_agreement": 0.775,
+      "exact_cell_agreement": 0.75,
+      "gold_agent_agreement": 0.975,
+      "targets": {
+        "posture": 0.85,
+        "domain": 0.85,
+        "exact_cell": 0.75
+      },
+      "domain_below_target_cause": "Eight of nine domain disagreements were labelers splitting between project_meta and is_any on GitHub/VCS operate-posture records with no file paths; adjudicated to project_meta per Spec E §9.1 ops row; rubric amended post-checkpoint."
+    },
+    "smoke_test_repeat_rows": 59
   }
 }
