@@ -3,8 +3,8 @@
 **Issue**: #355  
 **Date**: 2026-06-13  
 **Investigator**: Claude Sonnet 4.6 (sub-agent)  
-**Probe script**: `.tmp/probe_355_errors.py`  
-**Results file**: `.tmp/run_330_results.json`
+**Probe script**: local throwaway — `.tmp/probe_355_errors.py` (not committed; depends on local-only corpus at `~/.claude/state/wayfinder-corpus/2026-06-12/`)  
+**Results file**: local throwaway — `.tmp/run_330_results.json` (not committed)
 
 ---
 
@@ -44,13 +44,13 @@ Probe script run against:
 
 ## Evidence Chain
 
-1. **Probe script regenerated 53 extractor delegates, 19 confident-wrong, CW=0.3585** — exact match with `.tmp/run_330_results.json`. [`.tmp/probe_355_errors.py`, Part 5 output]
+1. **Probe script regenerated 53 extractor delegates, 19 confident-wrong, CW=0.3585** — exact match with the cached #330 results (local throwaway `.tmp/run_330_results.json`). [local probe `.tmp/probe_355_errors.py`, Part 5 output]
 
 2. **Of 19 errors: 14 predicted `auditor`, 3 predicted `code-reviewer`, 1 predicted `code-writer`, 1 predicted `ops`.** The 14 `auditor` errors all arise from `verify` posture winning. [Part 1 output: "Error breakdown by predicted agent"]
 
 3. **14 of 19 errors have extractors `e5` and `e7` as the sole fired pair.** E7 alone contributes no posture (it is a diagnose modifier, gated on E1/E2); E5 is the sole posture source in all 14 cases. [Part 1 output: "Error breakdown by which extractors fired": `e5,e7`: 13 entries, `e5` alone: 1]
 
-4. **E5's C-assist condition (NAMED_DOC_NOUNS + RELATIONAL_MARKERS) fires on "changelog" in release-prep prompts, "matches" in conformance-check language, and "schema" in API-change prompts** — all of which are genuine build/operate tasks. Sample evidence:
+4. **E5's C-assist condition (NAMED_DOC_NOUNS + RELATIONAL_MARKERS) fires on "changelog" in release-prep prompts, "matches" in conformance-check language, and "schema" in API-change prompts** — all of which are genuine build/operate tasks. *(Note: the specific marker tokens cited below — "changelog", "match"/"matches", "schema" — are manual inferences from reading the extractor source (`_markers.py` / `_extractors.py`), not probe-captured marker-hit output. The probe confirmed that E5 fired on these entries; it did not sample which specific term within NAMED_DOC_NOUNS or RELATIONAL_MARKERS triggered the match. This distinction matters for any follow-up work that tightens those marker sets.)* Sample evidence:
    - corpus_id=33679: "Prepare release v1.2.0: bump version string … add a new CHANGELOG.md section" → E5 fires on "changelog" (NAMED_DOC_NOUNS) + 2 file refs → verify → auditor. Gold: doc-writer (build).
    - corpus_id=34690: "Trim verbose multi-paragraph code comments in Rust source files to match a concise one-line comment style." → E5 fires on "match" / "matches" (RELATIONAL_MARKERS stem) + 2 prose path tokens → verify → auditor. Gold: code-writer (build).
    - corpus_id=34799: "Implement GitHub issue #776: build a static, backend-less Shell-B UI prototype … Create real Jinja2 HTML templates (templates/index.html, …)" → 2 file references + structural doc language → E5 fires → auditor. Gold: code-writer (build). [Part 6 output, errors 4, 7, 10]
@@ -163,8 +163,8 @@ The core problem is that E5 and E3 attempt to detect semantic postures using syn
 
 ## Artifacts
 
-- Probe script: `I:\ai\claude\claude-wayfinder\.claude\worktrees\vigilant-shamir-97d682\.tmp\probe_355_errors.py`
-- Prior measurement: `.tmp/run_330_results.json`
+- Probe script: local throwaway — `.tmp/probe_355_errors.py` (not committed; depends on local-only corpus at `~/.claude/state/wayfinder-corpus/2026-06-12/`). To reproduce, run the standard harness: `python -m scripts.corpus.eval --corpus ~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl --labels docs/research/2026-06-12-gold-labels-redacted.jsonl --catalog ~/.claude/state/dispatch-catalog.json`
+- Prior measurement: local throwaway — `.tmp/run_330_results.json` (not committed; this is the #330 run output cached locally)
 - Gold labels (redacted): `docs/research/2026-06-12-gold-labels-redacted.jsonl`
 - Corpus manifest: `docs/research/2026-06-12-corpus-manifest.json`
 - Extractor source: `src/claude_wayfinder/posture/_extractors.py`
