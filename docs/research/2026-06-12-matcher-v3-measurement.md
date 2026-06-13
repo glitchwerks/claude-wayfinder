@@ -4,14 +4,14 @@ date: 2026-06-12
 issue: glitchwerks/claude-wayfinder#330
 milestone: "Milestone 14 — Matcher v3 — semantic two-axis"
 status: |
-  PRE-REGISTERED — thresholds committed before measurement run (commit ec2251d)
+  PRE-REGISTERED — thresholds committed before measurement run (commit 689a7c4)
   RE-MEASURED 2026-06-13 on the #351-corrected harness — verdict: NO-GO (see §7.5)
 ---
 
 # Matcher v3 Measurement Report — Semantic Two-Axis (#330)
 
-**PRE-REGISTERED — thresholds committed before measurement run (commit `ec2251d`, §1–§6).**
-**RE-MEASURED 2026-06-13 on the #351-corrected harness — verdict: NO-GO (§7.5).** §1–§6 are the frozen pre-registration; §7 holds the results. The first run (commit `cde78e9`, now superseded) used a buggy domain-any gate; see §7.0.
+**PRE-REGISTERED — thresholds committed before measurement run (commit `689a7c4`, §1–§6; the branch was rebased onto the #351 fix per §7.0, so SHAs are post-rebase — the pre-registration commit still precedes both results commits in branch history).**
+**RE-MEASURED 2026-06-13 on the #351-corrected harness — verdict: NO-GO (§7.5).** §1–§6 are the frozen pre-registration; §7 holds the results. The first run (commit `5c0511b`, now superseded) used a buggy domain-any gate; see §7.0.
 
 ---
 
@@ -242,7 +242,7 @@ not altered after seeing these results._
 
 ### 7.0 Harness correction since pre-registration (#351)
 
-The first measurement run (commit `cde78e9`, now superseded) is **invalid** and its
+The first measurement run (commit `5c0511b`, now superseded) is **invalid** and its
 encoder/composed numbers must be disregarded. `run_encoder` / `run_composed` implemented
 the domain-any gate as `entropy > 1.5 OR margin < 0.04`. The encoder's entropy is ~2.31
 bits on every organic prompt (5-class max `log₂5 ≈ 2.32`), so `entropy > 1.5` was always
