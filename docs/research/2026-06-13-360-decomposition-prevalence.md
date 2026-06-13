@@ -21,7 +21,7 @@
 | Export script | `.tmp/decomp_export.py` |
 
 ### Prior context
-`docs/research/2026-06-13-358-oracle-domain-ceiling.md` — oracle domain + posture two-axis results. Key baseline: no-smoke routing-correctness = 0.3303 (lexical), 0.4954 (oracle domain-only), 0.8073 (oracle two-axis CellMap).
+`docs/research/2026-06-13-358-oracle-domain-ceiling.md` — oracle domain + posture two-axis results. Key baseline: no-smoke routing-correctness = 0.3303 (lexical), 0.4954 (oracle domain-only), 0.8073 (oracle two-axis CellMap). **Note:** this report is a co-landing sibling research doc, pending merge in PR #359; it will resolve to the path above on `main` once #359 merges.
 
 ---
 
