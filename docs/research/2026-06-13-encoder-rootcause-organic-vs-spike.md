@@ -26,26 +26,39 @@ baseline of 48.4% on the 93 labeled non-smoke non-any organic entries.
 ## Root cause
 
 **H1 (curated-distribution mismatch) is the primary cause, confirmed.**
-**H2 (model ceiling) is a real but secondary contributing factor.**
+**H2 (model ceiling) is plausible but NOT confirmed — no larger/contextual model was tested on the organic distribution.**
 **H3 (centroid mis-placement) is ruled out.**
 
-The spike set (P1-P14) consisted of 14 short, domain-salient prompts that are
-semantically near-identical to the 50 seed phrases used to build the class centroids
-— because both were authored in the same session from the same §9.1 / §11 agent-grid
-vocabulary. This conflation of training vocabulary and test vocabulary inflated the
-spike accuracy to 14/14. Organic dispatch prompts are systematically longer
-(median 46 words vs 9 words for the spike set), more abstract, and contain far fewer
-of the domain-salient tokens that the centroid head relies on for separation. The
-centroid head's geometry is adequate (median inter-centroid cosine distance 0.58),
-but the organic queries land close to the origin of the 5-class simplex because their
-bag-of-tokens embeddings average out to a near-uniform position relative to all five
-centroids. The resulting softmax over nearly-equal cosine similarities collapses to a
-near-uniform distribution on every organic input.
+> **Correction (2026-06-13, PR #354 review).** The original probe computed the spike
+> length/density stats from *reconstructed* approximate prompts (the spike reports do
+> not embed full prompt text). Recomputed from the canonical `SPIKE_GOLD_FOR_EVAL` in
+> `spikes/domain_encoder/_eval.py`: spike length median is **15.5** (not 9 — the gap is
+> **~3×**, not 5×), and generic domain-term density is **0.051**, essentially *equal* to
+> organic's 0.056 — so **density is not the differentiator** (the earlier "2.4× lower"
+> figure was an artifact of the reconstructed prompts). The canonical prompts still
+> reproduce **14/14**. The mechanism and verdicts below are corrected accordingly.
 
-The model ceiling (H2) compounds H1: potion-base-8M is a bag-of-tokens static model
-in 256-dimensional space; its geometric structure cannot separate the five coarse
-domains on abstract organic phrasing even if better seed phrases were chosen. But
-H1 alone is sufficient to explain the spike-vs-organic gap.
+The spike set (P1-P14) consisted of 14 prompts that are semantically near-identical to
+the 50 seed phrases used to build the class centroids — because both were authored in
+the same session from the same §9.1 / §11 agent-grid vocabulary (the 8M spike §5.1
+admits this "optimism bias" explicitly; Probe 7). This conflation of training and test
+vocabulary inflated the spike accuracy to 14/14. Organic dispatch prompts are ~3×
+longer (median 46 vs 15.5 words) and were authored independently of the seed
+vocabulary. **Generic domain-term density is *not* the differentiator** — it is
+essentially equal between the two sets (spike 0.051 vs organic 0.056 median; Probe 3) —
+so the gap is not token-dilution but the *specific* seed-phrase token overlap that
+spike prompts share and organic prompts do not, compounded by raw length. The centroid
+head's geometry is adequate (median inter-centroid cosine distance 0.58), but organic
+query embeddings land near the centre of the 5-class simplex — their cosine similarities
+to all five centroids are nearly equal — so the softmax collapses to a near-uniform
+distribution on every organic input (entropy > 2.30 on 100% of 168 entries).
+
+The model ceiling (H2) is a plausible compounding factor — the equal-density-yet-near-
+random result points away from pure token-dilution and toward genuine inseparability of
+the five domains in this embedding space. But it is **not confirmed**: #335 compared
+32M to 8M only on the 14-prompt spike set (corpus measurement was explicitly out of
+scope there), so no larger or contextual model has been measured on the organic
+distribution. H1 alone is sufficient to explain the spike-vs-organic *gap*.
 
 ---
 
@@ -56,14 +69,18 @@ H1 alone is sufficient to explain the spike-vs-organic gap.
 Run: `"<worktree>/.venv/Scripts/python.exe" .tmp/probe_353_spike_vs_organic.py`
 (2026-06-13, worktree path confirmed by shadowing guard)
 
-Using the same conceptual prompts described in the spike report §3 gold-label table:
+This probe originally used *reconstructed* approximate prompts (the spike reports do
+not embed full prompt text). The recomputation against the **canonical**
+`SPIKE_GOLD_FOR_EVAL` (`spikes/domain_encoder/_eval.py`, Probe 3 correction) yields the
+same headline — **8/8 deterministic + 6/6 domain-any = 14/14** — so the reproduction
+holds on the canonical prompts, not just the reconstructions.
 
 - **Top-1 accuracy (is_any=False): 8/8 = 100%** — matches the spike's reported 100%.
 - **Domain-any accuracy (entropy > 1.5, is_any=True): 6/6 = 100%** — matches.
 - Spike entropy range: 2.2927–2.3202 bits. Organic entropy range: 2.3095–2.3214 bits.
   Both near-uniform; the spike "accuracy" is not caused by sharper distributions.
 - Spike margin range: 0.005–0.097; organic margin range: 0.0003–0.0450. The spike
-  margins are slightly higher because spike prompts contain more domain-salient tokens.
+  margins are slightly higher because spike prompts share specific seed-phrase tokens.
 
 **Inference:** the spike accuracy reproduces. The classifier code path is correct.
 The 14/14 result is real but driven by something about the test set, not the model.
@@ -79,31 +96,37 @@ The 14/14 result is real but driven by something about the test set, not the mod
 **Inference:** 51.6% vs 48.4% baseline is a 3.2pp lift — statistically indistinguishable
 from chance on this sample size. The encoder is a near-broken-clock on organic prompts.
 
-### Probe 3: Distribution gap (`.tmp/probe_353_spike_vs_organic.py`)
+### Probe 3: Distribution gap (`.tmp/probe_354_canonical.py`)
+
+> Recomputed from the **canonical** `SPIKE_GOLD_FOR_EVAL` prompts in
+> `spikes/domain_encoder/_eval.py` (PR #354 review). The earlier figures came from
+> reconstructed approximate prompts and overstated both gaps.
 
 Prompt length (words):
 
 | Set | Min | Median | Max |
 |-----|-----|--------|-----|
-| Spike P1-P14 | 3 | 9 | 13 |
+| Spike P1-P14 (canonical) | 9 | 15.5 | 29 |
 | Organic (all) | 3 | 34 | 128 |
 | Organic (no-smoke) | 4 | 46 | 128 |
 
-Domain-term density (fraction of tokens in seed-phrase vocabulary):
+Domain-term density (fraction of tokens in the domain-term set):
 
 | Set | Min | Median | Max |
 |-----|-----|--------|-----|
-| Spike P1-P14 | 0.000 | 0.134 | 0.500 |
+| Spike P1-P14 (canonical) | 0.000 | 0.051 | 0.100 |
 | Organic (all) | 0.000 | 0.094 | 0.500 |
 | Organic (no-smoke) | 0.000 | 0.056 | 0.250 |
 
-The no-smoke organic prompts have 2.4× lower domain-term density (0.056 vs 0.134
-median) and 5× longer text. Bag-of-tokens models average over all tokens; more
-non-domain words dilute the domain signal.
+Two corrections vs the original draft: organic no-smoke prompts are **~3× longer**
+(46 vs 15.5 median, not 5×), and **domain-term density is essentially equal**
+(spike 0.051 vs organic 0.056 median) — **not 2.4× lower**, as the reconstructed-prompt
+draft claimed. Generic token-dilution is therefore **not** the mechanism.
 
-**Inference:** organic prompts are substantially different from the spike prompts in
-exactly the dimension the centroid head relies on: the fraction of tokens that are
-domain-salient. This is the primary mechanism of failure.
+**Inference:** the spike and organic sets differ mainly in raw length (~3×) and in the
+*specific* overlap with the hand-authored seed-phrase vocabulary (the spike prompts
+were co-designed with the seeds; Probe 7) — **not** in generic domain-term density. The
+failure mechanism is co-design overlap + length, not dilution by non-domain words.
 
 ### Probe 4: Per-domain accuracy and baseline rates (`.tmp/probe_353_baseline_rate.py`)
 
@@ -188,9 +211,13 @@ from ~52% (the organic number) to 100%.
   dropped; margin-only gate; 118/168 organic entries delegated). Already ruled out
   in the #330 measurement.
 
-- **Model size** — ruled out by #335: 32M produces identical near-uniform distributions
-  (entropy 2.291–2.319 bits), same top-1 accuracy, same margin-gate best-F1 (0.73).
-  Size is not the limiting factor.
+- **Model size** — **NOT ruled out on organic** (corrected, PR #354 review). #335 found
+  32M near-identical to 8M (entropy 2.291–2.319 bits, same top-1 accuracy, same
+  margin-gate best-F1 0.73) — but **only on the 14-prompt P1-P14 spike set**; #335
+  explicitly scoped out corpus measurement, so 32M was **never run on the 168 organic
+  prompts**. On the spike set the two sizes are indistinguishable; on organic, only 8M
+  has been measured (near-random). Whether a larger or contextual model separates the
+  organic domains is an **open question** (Salvage path 2), not a settled one.
 
 ---
 
@@ -199,22 +226,30 @@ from ~52% (the organic number) to 100%.
 ### H1: Curated-distribution mismatch — CONFIRMED (primary cause)
 
 The spike's 14-prompt test set was drawn from the same §9.1/§11 vocabulary used to
-write the seed phrases, inflating accuracy. Organic prompts are 5× longer (median 46
-vs 9 words) and have 2.4× lower domain-term density (0.056 vs 0.134). The decisive
-number: encoder top-1 accuracy on organic non-smoke non-any entries = **51.6% vs
-48.4% majority baseline** — a 3.2pp lift, near-chance.
+write the seed phrases, inflating accuracy (the 8M spike §5.1 admits the co-design
+"optimism bias"; Probe 7). Organic prompts are ~3× longer (median 46 vs 15.5 words)
+and were authored independently of the seed vocabulary. Note: generic domain-term
+density is **essentially equal** (organic 0.056 vs spike 0.051) — **not** a
+differentiator (corrected from the reconstructed-prompt draft); the mismatch is in
+length and *specific* seed-phrase token overlap, not token-dilution. The decisive
+number is unchanged: encoder top-1 accuracy on organic non-smoke non-any entries =
+**51.6% vs 48.4% majority baseline** — a 3.2pp lift, near-chance.
 
-### H2: Model ceiling (potion-base-8M cannot separate domains on short organic text) — CONFIRMED (secondary, compounding)
+### H2: Model ceiling (the model family cannot separate domains on organic text) — PLAUSIBLE, NOT CONFIRMED
 
-The centroid head is geometrically correct, but bag-of-tokens embedding averages over
-all tokens. On longer, more abstract organic phrasing the domain signal is diluted by
-non-domain tokens and the softmax collapses to near-uniform. The 32M model (#335)
-does not escape this (identical near-uniform distributions). This is structural to the
-model family, not fixable by better seed phrases alone.
+The 8M centroid head is geometrically sound, yet organic query embeddings land near
+the simplex centre and the softmax collapses to near-uniform on **100% of 168 organic
+entries**, regardless of length or domain-term density. Because density is equal to the
+spike set yet organic accuracy is near-random, the cause is *not* token-dilution — it
+points toward genuine inseparability of the five domains in this embedding space, which
+is consistent with a model-family ceiling.
 
-Evidence: 100% of 168 organic entries have entropy > 2.30 bits regardless of text
-length, domain-term density, or prompt type. The ceiling is at `log2(5) ≈ 2.322` for
-all organic inputs.
+**But this is not confirmed.** #335 compared 32M to 8M only on the 14-prompt spike set
+(corpus measurement was explicitly out of scope there), so **no larger or contextual
+model has been measured on the organic distribution**. The "32M doesn't escape it"
+claim holds only for the spike set, not organic. Whether a larger/contextual model
+clears the ceiling on organic prompts is the key open question (Salvage path 2). What
+*is* established: 8M is near-random on organic regardless of prompt length or density.
 
 ### H3: Centroid construction (mis-placed centroids) — RULED OUT
 
@@ -229,10 +264,12 @@ in centroid placement.
 **The domain encoder axis is a dead end for short organic dispatch prompts with the
 current model family and seed-phrase approach.**
 
-The specific failure mode is that organic dispatch prompts are substantially longer and
-more abstract than the spike prompts used to validate the approach. A bag-of-tokens
-static model averages diluted domain signal over all tokens; no centroid configuration
-will resolve this without fundamentally more discriminative embeddings.
+The specific failure mode is that organic dispatch prompts — though no less domain-dense
+than the spike prompts — do not share the *specific* seed-phrase token vocabulary the
+centroids were built from, and are ~3× longer. In this static embedding space the five
+domains are not linearly separable on organic phrasing: no centroid configuration
+resolves it without fundamentally more discriminative embeddings. (Whether a larger or
+contextual model *is* more discriminative on organic is untested — see path 2.)
 
 Viable paths forward (ranked by expected cost):
 
@@ -284,10 +321,16 @@ semantic encoder on a test set derived from the same vocabulary as the training 
 ## Reproducibility
 
 Probe scripts:
-- `.tmp/probe_353_spike_vs_organic.py` — spike reproduction, organic distribution, gap quantification, centroid pairwise distances
+- `.tmp/probe_353_spike_vs_organic.py` — spike reproduction (reconstructed prompts), organic distribution, original gap quantification, centroid pairwise distances
+- `.tmp/probe_354_canonical.py` — **PR #354 correction**: recompute spike length/density/accuracy from the canonical `SPIKE_GOLD_FOR_EVAL` (length median 15.5, density 0.051, 14/14)
 - `.tmp/probe_353_centroids.py` — centroid geometry, within-class seed-phrase spread, cross-class overlap
 - `.tmp/probe_353_organic_accuracy.py` — per-domain organic accuracy, length buckets, seed coverage vs accuracy
 - `.tmp/probe_353_baseline_rate.py` — baseline rate analysis, broken-clock confirmation
+
+> Note: the original `probe_353_spike_vs_organic.py` used reconstructed approximate
+> spike prompts; `probe_354_canonical.py` supersedes its length/density figures with the
+> canonical `SPIKE_GOLD_FOR_EVAL` strings. Accuracy (14/14) and all organic numbers are
+> unchanged.
 
 Interpreter: `<worktree>/.venv/Scripts/python.exe` (model2vec 0.8.2, confirmed by shadowing guard).
 Platform: Windows 11 Pro, Python 3.12.13, numpy 2.4.6.
