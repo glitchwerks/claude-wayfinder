@@ -14,8 +14,6 @@ Deferred-fix locks (see issue #364):
 
 from __future__ import annotations
 
-import pytest
-
 from claude_wayfinder.match._cells import (
     ANY_DOMAIN_AGENTS,
     DOMAIN_AGENT_MAP,
@@ -23,7 +21,6 @@ from claude_wayfinder.match._cells import (
     gate_agents,
 )
 from claude_wayfinder.match._types import CatalogEntry, ScoredEntry, Triggers
-
 
 # ---------------------------------------------------------------------------
 # Helpers
