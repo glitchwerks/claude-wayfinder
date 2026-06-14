@@ -496,6 +496,41 @@ def metric_confident_wrong_rate(
 
 
 # ---------------------------------------------------------------------------
+# Metric 7: Routing correctness (RC) — standalone, not in MetricsResult
+# ---------------------------------------------------------------------------
+
+
+def metric_routing_correctness(
+    results: list[SystemResult],
+    labels: dict[int, GoldLabel],
+) -> float:
+    """Compute routing correctness (RC) across all labeled results.
+
+    RC is the fraction of labeled corpus entries where the system's
+    ``agent`` matches the gold ``gold_agent``, regardless of the
+    ``decision`` field value.  A non-delegate result with the correct
+    agent still counts toward RC (decision is irrelevant).
+
+    Returns ``float('nan')`` when no result has a matching label.
+
+    Args:
+        results: System results to evaluate.
+        labels: Gold label dict from ``load_labels()``.
+
+    Returns:
+        RC in [0.0, 1.0] rounded to 4 decimal places, or
+        ``float('nan')`` when no labeled results exist.
+    """
+    labeled = [r for r in results if r.corpus_id in labels]
+    if not labeled:
+        return float("nan")
+    correct = sum(
+        1 for r in labeled if r.agent == labels[r.corpus_id].gold_agent
+    )
+    return round(correct / len(labeled), 4)
+
+
+# ---------------------------------------------------------------------------
 # compute_all_metrics — integration
 # ---------------------------------------------------------------------------
 

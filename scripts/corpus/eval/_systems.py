@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_wayfinder.match._catalog import load_catalog
+from claude_wayfinder.match._cells import cell_map_lookup, gate_agents
 from claude_wayfinder.match._decide import decide
 from claude_wayfinder.match._match import build_features, score_entries
 from claude_wayfinder.match_filters import is_agent_routable
@@ -60,7 +61,7 @@ from claude_wayfinder.posture import (
     extract_vcs_artifact_ref,
 )
 from claude_wayfinder.posture._areas import load_area_map
-from scripts.corpus.eval._reader import CorpusEntry
+from scripts.corpus.eval._reader import CorpusEntry, GoldLabel
 
 # ---------------------------------------------------------------------------
 # §9.1 cell map: posture → preferred agent(s)
@@ -950,5 +951,125 @@ def run_composed(
             agent=agent,
             confidence=confidence,
             extras=extras,
+        ))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# System 5: Supplied-compose (oracle two-axis, issue #363)
+# ---------------------------------------------------------------------------
+
+
+def run_supplied_compose(
+    entries: list[CorpusEntry],
+    catalog_path: Path,
+    labels: dict[int, GoldLabel],
+) -> list[SystemResult]:
+    """System 5: supplied-compose — domain × posture oracle variant.
+
+    Mirrors ``run_oracle_compose`` from the validated probe
+    (``.tmp/oracle_two_axis_probe.py`` lines 401-487).
+
+    Algorithm
+    ---------
+    For each entry:
+
+    1. Look up oracle domain/posture from ``labels`` (``None`` when
+       the entry is unlabeled).
+    2. Run lexical scoring via ``build_features`` + ``score_entries``.
+    3. Apply the domain hard-gate via ``gate_agents`` (from
+       ``claude_wayfinder.match._cells``).
+    4. If ``oracle_posture`` is truthy, look up the preferred agent
+       for ``(domain_for_lookup, oracle_posture)`` via
+       ``cell_map_lookup``.  If that agent is in the gated candidate
+       set AND is a routable catalog agent, delegate to it at
+       confidence 0.9 (``posture_routed=True``).
+    5. Otherwise fall back to ``decide()`` on the gated list
+       (``posture_routed=False``).
+
+    Uses the centralized ``gate_agents``/``cell_map_lookup``/
+    ``DOMAIN_AGENT_MAP`` from ``_cells`` — does NOT replicate gating
+    logic inline.
+
+    Args:
+        entries: Corpus entries to evaluate.
+        catalog_path: Path to the dispatch-catalog JSON file.
+        labels: Gold label dict (corpus_id → GoldLabel); entries
+            absent from this dict are treated as unlabeled.
+
+    Returns:
+        List of ``SystemResult``, one per entry, in input order.
+        Each result's ``extras`` contains:
+
+        - ``"scores"``: top-5 gated agent name → score (rounded to
+          4 decimal places).
+        - ``"oracle_domain"``: domain string from labels, or ``None``.
+        - ``"oracle_posture"``: posture string from labels, or ``None``.
+        - ``"posture_routed"``: ``True`` when posture selected the
+          agent; ``False`` on the fallback path.
+    """
+    catalog = load_catalog(catalog_path)
+    catalog_agent_names: frozenset[str] = frozenset(
+        e.name
+        for e in catalog
+        if e.kind == "agent" and is_agent_routable(
+            name=e.name, kind=e.kind, source=e.source, routable=e.routable
+        )
+    )
+
+    results: list[SystemResult] = []
+    for entry in entries:
+        label = labels.get(entry.corpus_id)
+        oracle_domain: str | None = label.domain if label else None
+        oracle_posture: str | None = label.posture if label else None
+        domain_for_lookup: str = oracle_domain if oracle_domain else "any"
+
+        # Step 1: lexical scoring + domain hard-gate
+        ctx = _entry_to_context(entry)
+        features = build_features(ctx)
+        scored_agents, scored_skills = score_entries(catalog, features)
+
+        # Apply domain gate via the centralized _cells helper
+        gated_agents = gate_agents(scored_agents, oracle_domain)
+
+        # Step 2: posture-based selection within gated candidates
+        posture_routed: bool = False
+        agent_out: str | None = None
+        decision_out: str = "advisory"
+        confidence_out: float = 0.5
+
+        if oracle_posture:
+            preferred = cell_map_lookup(domain_for_lookup, oracle_posture)
+            gated_names = {se.entry.name for se in gated_agents}
+            if (
+                preferred
+                and preferred in gated_names
+                and preferred in catalog_agent_names
+            ):
+                agent_out = preferred
+                decision_out = "delegate"
+                confidence_out = 0.9
+                posture_routed = True
+
+        if not posture_routed:
+            decision_dict = decide(gated_agents, scored_skills, features, catalog)
+            agent_out = decision_dict.get("agent")
+            decision_out = str(decision_dict.get("decision", ""))
+            confidence_out = float(decision_dict.get("confidence", 0.0))
+
+        top_scores = {
+            se.entry.name: round(se.score, 4) for se in gated_agents[:5]
+        }
+        results.append(SystemResult(
+            corpus_id=entry.corpus_id,
+            decision=decision_out,
+            agent=agent_out,
+            confidence=confidence_out,
+            extras={
+                "scores": top_scores,
+                "oracle_domain": oracle_domain,
+                "oracle_posture": oracle_posture,
+                "posture_routed": posture_routed,
+            },
         ))
     return results
