@@ -40,7 +40,11 @@ from pathlib import Path
 from typing import Any
 
 from claude_wayfinder.match._catalog import load_catalog
-from claude_wayfinder.match._cells import cell_map_lookup, gate_agents
+from claude_wayfinder.match._cells import (
+    DOMAIN_AGENT_MAP,
+    cell_map_lookup,
+    gate_agents,
+)
 from claude_wayfinder.match._decide import decide
 from claude_wayfinder.match._match import build_features, score_entries
 from claude_wayfinder.match_filters import is_agent_routable
@@ -1041,9 +1045,25 @@ def run_supplied_compose(
         if oracle_posture:
             preferred = cell_map_lookup(domain_for_lookup, oracle_posture)
             gated_names = {se.entry.name for se in gated_agents}
+            # Bug #366 guard: distinguish genuine gate survivors from the
+            # empty-gate ungated fallback.  gate_agents() falls back to the
+            # full ungated list when gating would produce an empty result.
+            # When that fallback fires, an out-of-domain preferred agent may
+            # appear in gated_names even though the domain gate excludes it.
+            # Fix (Option B): for concretely-gated domains, only consider an
+            # agent a genuine survivor when it is actually in the domain's
+            # allowed set — not merely present in the (possibly fallback) list.
+            domain_allowed = DOMAIN_AGENT_MAP.get(oracle_domain)
+            if domain_allowed is not None:
+                # Concrete gate: genuine survivors are scored AND in allowed.
+                genuine_gated_names = gated_names & domain_allowed
+            else:
+                # No gate (None key or unknown domain): all scored agents
+                # are genuine — no distinction needed.
+                genuine_gated_names = gated_names
             if (
                 preferred
-                and preferred in gated_names
+                and preferred in genuine_gated_names
                 and preferred in catalog_agent_names
             ):
                 agent_out = preferred
