@@ -43,3 +43,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# test_cells.py is a frozen test-implementer artifact (issue #363).
+# The unused `pytest` import and import-sort order are verbatim from the
+# test author and must not be edited; suppress the ruff findings here.
+"tests/test_match/test_cells.py" = ["F401", "I001"]
