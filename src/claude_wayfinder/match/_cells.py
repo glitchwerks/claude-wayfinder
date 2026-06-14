@@ -1,6 +1,6 @@
 """Two-axis routing policy: domain/posture cell map and per-domain agent gates.
 
-Lifted verbatim from the validated probe at ``.tmp/oracle_two_axis_probe.py``.
+Lifted verbatim from the validated probe at ``docs/research/oracle_two_axis_probe.py``.
 The following known gold discrepancies are intentionally NOT fixed here and
 are tracked in issue #364:
 
