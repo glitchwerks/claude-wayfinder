@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import claude_wayfinder.match._decide as _decide_module
 from claude_wayfinder.match._catalog import load_catalog
 from claude_wayfinder.match._cells import (
     DOMAIN_AGENT_MAP,
@@ -572,6 +573,225 @@ def run_lexical(
         results.append(
             _decide_to_system_result(entry.corpus_id, decision_dict, extras)
         )
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Lever B: deterministic code-writer / doc-writer differentiator
+# ---------------------------------------------------------------------------
+
+# Keywords that strongly indicate prose/documentation tasks.
+_DOC_KEYWORDS: frozenset[str] = frozenset({
+    "readme", "changelog", "document", "documentation", "docs", "prose",
+    "markdown", "md", "write up", "write-up", "adr", "spec", "design doc",
+    "release note", "release notes", "api reference", "tutorial",
+    "user guide", "docstring", "annotate", "annotation",
+})
+
+# Keywords that strongly indicate code tasks (code-writer over doc-writer).
+_CODE_KEYWORDS: frozenset[str] = frozenset({
+    "implement", "implementation", "function", "class", "module", "script",
+    "import", "refactor", "debug", "test", "unittest", "pytest", "assert",
+    "def ", "return ", "raise ", "exception", "algorithm", "stub", "mock",
+    "compile", "lint", "type hint", "fix bug", "bug fix",
+})
+
+# File extensions that indicate prose tasks (path-level signal).
+_DOC_EXTENSIONS: frozenset[str] = frozenset({
+    "md", "rst", "txt", "adoc", "tex",
+})
+
+# File extensions that indicate code tasks.
+_CODE_EXTENSIONS: frozenset[str] = frozenset({
+    "py", "js", "ts", "tsx", "jsx", "go", "rs", "java", "cs", "cpp",
+    "c", "h", "rb", "php", "sh", "bash", "zsh",
+})
+
+
+def _code_doc_boost(
+    features: object,
+    scored_agents: list,
+    boost: float = 0.15,
+) -> list:
+    """Apply a deterministic code-writer / doc-writer boost from path/keyword.
+
+    Inspects ``features.extensions``, ``features.paths``, and
+    ``features.raw_keywords`` to determine whether the task leans toward
+    code or prose.  The winning side receives a ``+boost`` lift (capped at
+    1.0) on the relevant agent(s); the losing side is penalised by the
+    same amount (floored at 0.0).  All other agents are untouched.
+
+    This is purely deterministic and label-free — no LLM call, no model.
+
+    Args:
+        features: A ``Features`` namedtuple/dataclass with at minimum
+            ``extensions`` (frozenset[str]), ``paths`` (tuple[str]),
+            and ``raw_keywords`` (frozenset[str]) attributes.
+        scored_agents: List of ``ScoredEntry`` (name + score) as returned
+            by ``score_entries()``.
+        boost: Score delta applied symmetrically (default 0.15).
+
+    Returns:
+        A NEW list of ``ScoredEntry`` objects with adjusted scores, sorted
+        by score descending.  The original list is not mutated.
+    """
+    from dataclasses import replace
+
+    # Gather extension evidence.
+    exts = getattr(features, "extensions", frozenset())
+    doc_ext_hit = bool(exts & _DOC_EXTENSIONS)
+    code_ext_hit = bool(exts & _CODE_EXTENSIONS)
+
+    # Gather raw-keyword evidence (unstemmed; covers exact terms).
+    raw_kws = getattr(features, "raw_keywords", frozenset())
+    task_lower = " ".join(sorted(raw_kws))  # comparable set-based string
+    doc_kw_hit = bool(raw_kws & _DOC_KEYWORDS)
+    code_kw_hit = bool(raw_kws & _CODE_KEYWORDS)
+    # Also check path strings for doc/code indicators.
+    paths_str = " ".join(getattr(features, "paths", ())).lower()
+    if not doc_kw_hit and not doc_ext_hit:
+        doc_kw_hit = any(k in paths_str for k in ("/docs/", "/doc/", ".md"))
+    if not code_kw_hit and not code_ext_hit:
+        code_kw_hit = any(
+            k in paths_str for k in ("/src/", "/lib/", "/tests/", ".py")
+        )
+
+    # Score the signals: each hit = 1 vote.
+    doc_votes = int(doc_ext_hit) + int(doc_kw_hit)
+    code_votes = int(code_ext_hit) + int(code_kw_hit)
+
+    if doc_votes == code_votes:
+        # No net signal — return unchanged.
+        return list(scored_agents)
+
+    favor_doc = doc_votes > code_votes
+
+    adjusted: list = []
+    for se in scored_agents:
+        name = se.entry.name
+        delta = 0.0
+        if name == "doc-writer":
+            delta = boost if favor_doc else -boost
+        elif name == "code-writer":
+            delta = -boost if favor_doc else boost
+        if delta == 0.0:
+            adjusted.append(se)
+        else:
+            new_score = max(0.0, min(1.0, se.score + delta))
+            # ScoredEntry is a dataclass — use replace() to avoid mutation.
+            adjusted.append(replace(se, score=new_score))
+
+    # Re-sort by score descending (stable sort preserves prior order on tie).
+    adjusted.sort(key=lambda x: x.score, reverse=True)
+    # Suppress unused variable from the intermediate string (needed for pyright)
+    _ = task_lower
+    return adjusted
+
+
+# ---------------------------------------------------------------------------
+# Calibrated lexical variant (offline spike only — #374)
+# ---------------------------------------------------------------------------
+
+
+def run_lexical_calibrated(
+    entries: list[CorpusEntry],
+    catalog_path: Path,
+    *,
+    delegate_gap: float = 0.2,
+    delegate_threshold: float = 0.85,
+    advisory_min: float = 0.5,
+    code_doc_boost: float = 0.0,
+) -> list[SystemResult]:
+    """Calibrated lexical baseline with overridable decision thresholds.
+
+    Runs the same pipeline as ``run_lexical`` (``build_features`` →
+    ``score_entries`` → ``decide()``) but temporarily overrides the
+    module-level threshold constants in ``claude_wayfinder.match._decide``
+    for the duration of each call.  The live defaults in ``_decide.py``
+    are **never changed on disk** — this is an offline-only spike
+    variant for #374.
+
+    Optionally applies the deterministic Lever-B code/doc differentiator
+    before the ``decide()`` call (when ``code_doc_boost > 0``).
+
+    The override mechanism uses a try/finally block to guarantee the
+    original values are restored even if ``decide()`` raises.
+
+    Args:
+        entries: Corpus entries to evaluate.
+        catalog_path: Path to the dispatch-catalog JSON file.
+        delegate_gap: Override for ``_DELEGATE_GAP`` (default 0.2 is the
+            live value; sweep candidate range 0.0–0.30).
+        delegate_threshold: Override for ``_DELEGATE_THRESHOLD``
+            (default 0.85 is the live value).
+        advisory_min: Override for ``_ADVISORY_MIN`` (default 0.5 is
+            the live value).
+        code_doc_boost: When > 0, the Lever-B code/doc differentiator
+            is applied before ``decide()``.  A value of 0.15 is
+            recommended (source: #374 sweep).  0.0 disables Lever B.
+
+    Returns:
+        List of ``SystemResult``, one per entry, in input order.
+    """
+    catalog = load_catalog(Path(catalog_path))
+
+    # Snapshot originals so the finally block can restore them.
+    _orig_gap = _decide_module._DELEGATE_GAP
+    _orig_threshold = _decide_module._DELEGATE_THRESHOLD
+    _orig_advisory = _decide_module._ADVISORY_MIN
+
+    results: list[SystemResult] = []
+    try:
+        # Apply threshold overrides to the live module namespace.
+        _decide_module._DELEGATE_GAP = delegate_gap
+        _decide_module._DELEGATE_THRESHOLD = delegate_threshold
+        _decide_module._ADVISORY_MIN = advisory_min
+
+        # Sanity check: verify the override takes effect by probing the
+        # module attribute we just set before any decide() calls.
+        assert _decide_module._DELEGATE_GAP == delegate_gap, (
+            f"Override failed: expected _DELEGATE_GAP={delegate_gap!r}, "
+            f"got {_decide_module._DELEGATE_GAP!r}"
+        )
+
+        for entry in entries:
+            ctx = _entry_to_context(entry)
+            features = build_features(ctx)
+            scored_agents, scored_skills = score_entries(catalog, features)
+
+            # Lever B: optional code/doc differentiator.
+            if code_doc_boost > 0.0:
+                scored_agents = _code_doc_boost(
+                    features, scored_agents, boost=code_doc_boost
+                )
+
+            top_scores = {
+                se.entry.name: round(se.score, 4)
+                for se in scored_agents[:5]
+            }
+            decision_dict = decide(
+                scored_agents, scored_skills, features, catalog
+            )
+            extras = {
+                "scores": top_scores,
+                "calibration": {
+                    "delegate_gap": delegate_gap,
+                    "delegate_threshold": delegate_threshold,
+                    "advisory_min": advisory_min,
+                    "code_doc_boost": code_doc_boost,
+                },
+            }
+            results.append(
+                _decide_to_system_result(
+                    entry.corpus_id, decision_dict, extras
+                )
+            )
+    finally:
+        # Always restore originals — do not leave live code mutated.
+        _decide_module._DELEGATE_GAP = _orig_gap
+        _decide_module._DELEGATE_THRESHOLD = _orig_threshold
+        _decide_module._ADVISORY_MIN = _orig_advisory
+
     return results
 
 
