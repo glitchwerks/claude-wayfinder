@@ -1877,3 +1877,205 @@ class TestFallbackPreferredInCatalogNotGated:
             f"Fallback agent must be from infra_deploy gate or None; "
             f"got agent={results[0].agent!r}"
         )
+
+
+# ===========================================================================
+# Anchor 9 (Bug #366): Empty-gate fallback MUST NOT force-delegate@0.9
+# ===========================================================================
+#
+# ROOT CAUSE (issue #366): gate_agents() falls back to the full ungated list
+# when the gate empties.  In run_supplied_compose the posture-pick guard is:
+#
+#   if preferred and preferred in gated_names and preferred in catalog_agent_names:
+#       posture_routed = True  # delegate@0.9
+#
+# When gate_agents empties and falls back to [code-writer], gated_names =
+# {"code-writer"}.  If cell_map_lookup("infra_deploy","build") → "code-writer"
+# (via ("any","build") fallback), then:
+#   preferred="code-writer" in gated_names={"code-writer"} → TRUE  (BUG)
+#   preferred="code-writer" in catalog_agent_names → TRUE
+# → force-delegates to out-of-domain code-writer@0.9.
+#
+# CORRECT BEHAVIOR: empty-gate fallback must NOT satisfy the guard.
+# The system must NOT set posture_routed=True and must NOT set confidence=0.9;
+# it must fall through to decide() (the normal fallback path).
+#
+# SETUP:
+#   Catalog: code-writer ONLY (no ANY_DOMAIN_AGENTS in catalog).
+#   domain="infra_deploy", posture="build"
+#   infra_deploy gate = {devops} | ANY_DOMAIN_AGENTS
+#     = {devops, investigator, approach-critic, auditor, researcher,
+#        ops, project-planner}
+#   gate_agents([code-writer], "infra_deploy") → empty → fallback → [code-writer]
+#   cell_map_lookup("infra_deploy","build") → None (no direct cell)
+#     then ("any","build") → "code-writer"
+#   So preferred="code-writer" AND gated_names={"code-writer"} (fallback set)
+#   BUG: preferred in gated_names → True → delegate@0.9 to code-writer
+#   EXPECTED: NOT delegate@0.9 — posture_routed must be False, confidence != 0.9
+
+_EMPTY_GATE_ONLY_CODE_WRITER_CATALOG: list[dict[str, Any]] = [
+    # code-writer is the ONLY agent in this catalog.
+    # It is NOT in the infra_deploy gate (gate = {devops} | ANY_DOMAIN_AGENTS).
+    # When gate_agents([code-writer], "infra_deploy") is called, the result
+    # is empty, triggering the ungated fallback that returns [code-writer].
+    # The bug causes this fallback agent to satisfy the posture-pick guard
+    # and be force-delegated at confidence 0.9.
+    {
+        "name": "code-writer",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["code-writer"],
+            "path_globs": ["**/*.py"],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "build", "weight": 0.8},
+                {"term": "deploy", "weight": 0.6},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+]
+
+
+@pytest.fixture()
+def fixture_empty_gate_only_code_writer_catalog_path(tmp_path: Path) -> Path:
+    """Write a single-agent catalog containing only code-writer.
+
+    code-writer is NOT in the infra_deploy domain gate, so gate_agents
+    returns an empty list and falls back to the ungated [code-writer].
+    This is the minimal repro for bug #366: the empty-gate ungated fallback
+    must NOT satisfy the posture-pick guard for an out-of-domain agent.
+    """
+    catalog = {"entries": _EMPTY_GATE_ONLY_CODE_WRITER_CATALOG}
+    path = tmp_path / "empty-gate-code-writer-only.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+class TestEmptyGateFallbackDoesNotDelegateAtNinetyPercent:
+    """Anchor 9 (Bug #366): empty-gate fallback must NOT produce delegate@0.9.
+
+    When gate_agents() returns the ungated list because all candidates were
+    gated out, run_supplied_compose must NOT interpret the ungated fallback
+    list as genuine gate survivors.  The out-of-domain cell winner that
+    appears in gated_names only because of the fallback must NOT trigger
+    the posture-routed delegate@0.9 path.
+
+    Expected behavior: posture_routed=False AND confidence != 0.9.
+    """
+
+    def test_empty_gate_fallback_posture_routed_is_false(
+        self,
+        fixture_empty_gate_only_code_writer_catalog_path: Path,
+    ) -> None:
+        """extras['posture_routed'] is False when gate empties and falls back.
+
+        domain=infra_deploy, posture=build, catalog=[code-writer only].
+        gate_agents([code-writer], "infra_deploy") empties → returns [code-writer].
+        cell_map_lookup("infra_deploy","build") → "code-writer" (any/build).
+        BUG: preferred in gated_names (fallback set) → posture_routed=True.
+        EXPECTED: posture_routed must be False — fallback survivors are not
+        genuine gate survivors.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="build and deploy the service",
+            domain="infra_deploy",
+            posture="build",
+            gold_agent="devops",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_empty_gate_only_code_writer_catalog_path,
+            {1: label},
+        )
+        assert len(results) == 1
+        assert results[0].extras.get("posture_routed") is False, (
+            f"Empty-gate fallback must NOT set posture_routed=True. "
+            f"code-writer is only in gated_names because the gate emptied "
+            f"and fell back to the ungated list. "
+            f"Got posture_routed={results[0].extras.get('posture_routed')!r}"
+        )
+
+    def test_empty_gate_fallback_confidence_is_not_0_9(
+        self,
+        fixture_empty_gate_only_code_writer_catalog_path: Path,
+    ) -> None:
+        """confidence != 0.9 when the empty-gate fallback fires.
+
+        delegate@0.9 is the posture-routed confidence.  An empty-gate
+        fallback must not reach that path, so confidence must differ.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="build and deploy the service",
+            domain="infra_deploy",
+            posture="build",
+            gold_agent="devops",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_empty_gate_only_code_writer_catalog_path,
+            {1: label},
+        )
+        assert results[0].confidence != 0.9, (
+            f"Empty-gate fallback must NOT produce confidence=0.9 "
+            f"(the posture-routed value). "
+            f"Got confidence={results[0].confidence}. "
+            f"This means code-writer was force-delegated via the buggy "
+            f"empty-gate path — it should have taken the decide() fallback."
+        )
+
+    def test_empty_gate_fallback_decision_is_not_delegate_to_out_of_domain_agent(
+        self,
+        fixture_empty_gate_only_code_writer_catalog_path: Path,
+    ) -> None:
+        """Decision must NOT be delegate to code-writer at confidence 0.9.
+
+        The combined assertion: the system must not route (decision=delegate,
+        agent=code-writer, confidence=0.9) when the empty-gate fallback
+        triggered.  Any other outcome (advisory, lower confidence, etc.) is
+        acceptable — the posture-routed path must not have fired.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="build and deploy the service",
+            domain="infra_deploy",
+            posture="build",
+            gold_agent="devops",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_empty_gate_only_code_writer_catalog_path,
+            {1: label},
+        )
+        r = results[0]
+        # The buggy behavior is: decision=delegate, agent=code-writer,
+        # confidence=0.9, posture_routed=True — all four together.
+        # We assert that this specific combination does NOT occur.
+        is_buggy_route = (
+            r.decision == "delegate"
+            and r.agent == "code-writer"
+            and r.confidence == 0.9
+            and r.extras.get("posture_routed") is True
+        )
+        assert not is_buggy_route, (
+            f"Bug #366 reproduced: empty-gate fallback force-delegated to "
+            f"out-of-domain code-writer@0.9 with posture_routed=True. "
+            f"decision={r.decision!r}, agent={r.agent!r}, "
+            f"confidence={r.confidence}, "
+            f"posture_routed={r.extras.get('posture_routed')!r}. "
+            f"Expected: posture_routed=False and confidence != 0.9."
+        )
