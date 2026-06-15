@@ -691,6 +691,222 @@ def _code_doc_boost(
 
 
 # ---------------------------------------------------------------------------
+# Lever B-2: generalised multi-domain lexical boost (#384)
+# ---------------------------------------------------------------------------
+
+# Principled domain signals — derived from generalizable cues, NOT from
+# inspecting which corpus entries are misrouted (#364 trap).
+#
+# Code domain: source-file extensions, VCS paths, and action keywords that
+# appear in any software implementation or test-writing task.
+_CODE_DOMAIN_EXTENSIONS: frozenset[str] = frozenset({
+    "py", "js", "ts", "tsx", "jsx", "go", "rs", "java", "cs", "cpp",
+    "c", "h", "rb", "php", "sh", "bash", "zsh",
+})
+
+_CODE_DOMAIN_PATHS: tuple[str, ...] = (
+    "/src/", "/lib/", "/tests/", "/test/",
+)
+
+_CODE_DOMAIN_KEYWORDS: frozenset[str] = frozenset({
+    "implement", "implementation", "function", "class", "module", "script",
+    "refactor", "debug", "pytest", "unittest", "assert",
+    "compile", "lint", "stub", "mock", "type hint", "bug fix",
+})
+
+# Docs/prose domain: markup extensions, documentation paths, and
+# terminology that uniquely signals a writing or doc-maintenance task.
+_DOCS_PROSE_DOMAIN_EXTENSIONS: frozenset[str] = frozenset({
+    "md", "rst", "txt", "adoc", "tex",
+})
+
+_DOCS_PROSE_DOMAIN_PATHS: tuple[str, ...] = (
+    "/docs/", "/doc/",
+)
+
+_DOCS_PROSE_DOMAIN_KEYWORDS: frozenset[str] = frozenset({
+    "readme", "changelog", "document", "documentation", "docs",
+    "markdown", "adr", "spec", "design doc", "release note",
+    "release notes", "api reference", "tutorial", "user guide",
+    "docstring", "annotate",
+})
+
+# Project-meta domain: issue/PR/milestone nomenclature, planning tools
+# (superpowers/specs/plans), and VCS-meta references.
+_PROJECT_META_DOMAIN_PATHS: tuple[str, ...] = (
+    "docs/", "superpowers/", "specs/", "plans/",
+)
+
+_PROJECT_META_DOMAIN_KEYWORDS: frozenset[str] = frozenset({
+    "issue", "pull request", "pr", "milestone", "scope",
+    "project plan", "roadmap", "sprint", "backlog",
+    "epic", "story", "ticket", "jira", "linear",
+    "vcs", "git history", "git log",
+})
+
+# Infra/deploy domain: infrastructure-as-code extensions, CI-related paths,
+# and deployment tooling keywords.
+_INFRA_DEPLOY_DOMAIN_EXTENSIONS: frozenset[str] = frozenset({
+    "tf", "bicep", "hcl", "yaml", "yml",
+})
+
+_INFRA_DEPLOY_DOMAIN_PATHS: tuple[str, ...] = (
+    ".github/workflows/", "terraform/", "bicep/", "k8s/",
+    "kubernetes/", "helm/", "deploy/",
+)
+
+_INFRA_DEPLOY_DOMAIN_KEYWORDS: frozenset[str] = frozenset({
+    "terraform", "kubectl", "docker", "helm", "deploy",
+    "kubernetes", "azure", "aws", "gcp", "ci/cd", "pipeline",
+    "infrastructure", "provision", "bicep",
+})
+
+# Map domain label → set of agents that receive +boost when that domain
+# is inferred.  Reuses DOMAIN_AGENT_MAP from _cells for consistency.
+# NB: we only boost the *specific* domain agents (not ANY_DOMAIN_AGENTS)
+# so boost stays discriminative.
+_DOMAIN_BOOST_AGENTS: dict[str, frozenset[str]] = {
+    "code": frozenset({"code-writer", "debugger", "code-reviewer"}),
+    "docs_prose": frozenset({"doc-writer"}),
+    "project_meta": frozenset({"project-reviewer", "project-planner"}),
+    "infra_deploy": frozenset({"devops"}),
+}
+
+
+def _infer_domain(features: object) -> str | None:
+    """Lexically infer domain from task features.
+
+    Uses principled extension/path/keyword signals — NOT corpus-mined.
+    Applies the same vote system as ``_code_doc_boost`` but generalised
+    to all four trackable domains.
+
+    Args:
+        features: A ``Features`` namedtuple with ``extensions``
+            (frozenset[str]), ``paths`` (tuple[str]), and
+            ``raw_keywords`` (frozenset[str]) attributes.
+
+    Returns:
+        Domain label string (``"code"``, ``"docs_prose"``,
+        ``"project_meta"``, ``"infra_deploy"``) or ``None`` when no
+        domain wins decisively (tied or no signal).
+    """
+    exts = getattr(features, "extensions", frozenset())
+    raw_kws = getattr(features, "raw_keywords", frozenset())
+    paths_str = " ".join(getattr(features, "paths", ())).lower()
+
+    def _path_hit(needles: tuple[str, ...]) -> bool:
+        return any(n in paths_str for n in needles)
+
+    def _votes(
+        ext_set: frozenset[str],
+        path_needles: tuple[str, ...],
+        kw_set: frozenset[str],
+    ) -> int:
+        return (
+            int(bool(exts & ext_set))
+            + int(_path_hit(path_needles))
+            + int(bool(raw_kws & kw_set))
+        )
+
+    scores: dict[str, int] = {
+        "code": _votes(
+            _CODE_DOMAIN_EXTENSIONS,
+            _CODE_DOMAIN_PATHS,
+            _CODE_DOMAIN_KEYWORDS,
+        ),
+        "docs_prose": _votes(
+            _DOCS_PROSE_DOMAIN_EXTENSIONS,
+            _DOCS_PROSE_DOMAIN_PATHS,
+            _DOCS_PROSE_DOMAIN_KEYWORDS,
+        ),
+        "project_meta": _votes(
+            frozenset(),  # no distinctive file extensions
+            _PROJECT_META_DOMAIN_PATHS,
+            _PROJECT_META_DOMAIN_KEYWORDS,
+        ),
+        "infra_deploy": _votes(
+            _INFRA_DEPLOY_DOMAIN_EXTENSIONS,
+            _INFRA_DEPLOY_DOMAIN_PATHS,
+            _INFRA_DEPLOY_DOMAIN_KEYWORDS,
+        ),
+    }
+
+    best_domain = max(scores, key=lambda d: scores[d])
+    best_score = scores[best_domain]
+    if best_score == 0:
+        return None  # no signal at all
+
+    # Tie: two or more domains share the top score — no discrimination.
+    runners = [d for d, s in scores.items() if s == best_score]
+    if len(runners) > 1:
+        return None
+
+    return best_domain
+
+
+def _domain_boost(
+    features: object,
+    scored_agents: list,
+    boost: float = 0.20,
+) -> list:
+    """Apply a deterministic multi-domain lexical boost from path/keyword.
+
+    Generalisation of ``_code_doc_boost`` to four trackable domains:
+    ``code``, ``docs_prose``, ``project_meta``, ``infra_deploy``.
+
+    Infers the task's domain via ``_infer_domain()`` (principled ext +
+    path + keyword votes), then boosts agents in that domain's set and
+    penalises agents in all *competing* domain sets by the same amount.
+    Agents shared across domains (``ANY_DOMAIN_AGENTS``) are untouched.
+
+    The symmetric ±boost / floor-0 / cap-1 / re-sort structure mirrors
+    ``_code_doc_boost`` exactly so the two can be compared head-to-head.
+
+    Args:
+        features: A ``Features`` namedtuple with ``extensions``,
+            ``paths``, and ``raw_keywords`` attributes.
+        scored_agents: List of ``ScoredEntry`` from ``score_entries()``.
+        boost: Score delta applied symmetrically (default 0.20).
+
+    Returns:
+        A NEW list of ``ScoredEntry`` objects with adjusted scores,
+        sorted by score descending.  The original list is not mutated.
+        Returns an unchanged copy when no domain is inferred.
+    """
+    from dataclasses import replace
+
+    inferred = _infer_domain(features)
+    if inferred is None:
+        return list(scored_agents)
+
+    favored = _DOMAIN_BOOST_AGENTS.get(inferred, frozenset())
+    # All agents in other domains' sets are penalised.
+    penalised: frozenset[str] = frozenset().union(
+        *(agents for dom, agents in _DOMAIN_BOOST_AGENTS.items()
+          if dom != inferred)
+    )
+
+    adjusted: list = []
+    for se in scored_agents:
+        name = se.entry.name
+        if name in favored:
+            delta = boost
+        elif name in penalised:
+            delta = -boost
+        else:
+            delta = 0.0
+
+        if delta == 0.0:
+            adjusted.append(se)
+        else:
+            new_score = max(0.0, min(1.0, se.score + delta))
+            adjusted.append(replace(se, score=new_score))
+
+    adjusted.sort(key=lambda x: x.score, reverse=True)
+    return adjusted
+
+
+# ---------------------------------------------------------------------------
 # Calibrated lexical variant (offline spike only — #374)
 # ---------------------------------------------------------------------------
 
@@ -703,6 +919,7 @@ def run_lexical_calibrated(
     delegate_threshold: float = 0.85,
     advisory_min: float = 0.5,
     code_doc_boost: float = 0.0,
+    domain_boost: float = 0.0,
 ) -> list[SystemResult]:
     """Calibrated lexical baseline with overridable decision thresholds.
 
@@ -714,7 +931,9 @@ def run_lexical_calibrated(
     variant for #374.
 
     Optionally applies the deterministic Lever-B code/doc differentiator
-    before the ``decide()`` call (when ``code_doc_boost > 0``).
+    before the ``decide()`` call (when ``code_doc_boost > 0``), and/or
+    the generalised multi-domain Lever-B2 boost (when ``domain_boost > 0``).
+    Only one boost should be non-zero per run to keep measurements clean.
 
     The override mechanism uses a try/finally block to guarantee the
     original values are restored even if ``decide()`` raises.
@@ -728,9 +947,13 @@ def run_lexical_calibrated(
             (default 0.85 is the live value).
         advisory_min: Override for ``_ADVISORY_MIN`` (default 0.5 is
             the live value).
-        code_doc_boost: When > 0, the Lever-B code/doc differentiator
+        code_doc_boost: When > 0, the Lever-B code/doc discriminator
             is applied before ``decide()``.  A value of 0.15 is
             recommended (source: #374 sweep).  0.0 disables Lever B.
+        domain_boost: When > 0, the generalised multi-domain Lever-B2
+            discriminator (``_domain_boost``) is applied before
+            ``decide()``.  Mutually exclusive with ``code_doc_boost``
+            for clean measurement.  0.0 disables Lever B-2.
 
     Returns:
         List of ``SystemResult``, one per entry, in input order.
@@ -761,10 +984,16 @@ def run_lexical_calibrated(
             features = build_features(ctx)
             scored_agents, scored_skills = score_entries(catalog, features)
 
-            # Lever B: optional code/doc differentiator.
+            # Lever B: optional code/doc discriminator (Config 1).
             if code_doc_boost > 0.0:
                 scored_agents = _code_doc_boost(
                     features, scored_agents, boost=code_doc_boost
+                )
+
+            # Lever B-2: optional multi-domain discriminator (Config 2).
+            if domain_boost > 0.0:
+                scored_agents = _domain_boost(
+                    features, scored_agents, boost=domain_boost
                 )
 
             top_scores = {
@@ -781,6 +1010,7 @@ def run_lexical_calibrated(
                     "delegate_threshold": delegate_threshold,
                     "advisory_min": advisory_min,
                     "code_doc_boost": code_doc_boost,
+                    "domain_boost": domain_boost,
                 },
             }
             results.append(
