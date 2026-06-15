@@ -312,13 +312,31 @@ if (require.main === module) {
 
         const debug = process.env.DISPATCH_HOOK_DEBUG === "1";
         if (debug) {
-          // Write full payload dump to a temp file for live contract verification.
-          // Router/user: after running a real dispatch, cat this file to verify
-          // the tool_response field name and shape.
+          // Write full payload dump to a PRIVATE directory for live contract
+          // verification.  Payloads contain prompt excerpts; they must NOT land
+          // in the world-readable shared /tmp.
+          //
+          // Directory resolution (defense-in-depth):
+          //   1. CLAUDE_PLUGIN_DATA env var when set and non-empty (test / CI override).
+          //   2. ~/.claude/state/wayfinder-debug (user-private fallback).
+          //
+          // The directory is created with mode 0o700 (owner-only, ignored on Windows
+          // where the redirect itself provides privacy — %TEMP% is per-user).
+          // The file is written with mode 0o600 AND an explicit chmodSync immediately
+          // after, because create-mode is masked by the process umask on POSIX.
           try {
-            const dumpDir = os.tmpdir();
+            const pluginDataEnv = process.env.CLAUDE_PLUGIN_DATA;
+            const dumpDir =
+              pluginDataEnv && pluginDataEnv.trim() !== ""
+                ? pluginDataEnv
+                : path.join(os.homedir(), ".claude", "state", "wayfinder-debug");
+            fs.mkdirSync(dumpDir, { recursive: true, mode: 0o700 });
             const dumpFile = path.join(dumpDir, `dispatch-hook-payload-${Date.now()}.json`);
-            fs.writeFileSync(dumpFile, JSON.stringify(input, null, 2), "utf8");
+            const dumpData = JSON.stringify(input, null, 2);
+            fs.writeFileSync(dumpFile, dumpData, { encoding: "utf8", mode: 0o600 });
+            // Explicit chmod enforces 0600 on POSIX regardless of umask.
+            // On Windows this is a partial no-op; the redirect already provides privacy.
+            fs.chmodSync(dumpFile, 0o600);
             process.stderr.write(
               `[log-dispatch-decision] DEBUG payload dump: ${dumpFile}\n`
             );
