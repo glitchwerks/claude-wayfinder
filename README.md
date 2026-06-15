@@ -277,38 +277,42 @@ When `$DISPATCH_OVERRIDES_PATH` is unset, scored matching runs unchanged. On loa
 
 ## Privacy / local logs
 
-Logging is opt-in and writes nothing unless you set `DISPATCH_LOG_PATH`.
+There are two independent writers of the dispatch log.
 
-When `DISPATCH_LOG_PATH` is set, the matcher appends one `matcher_decision` JSON row per dispatch to that file (conventionally `~/.claude/state/dispatch-log.jsonl`). Each row contains:
+**Writer 1 — Python matcher (opt-in).** When `DISPATCH_LOG_PATH` is set, `_resolve_log_path` in `src/claude_wayfinder/match/_catalog.py` appends one `matcher_decision` JSON row per dispatch to that path. When the env var is unset, `_resolve_log_path` returns `None` immediately and no write occurs — there is no `~/.claude/` fallback on this path. Each row contains:
 
 - `type: "matcher_decision"`, `ts` (UTC timestamp), `session_id`
 - `input` — the full dispatch context, including `task_description` (a prompt excerpt), `file_paths`, `agent_mentions`, `tool_mentions`, and `command_prefix`
 - `output` — the decision: `decision`, `agent`, `confidence`, `rationale`, `alternatives`
 - `catalog_hash`, `matcher_version`, `override_id`
 
-When `DISPATCH_LOG_PATH` is unset, no log file is written and no `~/.claude/` fallback is used on the write path (`_resolve_log_path` in `src/claude_wayfinder/match/_catalog.py` returns `None` immediately). The `health` read tooling uses a separate env var (`DISPATCH_LOG`) to locate the file for analysis; the two names do not need to match unless you want `health` to read the same path you are writing.
+**Writer 2 — PostToolUse hook (default-on).** The `PostToolUse(Bash) → log-dispatch-decision.js` entry in `hooks/hooks.json` fires after every real `claude_wayfinder dispatch` Bash call whenever the plugin is installed. Its `resolveLogPath()` (`hooks/log-dispatch-decision.js`) uses `DISPATCH_LOG_PATH` when set, but falls back to `~/.claude/state/dispatch-log.jsonl` when the env var is absent. The hook-written row is a `matcher_decision` entry that includes the extracted dispatch input context (including the prompt excerpt) plus a populated `session_id` and `attribution_source: "post_tool_use_hook"`. This means **prompt context is recorded by default for any installed user**, even when `DISPATCH_LOG_PATH` is unset.
 
-**Debug payload dumps.** When `DISPATCH_HOOK_DEBUG=1`, the `log-dispatch-decision` hook writes a full JSON payload dump (the complete hook input, which contains a prompt excerpt) to a private directory:
+Setting `DISPATCH_LOG_PATH` controls where the hook writes, not whether it writes. There is no env-var opt-out for the hook.
+
+The `health` read tooling uses a separate env var (`DISPATCH_LOG`) to locate the log for analysis; the two names do not need to match unless you want `health` to read the same path you are writing.
+
+**Debug payload dumps.** When `DISPATCH_HOOK_DEBUG=1`, the hook writes a full JSON payload dump (the complete hook input, which contains a prompt excerpt) to a private directory:
 
 1. `$CLAUDE_PLUGIN_DATA` if set and non-empty.
 2. `~/.claude/state/wayfinder-debug/` otherwise.
 
 The directory is created with `0700` permissions and each dump file is written with `0600` (owner-only) — the file is not placed in a world-readable shared directory.
 
-**How to disable:**
+**How to disable hook logging:**
+
+Unsetting `DISPATCH_LOG_PATH` stops the opt-in Python matcher write and relocates the hook write back to `~/.claude/state/dispatch-log.jsonl` — it does not stop the hook from writing. To fully disable local dispatch logging, remove or disable the `PostToolUse(Bash) → log-dispatch-decision.js` entry in `hooks/hooks.json`.
 
 ```bash
-# Stop the matcher from writing log rows (default when unset):
-unset DISPATCH_LOG_PATH
-
-# Suppress debug payload dumps (default when unset):
+# Suppress debug payload dumps only (default when unset):
 unset DISPATCH_HOOK_DEBUG
 ```
 
 **How to clear the log:**
 
 ```bash
-rm ~/.claude/state/dispatch-log.jsonl   # or whatever DISPATCH_LOG_PATH points at
+rm ~/.claude/state/dispatch-log.jsonl   # default hook path when DISPATCH_LOG_PATH is unset
+rm "$DISPATCH_LOG_PATH"                 # if you have set a custom path
 ```
 
 ## What's next
