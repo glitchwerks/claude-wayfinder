@@ -543,24 +543,38 @@ def extract_area_span(
     ctx: PostureContext,
     *,
     area_map: dict[str, list[str]],
+    host_condition: bool,
 ) -> ExtractorResult:
     """E7: Count distinct project areas spanned by file_paths.
 
     Tier A (structured-field modifier) — pure function.  The caller
-    must supply a pre-loaded ``area_map`` (from ``_areas.load_area_map``);
-    this function never reads the filesystem.
+    must supply a pre-loaded ``area_map`` (from ``_areas.load_area_map``)
+    and the ``host_condition`` flag indicating whether E1 (stacktrace) or
+    E2 (test-failure) fired; this function never reads the filesystem.
+
+    E7 is a modifier: it refines an already-active diagnose context per
+    §10/§11. Posture evidence is only emitted when the diagnose host is
+    active (``host_condition=True``).  The span count is always preserved
+    in ``result.fired`` so downstream callers (``_area_span_count``) can
+    read ``int(e7.fired)`` regardless of ``host_condition``.
 
     Inside a diagnose context (E1/E2 fired): span ≤ 1 hints debugger;
-    span ≥ 2 hints investigator.  The count is surfaced as
-    ``result.fired`` for downstream composition logic.
+    span ≥ 2 hints investigator.  Without an active host, posture evidence
+    is suppressed to avoid misrouting plain build/verify tasks (#347).
 
     Args:
         ctx: The dispatch context.
         area_map: Pre-loaded project area → globs mapping.
+        host_condition: True when E1 (stacktrace_block) or E2
+            (test_failure_output) has fired in the same dispatch.
+            Controls whether diagnose evidence is emitted.
 
     Returns:
-        ExtractorResult with fired=<span count> when file_paths non-empty;
-        fired=False when no paths present.
+        ExtractorResult with ``fired``=<span count> (int) when
+        ``file_paths`` non-empty and at least one area matched;
+        ``fired``=False when no paths present or span == 0.
+        ``evidence`` carries diagnose weight only when
+        ``host_condition=True``; empty otherwise.
     """
     from claude_wayfinder.posture._areas import count_distinct_areas
 
@@ -571,7 +585,11 @@ def extract_area_span(
     if span == 0:
         return ExtractorResult(fired=False, tier="A", evidence=[])
 
-    # Emit diagnose evidence with weight reflecting span size.
+    # Emit diagnose evidence only when the host context (E1/E2) is active.
+    # The span count is always returned in fired for downstream consumers.
+    if not host_condition:
+        return ExtractorResult(fired=span, tier="A", evidence=[])
+
     weight_class = "strong" if span >= 2 else "weak"
     return ExtractorResult(
         fired=span,

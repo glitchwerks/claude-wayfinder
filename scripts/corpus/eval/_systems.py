@@ -258,10 +258,12 @@ def _run_all_extractors(
     e6 = extract_cause_stated(ctx, host_condition=host_condition)
 
     # E7: area span — pass area_map or use None (extractor handles default)
-    # E7 requires a non-None area_map; load coarse default when not provided
+    # E7 requires a non-None area_map; load coarse default when not provided.
+    # host_condition is the same E1/E2 gate computed for E6 (both share the
+    # diagnose host — §10/§11).
     if area_map is None:
         area_map = load_area_map(Path("."))
-    e7 = extract_area_span(ctx, area_map=area_map)
+    e7 = extract_area_span(ctx, area_map=area_map, host_condition=host_condition)
 
     # E8: command prefix
     e8 = extract_command_prefix(ctx)
