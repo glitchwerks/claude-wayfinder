@@ -125,6 +125,49 @@ class TestSpikeExtractorFires:
             f" got fired={result.fired}. Notes: {spike_record['notes']}"
         )
 
+    def test_area_span_fires(self, spike_record: dict[str, Any]) -> None:
+        """E7 area_span fired-count correct per §12.1 when host E1/E2 active."""
+        from claude_wayfinder.posture._extractors import (
+            extract_area_span,
+            extract_stacktrace_block,
+            extract_test_failure_output,
+        )
+
+        # E7 is a host-conditioned modifier: only active when E1 or E2 fired
+        ctx = _ctx_from_record(spike_record)
+        e1 = extract_stacktrace_block(ctx)
+        e2 = extract_test_failure_output(ctx)
+        host_fired = bool(e1.fired) or bool(e2.fired)
+
+        area_map = {
+            "code": ["src/**"],
+            "infra": [".github/**", "infra/**"],
+        }
+        result = extract_area_span(
+            ctx, area_map=area_map, host_condition=host_fired
+        )
+        # When host is inactive, fired still carries span count (or False);
+        # when host is active, evidence is populated.
+        # For records without area_span in expected_fires, just verify
+        # type and tier invariants.
+        if "area_span" in spike_record["expected_fires"]:
+            expected = spike_record["expected_fires"]["area_span"]
+            assert bool(result.fired) == bool(expected), (
+                f"{spike_record['id']}: area_span expected fired={expected},"
+                f" got fired={result.fired}. Notes: {spike_record['notes']}"
+            )
+        # Invariant: tier is always "A"
+        assert result.tier == "A", (
+            f"{spike_record['id']}: area_span tier must be 'A',"
+            f" got {result.tier!r}"
+        )
+        # Invariant: evidence empty iff host_condition=False or no span
+        if not host_fired:
+            assert result.evidence == [], (
+                f"{spike_record['id']}: area_span must not emit evidence"
+                f" when host_condition=False (#347)"
+            )
+
     def test_command_prefix_ext_fires(self, spike_record: dict[str, Any]) -> None:
         """E8 command_prefix fires/abstains per §12.1."""
         from claude_wayfinder.posture._extractors import extract_command_prefix
@@ -611,10 +654,20 @@ class TestExtractCauseStated:
 
 
 class TestExtractAreaSpan:
-    """E7 area_span: Tier A modifier, splits diagnose between debugger/investigator."""
+    """E7 area_span: Tier A modifier, gates diagnose on host_condition (#347).
 
-    def test_fires_on_span_two_areas(self) -> None:
-        """E7 fires with span=2 (P14: code + infra)."""
+    E7 is a modifier: it only contributes diagnose evidence when a host
+    context (E1 stacktrace OR E2 test-failure) is active.  The span count
+    is always preserved in ``fired`` so downstream callers (``_area_span_count``)
+    can read ``int(e7.fired)`` regardless of ``host_condition``.
+    """
+
+    # ------------------------------------------------------------------
+    # host_condition=True — evidence gates open
+    # ------------------------------------------------------------------
+
+    def test_host_true_span_two_emits_strong_evidence(self) -> None:
+        """host_condition=True + span=2 → evidence==[('diagnose','strong')]."""
         from claude_wayfinder.posture import PostureContext
         from claude_wayfinder.posture._extractors import extract_area_span
 
@@ -626,15 +679,15 @@ class TestExtractAreaSpan:
             "code": ["src/**"],
             "infra": [".github/**", "infra/**"],
         }
-        result = extract_area_span(ctx, area_map=area_map)
-        # E7 returns fired=<span count> (int), not bool
-        assert bool(result.fired) is True
+        result = extract_area_span(
+            ctx, area_map=area_map, host_condition=True
+        )
         assert result.tier == "A"
-        # fired value is the span count
-        assert result.fired >= 2
+        assert result.fired == 2
+        assert result.evidence == [("diagnose", "strong")]
 
-    def test_fires_with_span_one(self) -> None:
-        """E7 fires with span=1 (single area → debugger side)."""
+    def test_host_true_span_one_emits_weak_evidence(self) -> None:
+        """host_condition=True + span=1 → evidence==[('diagnose','weak')]."""
         from claude_wayfinder.posture import PostureContext
         from claude_wayfinder.posture._extractors import extract_area_span
 
@@ -646,33 +699,131 @@ class TestExtractAreaSpan:
             "code": ["src/**"],
             "infra": [".github/**"],
         }
-        result = extract_area_span(ctx, area_map=area_map)
-        assert bool(result.fired)
+        result = extract_area_span(
+            ctx, area_map=area_map, host_condition=True
+        )
         assert result.fired == 1
+        assert result.evidence == [("diagnose", "weak")]
 
-    def test_does_not_fire_with_no_paths(self) -> None:
-        """E7 does not fire when file_paths is empty."""
+    # ------------------------------------------------------------------
+    # host_condition=False — evidence gate closed (#347 regression)
+    # ------------------------------------------------------------------
+
+    def test_host_false_span_two_fired_preserved_no_evidence_issue_347(
+        self,
+    ) -> None:
+        """host_condition=False + span=2 → fired==2 AND evidence==[].
+
+        Regression for #347: E7 must NOT leak diagnose evidence when no
+        host context (E1/E2) is active.  The span COUNT (fired=2) is
+        preserved so downstream _area_span_count callers keep working.
+        """
+        from claude_wayfinder.posture import PostureContext
+        from claude_wayfinder.posture._extractors import extract_area_span
+
+        ctx = PostureContext(
+            task_description="Build the deploy pipeline.",
+            file_paths=("src/api/client.py", ".github/workflows/deploy.yml"),
+        )
+        area_map = {
+            "code": ["src/**"],
+            "infra": [".github/**", "infra/**"],
+        }
+        result = extract_area_span(
+            ctx, area_map=area_map, host_condition=False
+        )
+        assert result.tier == "A"
+        # fired carries the span count for downstream consumers
+        assert result.fired == 2
+        # the core contract: NO diagnose evidence without a host context
+        assert result.evidence == [], (
+            "E7 must not emit diagnose evidence when host_condition=False"
+            " (#347: spurious diagnose leak misroutes build/verify tasks)"
+        )
+
+    def test_host_false_span_one_fired_preserved_no_evidence(self) -> None:
+        """host_condition=False + span=1 → fired==1 AND evidence==[]."""
+        from claude_wayfinder.posture import PostureContext
+        from claude_wayfinder.posture._extractors import extract_area_span
+
+        ctx = PostureContext(
+            task_description="Refactor the handler.",
+            file_paths=("src/handler.py",),
+        )
+        area_map = {"code": ["src/**"], "infra": [".github/**"]}
+        result = extract_area_span(
+            ctx, area_map=area_map, host_condition=False
+        )
+        assert result.tier == "A"
+        assert result.fired == 1
+        assert result.evidence == []
+
+    # ------------------------------------------------------------------
+    # Zero-span — no fire regardless of host_condition
+    # ------------------------------------------------------------------
+
+    def test_does_not_fire_with_no_paths_host_true(self) -> None:
+        """E7 does not fire when file_paths is empty, even host_condition=True."""
         from claude_wayfinder.posture import PostureContext
         from claude_wayfinder.posture._extractors import extract_area_span
 
         ctx = PostureContext(task_description="What's wrong?")
-        result = extract_area_span(ctx, area_map={"code": ["src/**"]})
+        result = extract_area_span(
+            ctx, area_map={"code": ["src/**"]}, host_condition=True
+        )
         assert result.fired is False
+        assert result.evidence == []
 
-    def test_pure_no_fs_access(self, tmp_path: pytest.TempdirFactory) -> None:
-        """E7 extractor function takes area_map parameter — never reads filesystem."""
+    def test_does_not_fire_with_no_paths_host_false(self) -> None:
+        """E7 does not fire when file_paths is empty and host_condition=False."""
         from claude_wayfinder.posture import PostureContext
         from claude_wayfinder.posture._extractors import extract_area_span
 
-        # Passing area_map explicitly: no filesystem read can happen inside
+        ctx = PostureContext(task_description="What's wrong?")
+        result = extract_area_span(
+            ctx, area_map={"code": ["src/**"]}, host_condition=False
+        )
+        assert result.fired is False
+        assert result.evidence == []
+
+    # ------------------------------------------------------------------
+    # Required-param contract — mirrors E6.host_condition
+    # ------------------------------------------------------------------
+
+    def test_missing_host_condition_raises_type_error(self) -> None:
+        """Calling without host_condition raises TypeError (required kwarg).
+
+        Locks the E6-mirror contract: callers MUST supply host_condition
+        so the library enforces the gate rather than relying on an
+        external compensating filter.
+        """
+        from claude_wayfinder.posture import PostureContext
+        from claude_wayfinder.posture._extractors import extract_area_span
+
+        ctx = PostureContext(
+            task_description="CI failure.",
+            file_paths=("src/app.py",),
+        )
+        with pytest.raises(TypeError):
+            extract_area_span(ctx, area_map={"code": ["src/**"]})  # type: ignore[call-arg]
+
+    # ------------------------------------------------------------------
+    # Purity — no filesystem access inside the extractor
+    # ------------------------------------------------------------------
+
+    def test_pure_no_fs_access(self, tmp_path: pytest.TempdirFactory) -> None:
+        """E7 takes area_map param and never reads the filesystem."""
+        from claude_wayfinder.posture import PostureContext
+        from claude_wayfinder.posture._extractors import extract_area_span
+
         ctx = PostureContext(
             task_description="CI failure.",
             file_paths=("src/app.py",),
         )
         area_map = {"code": ["src/**"]}
-        result = extract_area_span(ctx, area_map=area_map)
-        # Just verifying it runs without any I/O (if it reads fs, the test
-        # environment has no such file and would produce wrong results)
+        result = extract_area_span(
+            ctx, area_map=area_map, host_condition=True
+        )
         assert isinstance(result.fired, (bool, int))
 
 
@@ -1020,8 +1171,12 @@ class TestDeterminism:
             file_paths=("src/api/client.py", ".github/workflows/deploy.yml"),
         )
         area_map = {"code": ["src/**"], "infra": [".github/**"]}
-        results = [extract_area_span(ctx, area_map=area_map) for _ in range(3)]
+        results = [
+            extract_area_span(ctx, area_map=area_map, host_condition=True)
+            for _ in range(3)
+        ]
         assert all(r.fired == results[0].fired for r in results)
+        assert all(r.evidence == results[0].evidence for r in results)
 
     def test_deterministic_frame_markers(self) -> None:
         """E10 frame_markers returns identical results on repeated calls."""
