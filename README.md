@@ -275,6 +275,42 @@ A minimal two-rule file covering the two most common predicates (substitute your
 
 When `$DISPATCH_OVERRIDES_PATH` is unset, scored matching runs unchanged. On load failure, `[OVERRIDES ERROR]` is emitted to stderr and the matcher falls back to scoring. For the full predicate vocabulary, audit rules, telemetry schema, and design rationale, see [`docs/dispatch-overrides.md`](docs/dispatch-overrides.md).
 
+## Privacy / local logs
+
+Logging is opt-in and writes nothing unless you set `DISPATCH_LOG_PATH`.
+
+When `DISPATCH_LOG_PATH` is set, the matcher appends one `matcher_decision` JSON row per dispatch to that file (conventionally `~/.claude/state/dispatch-log.jsonl`). Each row contains:
+
+- `type: "matcher_decision"`, `ts` (UTC timestamp), `session_id`
+- `input` — the full dispatch context, including `task_description` (a prompt excerpt), `file_paths`, `agent_mentions`, `tool_mentions`, and `command_prefix`
+- `output` — the decision: `decision`, `agent`, `confidence`, `rationale`, `alternatives`
+- `catalog_hash`, `matcher_version`, `override_id`
+
+When `DISPATCH_LOG_PATH` is unset, no log file is written and no `~/.claude/` fallback is used on the write path (`_resolve_log_path` in `src/claude_wayfinder/match/_catalog.py` returns `None` immediately). The `health` read tooling uses a separate env var (`DISPATCH_LOG`) to locate the file for analysis; the two names do not need to match unless you want `health` to read the same path you are writing.
+
+**Debug payload dumps.** When `DISPATCH_HOOK_DEBUG=1`, the `log-dispatch-decision` hook writes a full JSON payload dump (the complete hook input, which contains a prompt excerpt) to a private directory:
+
+1. `$CLAUDE_PLUGIN_DATA` if set and non-empty.
+2. `~/.claude/state/wayfinder-debug/` otherwise.
+
+The directory is created with `0700` permissions and each dump file is written with `0600` (owner-only) — the file is not placed in a world-readable shared directory.
+
+**How to disable:**
+
+```bash
+# Stop the matcher from writing log rows (default when unset):
+unset DISPATCH_LOG_PATH
+
+# Suppress debug payload dumps (default when unset):
+unset DISPATCH_HOOK_DEBUG
+```
+
+**How to clear the log:**
+
+```bash
+rm ~/.claude/state/dispatch-log.jsonl   # or whatever DISPATCH_LOG_PATH points at
+```
+
 ## What's next
 
 If you want to use the matcher for real routing in your own Claude Code setup, there are two paths:

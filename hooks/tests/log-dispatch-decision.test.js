@@ -763,3 +763,106 @@ test("issue #311: catalog_hash null when decision omits it (pre-fix guard)", () 
   );
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #345 security: DISPATCH_HOOK_DEBUG dump must land in a private dir
+//
+// CONTRACT ASSUMPTION this test verifies:
+//   When DISPATCH_HOOK_DEBUG=1, the hook writes the payload dump to the
+//   directory specified by CLAUDE_PLUGIN_DATA (or the ~/.claude/state/wayfinder-debug
+//   fallback), NOT to os.tmpdir(). This is the cross-platform-observable
+//   assertion: the redirect is testable on all platforms including Windows.
+//
+// On POSIX: additionally asserts the dump file has no group/other read bits
+//   (mode & 0o077 === 0). This assertion is gated on process.platform !== "win32"
+//   because Windows chmod is a partial no-op (the redirect provides privacy there).
+//
+// Breaking-test discipline: run with pre-fix code (dump goes to os.tmpdir())
+//   → this test FAILS because the dump file is not found under CLAUDE_PLUGIN_DATA.
+// ---------------------------------------------------------------------------
+
+test("issue #345: DISPATCH_HOOK_DEBUG dump lands in CLAUDE_PLUGIN_DATA, not os.tmpdir()", () => {
+  // Use a fresh temp dir as the private plugin data dir.
+  // Must be distinct from os.tmpdir() — the test asserts the file is NOT in tmpdir
+  // directly (it may be a subdir of tmpdir, which is fine; the key is the file
+  // must be inside CLAUDE_PLUGIN_DATA, not a flat child of os.tmpdir()).
+  const privateDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "345-plugin-data-"));
+  try {
+    const payload = {
+      tool_name: "Bash",
+      tool_input: { command: DISPATCH_COMMAND },
+      tool_response: makeToolResponse(JSON.stringify(SAMPLE_DECISION)),
+      session_id: SAMPLE_SESSION_ID,
+    };
+
+    const result = runHook(payload, {
+      DISPATCH_HOOK_DEBUG: "1",
+      CLAUDE_PLUGIN_DATA: privateDataDir,
+      // No DISPATCH_LOG_PATH — we don't care about the normal log for this test.
+    });
+    assert.equal(result.status, 0, "hook must exit 0 with debug enabled: " + result.stderr);
+
+    // The stderr must contain the dump path announcement.
+    assert.ok(
+      result.stderr.includes("[log-dispatch-decision] DEBUG payload dump:"),
+      "stderr must contain dump path announcement"
+    );
+
+    // Parse the dump file path from stderr.
+    const dumpPathMatch = result.stderr.match(/DEBUG payload dump: (.+\.json)/);
+    assert.ok(
+      dumpPathMatch !== null,
+      "must be able to parse dump path from stderr: " + result.stderr
+    );
+    const dumpFile = dumpPathMatch[1].trim();
+
+    // PRIMARY ASSERTION (cross-platform): dump file is inside CLAUDE_PLUGIN_DATA.
+    // path.relative() returns a path that doesn't start with ".." iff dumpFile
+    // is under privateDataDir.
+    const rel = path.relative(privateDataDir, dumpFile);
+    assert.ok(
+      !rel.startsWith("..") && !path.isAbsolute(rel),
+      `dump file must be under CLAUDE_PLUGIN_DATA (${privateDataDir}), got: ${dumpFile}`
+    );
+
+    // PRIMARY ASSERTION (cross-platform): dump file must NOT be a direct child of
+    // os.tmpdir(). (privateDataDir is a subdirectory of tmpdir, so the file is
+    // transitively inside tmpdir — that's fine. The vuln was writing directly to
+    // tmpdir/<filename>.json, world-readable on POSIX. We check the immediate parent.)
+    const dumpParent = path.dirname(path.resolve(dumpFile));
+    const resolvedTmpdir = path.resolve(os.tmpdir());
+    assert.ok(
+      dumpParent !== resolvedTmpdir,
+      `dump file must NOT be a direct child of os.tmpdir() — found: ${dumpFile}. ` +
+      "Pre-fix behavior: fs.writeFileSync to os.tmpdir() is world-readable on POSIX."
+    );
+
+    // SECONDARY ASSERTION (POSIX only): file mode must have no group/other access bits.
+    // On Windows, chmod is a partial no-op; the redirect to a per-user dir provides
+    // the privacy guarantee instead.
+    if (process.platform !== "win32") {
+      assert.ok(
+        fs.existsSync(dumpFile),
+        "dump file must exist on POSIX to check permissions"
+      );
+      const stat = fs.statSync(dumpFile);
+      const otherBits = stat.mode & 0o077;
+      assert.equal(
+        otherBits,
+        0,
+        `dump file must have no group/other access bits (0600); got mode ${(stat.mode & 0o777).toString(8)}`
+      );
+    }
+
+    // Sanity check: dump file is valid JSON and contains the hook's input payload.
+    const dumpContent = JSON.parse(fs.readFileSync(dumpFile, "utf8"));
+    assert.equal(
+      dumpContent.session_id,
+      SAMPLE_SESSION_ID,
+      "dump must contain the hook's input payload (session_id mismatch)"
+    );
+  } finally {
+    // Always clean up the private dir, even if the test fails.
+    fs.rmSync(privateDataDir, { recursive: true, force: true });
+  }
+});
