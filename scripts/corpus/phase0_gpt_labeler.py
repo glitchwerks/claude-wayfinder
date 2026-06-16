@@ -32,7 +32,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 ALLOWED_DOMAINS: frozenset[str] = frozenset(
-    {"code", "infra_deploy", "data", "docs_prose", "project_meta"}
+    {"code", "infra_deploy", "data", "docs_prose", "project_meta", "is_any"}
 )
 
 ALLOWED_POSTURES: frozenset[str] = frozenset(
@@ -58,7 +58,7 @@ using the rubric below. Output ONLY one JSON object per task, one per line,
 nothing else.
 
 ALLOWED VALUES (use only these exact strings):
-  domain: code | infra_deploy | data | docs_prose | project_meta
+  domain: code | infra_deploy | data | docs_prose | project_meta | is_any
   posture: build | diagnose | assess | critique | verify | plan | research | operate
 
 DOMAIN RULES:
@@ -70,16 +70,31 @@ DOMAIN RULES:
 - project_meta: issue/PR scope, project planning, spec/plan file paths,
   VCS metadata, GitHub/VCS state operations (issue queries, PR queries and
   writes, repo metadata, CI status checks) -- even with no file paths
+- is_any: conversational tasks, simple lookups or questions, explanations with
+  NO domain-bearing file paths or artifacts (e.g. "what does X do",
+  "explain Y", "how does Z work", "summarize this"). Use when no concrete
+  domain evidence is present.
 
 POSTURE RULES (apply in order; first match wins):
-1. operate: non-null command_prefix, OR VCS-command shape (git/gh commands)
+1. operate: non-null command_prefix, OR VCS-command shape (git/gh commands),
+   OR natural-language GitHub/VCS state operations -- listing, reading,
+   querying, or checking GitHub issues, PRs, CI status, commits, repo
+   metadata, merge state, or milestone/label state -- even with no command
+   shape and no file paths.
+   CRITICAL BOUNDARY: "operate" requires NO review/critique intent.
+   A bare PR status/CI check = operate. "Review PR #N diff" or
+   "critique the approach" = assess or critique, NOT operate.
 2. diagnose: machine-emitted failure output in prompt (stacktrace, test-runner
    summary like "FAILED tests/...", compiler diagnostic, panic:) AND cause not
    stated (no causal connective like "after/because/due to/caused by/since/
    introduced by" in the same clause as the failure)
    EXCEPTION: if cause IS stated in same clause as failure -> posture = build
-3. assess: PR URL, diff hunk, or "PR #N" reference present; OR tool_mentions
-   includes get_pull_request*
+3. assess: explicit review/critique intent on a PR diff, code review of a PR,
+   or reading PR change-request feedback to evaluate it. Signals: tool_mentions
+   includes get_pull_request* AND task asks to evaluate/review the content;
+   OR task explicitly asks to "review", "assess", "evaluate" a PR's diff or
+   change-request feedback. A bare PR state check (is it open? CI status?
+   unresolved comments count?) is operate, NOT assess.
 4. verify: two or more distinct artifact references PLUS relational conformance
    marker ("consistent with", "matches", "conforms to", "drifted from", etc.)
 5. critique: challenge-frame markers (adversarial/harsh review) AND either
@@ -93,6 +108,7 @@ POSTURE RULES (apply in order; first match wins):
 
 SPECIAL RULES:
 - GitHub/VCS state operations -> domain: project_meta (even without file paths)
+- Conversational/no-evidence tasks with no domain signal -> domain: is_any
 - agent_mentions non-empty with directive intent: output domain/posture from
   prompt evidence; ignore agent_mentions for the domain/posture classification
 - Harness config files (agents/**/*.md, CLAUDE.md): label domain/posture from
@@ -101,7 +117,7 @@ SPECIAL RULES:
 
 OUTPUT FORMAT (strict):
 One JSON object per input entry, on its own line, NOTHING else:
-{{"corpus_id": <int>, "domain": "<one of the 5 values>", "posture": "<one of the 8 values>"}}
+{{"corpus_id": <int>, "domain": "<one of the 6 values>", "posture": "<one of the 8 values>"}}
 
 ENTRIES TO LABEL:
 {entries_json}
