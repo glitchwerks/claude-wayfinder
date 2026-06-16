@@ -111,10 +111,7 @@ before burning labeler tokens.
 
 The `codex exec --sandbox read-only -` calls consistently returned:
 ```
-ERROR: You've hit your usage limit. Upgrade to Pro
-(https://chatgpt.com/explore/pro), visit
-https://chatgpt.com/codex/settings/usage to purchase more credits or
-try again at Jun 18th, 2026 8:01 AM.
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Jun 18th, 2026 8:01 AM.
 ```
 
 All 7 batch calls failed identically. This is an account-level rate limit
