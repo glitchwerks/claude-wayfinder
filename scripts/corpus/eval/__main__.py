@@ -69,13 +69,15 @@ from scripts.corpus.eval._systems import (  # noqa: E402
     run_lexical,
     run_supplied_compose,
 )
-from scripts.corpus.phase0_failure_decomposition import (  # noqa: E402
-    _SMOKE_DESCRIPTIONS,
-)
 
 # ---------------------------------------------------------------------------
 # Cut helpers
 # ---------------------------------------------------------------------------
+
+_SMOKE_DESCRIPTIONS: frozenset[str] = frozenset({
+    "update the docs",
+    "implement the new module",
+})
 
 
 def identify_smoke_ids(entries: list[CorpusEntry]) -> frozenset[int]:
