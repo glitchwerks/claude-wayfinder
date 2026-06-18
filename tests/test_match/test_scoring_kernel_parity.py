@@ -4,11 +4,15 @@ Two test classes:
 
 ``TestGoldenEquivalence``
     Runs ``python -m claude_wayfinder dispatch`` in single-mode and
-    batch-mode via subprocess and asserts STDOUT is byte-identical to
-    committed golden snapshots.  Covers four decision branches:
-    ``delegate``, ``advisory`` (tie), ``self_handle``, and
-    ``self_handle_unaided``.  These must pass on the *current* code
-    (characterisation) and must stay byte-identical after the refactor.
+    batch-mode via subprocess and asserts STDOUT content matches committed
+    golden snapshots.  Covers four decision branches: ``delegate``,
+    ``advisory`` (tie), ``self_handle``, and ``self_handle_unaided``.
+
+    The ``matcher_version`` field is the git HEAD SHA — it changes with
+    every commit and is therefore excluded from content comparison; the
+    tests assert it is present and non-empty separately.  All other fields
+    are compared verbatim.  These characterise current behavior and must
+    stay identical after the refactor.
 
 ``TestKernelParity``
     Builds a fixture catalog that deliberately includes score ties (two
@@ -43,52 +47,74 @@ _DEMO_CATALOG_PATH = (
 )
 
 # ---------------------------------------------------------------------------
-# Golden snapshot (committed, byte-stable)
+# Golden snapshot (committed, content-stable)
 # Single-mode stdout for the four representative dispatch contexts,
 # captured at merge-base 2ad8fe9 against demo-catalog.json.
+#
+# NOTE: ``matcher_version`` is the git HEAD SHA — it changes with every
+# commit and is therefore excluded from content comparison.  Tests assert
+# (a) all other fields match the golden dict exactly and (b)
+# ``matcher_version`` is present and non-empty.  The catalog_hash is
+# content-addressed and stable so long as demo-catalog.json is unchanged.
 # ---------------------------------------------------------------------------
 
-#: decision=delegate — code-writer scores 0.9 (keyword + glob)
-_GOLDEN_SINGLE_DELEGATE = (
-    '{"agent": "code-writer", "alternatives": [], '
-    '"catalog_hash": "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b", '
-    '"confidence": 0.9, "decision": "delegate", '
-    '"disposition_source": "scored", "matcher_version": "2ad8fe9", '
-    '"rationale": "matched keywords: implement; globs: **/*.py.", "skills": []}'
+_CATALOG_HASH = (
+    "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b"
 )
+
+#: decision=delegate — code-writer scores 0.9 (keyword + glob)
+_GOLDEN_SINGLE_DELEGATE: dict[str, Any] = {
+    "agent": "code-writer",
+    "alternatives": [],
+    "catalog_hash": _CATALOG_HASH,
+    "confidence": 0.9,
+    "decision": "delegate",
+    "disposition_source": "scored",
+    "rationale": "matched keywords: implement; globs: **/*.py.",
+    "skills": [],
+}
 
 #: decision=advisory (tie) — both agents score 0.5
-_GOLDEN_SINGLE_ADVISORY_TIE = (
-    '{"agent": "code-writer", "alternatives": [{"agent": "devops", "score": 0.5}], '
-    '"catalog_hash": "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b", '
-    '"confidence": 0.5, "decision": "advisory", '
-    '"disposition_source": "scored", "matcher_version": "2ad8fe9", '
-    '"rationale": "Best agent \'code-writer\' scores 0.50 (gap=0.00 from next); '
-    'top pick recommended, alternatives close behind.", "skills": []}'
-)
+_GOLDEN_SINGLE_ADVISORY_TIE: dict[str, Any] = {
+    "agent": "code-writer",
+    "alternatives": [{"agent": "devops", "score": 0.5}],
+    "catalog_hash": _CATALOG_HASH,
+    "confidence": 0.5,
+    "decision": "advisory",
+    "disposition_source": "scored",
+    "rationale": (
+        "Best agent 'code-writer' scores 0.50 (gap=0.00 from next); "
+        "top pick recommended, alternatives close behind."
+    ),
+    "skills": [],
+}
 
 #: decision=self_handle_unaided — no agent or skill above threshold
-_GOLDEN_SINGLE_SELF_HANDLE_UNAIDED = (
-    '{"alternatives": [], '
-    '"catalog_hash": "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b", '
-    '"confidence": 0.0, "decision": "self_handle_unaided", '
-    '"disposition_source": "scored", "matcher_version": "2ad8fe9", '
-    '"rationale": "No agent or skill scored above threshold; '
-    'proceeding without delegation or skill activation."}'
-)
+_GOLDEN_SINGLE_SELF_HANDLE_UNAIDED: dict[str, Any] = {
+    "alternatives": [],
+    "catalog_hash": _CATALOG_HASH,
+    "confidence": 0.0,
+    "decision": "self_handle_unaided",
+    "disposition_source": "scored",
+    "rationale": (
+        "No agent or skill scored above threshold; "
+        "proceeding without delegation or skill activation."
+    ),
+}
 
 #: decision=self_handle — python skill attaches, no dominant agent
-_GOLDEN_SINGLE_SELF_HANDLE = (
-    '{"alternatives": [], '
-    '"catalog_hash": "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b", '
-    '"confidence": 0.75, "decision": "self_handle", '
-    '"disposition_source": "scored", "matcher_version": "2ad8fe9", '
-    '"rationale": "No dominant agent; routing to self with skills: python", '
-    '"skills": ["python"]}'
-)
+_GOLDEN_SINGLE_SELF_HANDLE: dict[str, Any] = {
+    "alternatives": [],
+    "catalog_hash": _CATALOG_HASH,
+    "confidence": 0.75,
+    "decision": "self_handle",
+    "disposition_source": "scored",
+    "rationale": "No dominant agent; routing to self with skills: python",
+    "skills": ["python"],
+}
 
-# Ordered list of (context, expected_stdout_line) pairs for single-mode golden.
-_SINGLE_MODE_CASES: list[tuple[dict[str, Any], str]] = [
+# Ordered list of (context, expected_fields) pairs for single-mode golden.
+_SINGLE_MODE_CASES: list[tuple[dict[str, Any], dict[str, Any]]] = [
     (
         {
             "task_description": "implement the authentication module",
@@ -131,59 +157,19 @@ _SINGLE_MODE_CASES: list[tuple[dict[str, Any], str]] = [
     ),
 ]
 
-# Golden batch output — same 4 inputs sent as NDJSON, each line has input_index.
-_GOLDEN_BATCH_LINES = [
-    (
-        '{"agent": "code-writer", "alternatives": [], '
-        '"catalog_hash": "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b", '  # noqa: E501
-        '"confidence": 0.9, "decision": "delegate", '
-        '"disposition_source": "scored", "input_index": 0, '
-        '"matcher_version": "2ad8fe9", '
-        '"rationale": "matched keywords: implement; globs: **/*.py.", "skills": []}'
-    ),
-    (
-        '{"agent": "code-writer", "alternatives": [{"agent": "devops", "score": 0.5}], '
-        '"catalog_hash": "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b", '  # noqa: E501
-        '"confidence": 0.5, "decision": "advisory", '
-        '"disposition_source": "scored", "input_index": 1, '
-        '"matcher_version": "2ad8fe9", '
-        '"rationale": "Best agent \'code-writer\' scores 0.50 (gap=0.00 from next); '
-        'top pick recommended, alternatives close behind.", "skills": []}'
-    ),
-    (
-        '{"alternatives": [], '
-        '"catalog_hash": "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b", '  # noqa: E501
-        '"confidence": 0.0, "decision": "self_handle_unaided", '
-        '"disposition_source": "scored", "input_index": 2, '
-        '"matcher_version": "2ad8fe9", '
-        '"rationale": "No agent or skill scored above threshold; '
-        'proceeding without delegation or skill activation."}'
-    ),
-    (
-        '{"alternatives": [], '
-        '"catalog_hash": "sha256:c686b84fc555076559aebe577d461bb7f47b149fb8ace00377395b05520fc81b", '  # noqa: E501
-        '"confidence": 0.75, "decision": "self_handle", '
-        '"disposition_source": "scored", "input_index": 3, '
-        '"matcher_version": "2ad8fe9", '
-        '"rationale": "No dominant agent; routing to self with skills: python", '
-        '"skills": ["python"]}'
-    ),
-]
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _run_dispatch_single(context: dict[str, Any]) -> str:
-    """Run dispatch in single mode and return stripped stdout.
+def _run_dispatch_single(context: dict[str, Any]) -> dict[str, Any]:
+    """Run dispatch in single mode and return parsed JSON output.
 
     Args:
         context: Dispatch context dict to serialise as stdin JSON.
 
     Returns:
-        Single stdout line with trailing whitespace stripped.
+        Parsed JSON object from stdout.
     """
     env = {**os.environ, "DISPATCH_CATALOG_PATH": str(_DEMO_CATALOG_PATH)}
     env.pop("DISPATCH_LOG_PATH", None)
@@ -196,17 +182,20 @@ def _run_dispatch_single(context: dict[str, Any]) -> str:
         encoding="utf-8",
         env=env,
     )
-    return result.stdout.strip()
+    return json.loads(result.stdout.strip())
 
 
-def _run_dispatch_batch(contexts: list[dict[str, Any]]) -> list[str]:
-    """Run dispatch in batch mode and return list of stripped stdout lines.
+def _run_dispatch_batch(
+    contexts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Run dispatch in batch mode and return list of parsed JSON outputs.
 
     Args:
-        contexts: Ordered list of dispatch context dicts to serialise as NDJSON.
+        contexts: Ordered list of dispatch context dicts to serialise
+            as NDJSON.
 
     Returns:
-        List of non-empty output lines with trailing whitespace stripped.
+        List of parsed JSON objects from stdout (one per non-empty line).
     """
     ndjson = "\n".join(json.dumps(ctx) for ctx in contexts) + "\n"
     env = {**os.environ, "DISPATCH_CATALOG_PATH": str(_DEMO_CATALOG_PATH)}
@@ -220,7 +209,26 @@ def _run_dispatch_batch(contexts: list[dict[str, Any]]) -> list[str]:
         encoding="utf-8",
         env=env,
     )
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [
+        json.loads(line.strip())
+        for line in result.stdout.splitlines()
+        if line.strip()
+    ]
+
+
+def _without_matcher_version(d: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``d`` with ``matcher_version`` removed.
+
+    ``matcher_version`` is the git HEAD SHA and changes with each commit;
+    it must be excluded from golden comparisons to avoid false failures.
+
+    Args:
+        d: Parsed dispatch output dict.
+
+    Returns:
+        Copy of ``d`` without the ``matcher_version`` key.
+    """
+    return {k: v for k, v in d.items() if k != "matcher_version"}
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +256,9 @@ def _make_catalog_entry(
     """
     from claude_wayfinder.match._parse import _parse_triggers
 
-    kw_dicts = [{"term": t, "weight": 1.0, "no_stem": True} for t in (keywords or [])]
+    kw_dicts = [
+        {"term": t, "weight": 1.0, "no_stem": True} for t in (keywords or [])
+    ]
     triggers_raw: dict[str, Any] = {
         "command_prefixes": [],
         "agent_mentions": [],
@@ -276,12 +286,15 @@ def _make_catalog_entry(
 
 
 class TestGoldenEquivalence:
-    """Dispatch stdout must be byte-identical to the committed golden snapshot.
+    """Dispatch stdout content must match the committed golden snapshot.
 
     These tests characterise the current behavior at merge-base 2ad8fe9.
     After the scoring-kernel dedup refactor (Issue #389) the output must
-    remain byte-identical — if any test fails post-refactor, the refactor
-    has changed observable behavior and must be reverted.
+    remain identical — if any test fails post-refactor, the refactor has
+    changed observable behavior and must be reverted.
+
+    ``matcher_version`` (git HEAD SHA) is excluded from comparison; all
+    other fields are compared verbatim against the golden dicts.
     """
 
     @pytest.mark.parametrize(
@@ -292,41 +305,64 @@ class TestGoldenEquivalence:
     def test_single_mode_output_is_golden(
         self,
         context: dict[str, Any],
-        expected: str,
+        expected: dict[str, Any],
     ) -> None:
-        """Single-mode stdout must be byte-identical to the golden snapshot.
+        """Single-mode stdout content must match the golden snapshot.
+
+        Compares all fields except ``matcher_version`` (git HEAD SHA, which
+        changes each commit).  Separately asserts ``matcher_version`` is
+        present and non-empty.
 
         Args:
             context: Dispatch context sent to stdin.
-            expected: Expected exact stdout line from the golden snapshot.
+            expected: Expected field values from the golden snapshot
+                (must NOT include ``matcher_version``).
         """
         actual = _run_dispatch_single(context)
-        assert actual == expected, (
+        assert "matcher_version" in actual, (
+            f"matcher_version missing from output: {actual!r}"
+        )
+        assert actual["matcher_version"], (
+            f"matcher_version is empty: {actual!r}"
+        )
+        actual_content = _without_matcher_version(actual)
+        assert actual_content == expected, (
             f"Single-mode dispatch output differs from golden snapshot.\n"
             f"expected: {expected!r}\n"
-            f"actual  : {actual!r}"
+            f"actual  : {actual_content!r}"
         )
 
     def test_batch_mode_output_is_golden(self) -> None:
-        """Batch-mode stdout must be byte-identical to the golden snapshot.
+        """Batch-mode stdout content must match the golden snapshot.
 
-        Sends all four contexts as NDJSON and checks each output line
-        against the committed golden batch lines.
+        Sends all four contexts as NDJSON and checks each output object
+        against the committed golden single-mode dicts plus the expected
+        ``input_index``.  ``matcher_version`` is excluded from comparison.
         """
         contexts = [ctx for ctx, _ in _SINGLE_MODE_CASES]
-        actual_lines = _run_dispatch_batch(contexts)
-        assert len(actual_lines) == len(_GOLDEN_BATCH_LINES), (
-            f"Batch output line count mismatch: "
-            f"expected {len(_GOLDEN_BATCH_LINES)}, got {len(actual_lines)}.\n"
-            f"actual lines: {actual_lines}"
+        actual_outputs = _run_dispatch_batch(contexts)
+        assert len(actual_outputs) == len(_SINGLE_MODE_CASES), (
+            f"Batch output count mismatch: "
+            f"expected {len(_SINGLE_MODE_CASES)}, got {len(actual_outputs)}.\n"
+            f"actual: {actual_outputs}"
         )
-        for i, (actual, expected) in enumerate(
-            zip(actual_lines, _GOLDEN_BATCH_LINES)
+        for i, (actual, (_, golden)) in enumerate(
+            zip(actual_outputs, _SINGLE_MODE_CASES)
         ):
-            assert actual == expected, (
+            assert "matcher_version" in actual, (
+                f"Line {i}: matcher_version missing from output: {actual!r}"
+            )
+            assert actual["matcher_version"], (
+                f"Line {i}: matcher_version is empty: {actual!r}"
+            )
+            # Batch output adds input_index; merge it with the single-mode
+            # golden so the comparison is complete.
+            expected = {**golden, "input_index": i}
+            actual_content = _without_matcher_version(actual)
+            assert actual_content == expected, (
                 f"Batch output line {i} differs from golden snapshot.\n"
                 f"expected: {expected!r}\n"
-                f"actual  : {actual!r}"
+                f"actual  : {actual_content!r}"
             )
 
 
@@ -347,13 +383,14 @@ class TestKernelParity:
     def tie_entries(self) -> list[CatalogEntry]:
         """Catalog with deliberate ties: agents 'alpha-agent'/'beta-agent'
         at equal keyword scores, skills 'alpha-skill'/'beta-skill' at equal
-        keyword scores, plus an unroutable router agent that must be excluded.
+        keyword scores, plus an unroutable router agent that must be
+        excluded.
 
         Returns:
             List of :class:`CatalogEntry` instances.
         """
         return [
-            # Two agents with the same keyword trigger → identical scores.
+            # Two agents with the same keyword trigger — identical scores.
             _make_catalog_entry(
                 "beta-agent", "agent", keywords=["deploy"], routable=True
             ),
@@ -364,13 +401,9 @@ class TestKernelParity:
             _make_catalog_entry(
                 "router", "agent", keywords=["deploy"], routable=False
             ),
-            # Two skills with the same keyword trigger → identical scores.
-            _make_catalog_entry(
-                "beta-skill", "skill", keywords=["deploy"]
-            ),
-            _make_catalog_entry(
-                "alpha-skill", "skill", keywords=["deploy"]
-            ),
+            # Two skills with the same keyword trigger — identical scores.
+            _make_catalog_entry("beta-skill", "skill", keywords=["deploy"]),
+            _make_catalog_entry("alpha-skill", "skill", keywords=["deploy"]),
         ]
 
     @pytest.fixture()
@@ -378,7 +411,7 @@ class TestKernelParity:
         """Features for a context that matches the 'deploy' keyword.
 
         Args:
-            tie_entries: Unused — kept for fixture ordering clarity.
+            tie_entries: Unused; kept for fixture ordering clarity.
 
         Returns:
             A :class:`Features` instance.
@@ -411,7 +444,7 @@ class TestKernelParity:
             Tuple of ``(scored_agents, scored_skills)``.
         """
         from claude_wayfinder.match._match import score
-        from claude_wayfinder.match._types import ScoredEntry
+        from claude_wayfinder.match._types import ScoredEntry as _SE
         from claude_wayfinder.match_filters import is_agent_routable
 
         agent_entries = [
@@ -428,11 +461,11 @@ class TestKernelParity:
         skill_entries = [e for e in entries if e.kind == "skill"]
 
         scored_agents: list[ScoredEntry] = sorted(
-            [ScoredEntry(entry=e, score=score(e, features)) for e in agent_entries],
+            [_SE(entry=e, score=score(e, features)) for e in agent_entries],
             key=lambda se: (-se.score, se.entry.name),
         )
         scored_skills: list[ScoredEntry] = sorted(
-            [ScoredEntry(entry=e, score=score(e, features)) for e in skill_entries],
+            [_SE(entry=e, score=score(e, features)) for e in skill_entries],
             key=lambda se: (-se.score, se.entry.name),
         )
         return scored_agents, scored_skills
@@ -452,7 +485,7 @@ class TestKernelParity:
             Tuple of ``(scored_agents, scored_skills)``.
         """
         from claude_wayfinder.match._match import score
-        from claude_wayfinder.match._types import ScoredEntry
+        from claude_wayfinder.match._types import ScoredEntry as _SE
         from claude_wayfinder.match_filters import is_agent_routable
 
         agent_entries = [
@@ -468,12 +501,12 @@ class TestKernelParity:
         ]
         skill_entries = [e for e in entries if e.kind == "skill"]
 
-        scored_agents = sorted(
-            [ScoredEntry(entry=e, score=score(e, features)) for e in agent_entries],
+        scored_agents: list[ScoredEntry] = sorted(
+            [_SE(entry=e, score=score(e, features)) for e in agent_entries],
             key=lambda se: (-se.score, se.entry.name),
         )
-        scored_skills = sorted(
-            [ScoredEntry(entry=e, score=score(e, features)) for e in skill_entries],
+        scored_skills: list[ScoredEntry] = sorted(
+            [_SE(entry=e, score=score(e, features)) for e in skill_entries],
             key=lambda se: (-se.score, se.entry.name),
         )
         return scored_agents, scored_skills
@@ -488,14 +521,15 @@ class TestKernelParity:
         This mirrors the pre-refactor code at _dispatch.py:622-629.
 
         Args:
-            entries: Catalog entries (agent_entries/skill_entries pre-split).
+            entries: Catalog entries (agent_entries/skill_entries
+                pre-split outside the per-input loop in the original).
             features: Extracted features.
 
         Returns:
             Tuple of ``(scored_agents, scored_skills)``.
         """
         from claude_wayfinder.match._match import score
-        from claude_wayfinder.match._types import ScoredEntry
+        from claude_wayfinder.match._types import ScoredEntry as _SE
         from claude_wayfinder.match_filters import is_agent_routable
 
         # The dispatch batch loop pre-splits OUTSIDE the per-input loop.
@@ -513,11 +547,11 @@ class TestKernelParity:
         skill_entries = [e for e in entries if e.kind == "skill"]
 
         scored_agents: list[Any] = sorted(
-            [ScoredEntry(entry=e, score=score(e, features)) for e in agent_entries],
+            [_SE(entry=e, score=score(e, features)) for e in agent_entries],
             key=lambda se: (-se.score, se.entry.name),
         )
         scored_skills: list[Any] = sorted(
-            [ScoredEntry(entry=e, score=score(e, features)) for e in skill_entries],
+            [_SE(entry=e, score=score(e, features)) for e in skill_entries],
             key=lambda se: (-se.score, se.entry.name),
         )
         return scored_agents, scored_skills
@@ -568,11 +602,12 @@ class TestKernelParity:
         scored_agents, _ = score_entries(tie_entries, tie_features)
         agent_names = self._names(scored_agents)
         assert "router" not in agent_names, (
-            f"Unroutable 'router' agent leaked into scored_agents: {agent_names}"
+            f"Unroutable 'router' agent leaked into scored_agents: "
+            f"{agent_names}"
         )
         assert len(scored_agents) == 2, (
-            f"Expected exactly 2 routable agents, got {len(scored_agents)}: "
-            f"{agent_names}"
+            f"Expected exactly 2 routable agents, got "
+            f"{len(scored_agents)}: {agent_names}"
         )
 
     def test_main_matches_score_entries(
@@ -631,7 +666,9 @@ class TestKernelParity:
         canonical_agents, canonical_skills = score_entries(
             tie_entries, tie_features
         )
-        cli_agents, cli_skills = self._score_via_cli(tie_entries, tie_features)
+        cli_agents, cli_skills = self._score_via_cli(
+            tie_entries, tie_features
+        )
 
         assert self._names(cli_agents) == self._names(canonical_agents), (
             f"cli.py agent order differs from score_entries().\n"
