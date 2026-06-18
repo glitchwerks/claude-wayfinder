@@ -29,7 +29,7 @@ from claude_wayfinder.match import (
     build_features,
     decide,
     load_catalog,
-    score,
+    score_entries,
 )
 from claude_wayfinder.match._catalog import _resolve_overrides_path
 from claude_wayfinder.match._overrides import (
@@ -37,7 +37,6 @@ from claude_wayfinder.match._overrides import (
     load_overrides,
     resolve_override,
 )
-from claude_wayfinder.match_filters import is_agent_routable
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -81,30 +80,7 @@ def _score_catalog(
         A tuple of ``(scored_agents, scored_skills)`` each sorted by score
         descending then name ascending.
     """
-    from claude_wayfinder.match import ScoredEntry
-
-    agent_entries = [
-        e
-        for e in entries
-        if e.kind == "agent"
-        and is_agent_routable(
-            name=e.name,
-            kind=e.kind,
-            source=e.source,
-            routable=e.routable,
-        )
-    ]
-    skill_entries = [e for e in entries if e.kind == "skill"]
-
-    scored_agents = sorted(
-        [ScoredEntry(entry=e, score=score(e, features)) for e in agent_entries],
-        key=lambda se: (-se.score, se.entry.name),
-    )
-    scored_skills = sorted(
-        [ScoredEntry(entry=e, score=score(e, features)) for e in skill_entries],
-        key=lambda se: (-se.score, se.entry.name),
-    )
-    return scored_agents, scored_skills
+    return score_entries(entries, features)
 
 
 def _format_decision(result: dict[str, Any]) -> str:

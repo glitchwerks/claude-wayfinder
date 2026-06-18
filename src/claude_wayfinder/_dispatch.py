@@ -37,11 +37,10 @@ from pathlib import Path
 from typing import Any
 
 from claude_wayfinder.match import (
-    ScoredEntry,
     build_features,
     decide,
     load_catalog,
-    score,
+    score_entries,
 )
 from claude_wayfinder.match._catalog import (
     _compute_catalog_hash,
@@ -55,7 +54,6 @@ from claude_wayfinder.match._overrides import (
     load_overrides,
     resolve_override,
 )
-from claude_wayfinder.match_filters import is_agent_routable
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -513,20 +511,6 @@ def run_batch_dispatch(
         )
         return 2
 
-    # Pre-split entries into agent/skill pools (same as match._main does).
-    agent_entries = [
-        e
-        for e in entries
-        if e.kind == "agent"
-        and is_agent_routable(
-            name=e.name,
-            kind=e.kind,
-            source=e.source,
-            routable=e.routable,
-        )
-    ]
-    skill_entries = [e for e in entries if e.kind == "skill"]
-
     # Compute catalog hash once for logging.
     try:
         catalog_raw_text = catalog_path.read_text(encoding="utf-8")
@@ -619,14 +603,7 @@ def run_batch_dispatch(
             continue
 
         # Score all entries.
-        scored_agents: list[Any] = sorted(
-            [ScoredEntry(entry=e, score=score(e, features)) for e in agent_entries],
-            key=lambda se: (-se.score, se.entry.name),
-        )
-        scored_skills: list[Any] = sorted(
-            [ScoredEntry(entry=e, score=score(e, features)) for e in skill_entries],
-            key=lambda se: (-se.score, se.entry.name),
-        )
+        scored_agents, scored_skills = score_entries(entries, features)
 
         decision_dict = decide(scored_agents, scored_skills, features, entries)
         _write_log_entry(
