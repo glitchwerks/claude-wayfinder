@@ -217,7 +217,18 @@ def _validate_labels(
     invalid_ids: list[int] = []
 
     for lbl in labels:
-        cid = lbl.get("corpus_id")
+        raw_cid = lbl.get("corpus_id")
+        try:
+            cid: int = int(raw_cid)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            print(
+                f"  [warn] corpus_id {raw_cid!r} is not a valid integer,"
+                " routing to re-call."
+            )
+            # Cannot match to expected_ids without a valid int; skip so
+            # the entry falls into 'missing' and is re-requested by the
+            # caller.
+            continue
         domain = lbl.get("domain", "")
         posture = lbl.get("posture", "")
 

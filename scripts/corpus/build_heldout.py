@@ -327,6 +327,31 @@ def _has_github_tool(tool_mentions: list[str]) -> bool:
     )
 
 
+def _has_file_with_exts(
+    file_paths: list[str],
+    exts: frozenset[str],
+) -> bool:
+    """Return True if any path in *file_paths* has a suffix in *exts*.
+
+    Args:
+        file_paths: List of file-path strings to inspect.
+        exts: Frozenset of lowercase extensions to match (e.g.
+            ``frozenset({".py", ".ts"})``).
+
+    Returns:
+        True if ``Path(p).suffix.lower() in exts`` for at least one
+        element of *file_paths*.
+    """
+    return any(Path(p).suffix.lower() in exts for p in file_paths)
+
+
+_CODE_EXTS: frozenset[str] = frozenset({
+    ".py", ".ts", ".js", ".go", ".rs", ".java",
+    ".cs", ".cpp", ".c", ".h", ".rb",
+})
+_DOC_EXTS: frozenset[str] = frozenset({".md", ".rst"})
+
+
 def _has_code_path(file_paths: list[str]) -> bool:
     """Return True if any file path has a code-file extension.
 
@@ -336,14 +361,7 @@ def _has_code_path(file_paths: list[str]) -> bool:
     Returns:
         True if any path ends with a recognised code extension.
     """
-    _CODE_EXTS = frozenset({
-        ".py", ".ts", ".js", ".go", ".rs", ".java",
-        ".cs", ".cpp", ".c", ".h", ".rb",
-    })
-    return any(
-        Path(p).suffix.lower() in _CODE_EXTS
-        for p in file_paths
-    )
+    return _has_file_with_exts(file_paths, _CODE_EXTS)
 
 
 def _has_docs_path(file_paths: list[str]) -> bool:
@@ -355,11 +373,7 @@ def _has_docs_path(file_paths: list[str]) -> bool:
     Returns:
         True if any path ends with ``.md`` or ``.rst``.
     """
-    _DOC_EXTS = frozenset({".md", ".rst"})
-    return any(
-        Path(p).suffix.lower() in _DOC_EXTS
-        for p in file_paths
-    )
+    return _has_file_with_exts(file_paths, _DOC_EXTS)
 
 
 def print_composition_report(
