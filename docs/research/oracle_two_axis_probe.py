@@ -1,3 +1,6 @@
+# FROZEN RESEARCH ARTIFACT — historical probe. The canonical cell map is
+# src/claude_wayfinder/match/_cells.py. Do NOT treat this copy as live policy.
+
 """Two-axis oracle experiment for claude-wayfinder #358.
 
 Extends oracle_domain_probe.py with posture as a second axis.

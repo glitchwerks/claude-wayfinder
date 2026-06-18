@@ -87,40 +87,8 @@ _POSTURE_PRIORITY: list[str] = [
 ]
 
 # §9.1 grid: (domain, posture) → agent.
-# "any" domain rows apply when domain is domain-any or missing.
-# Ties within a posture are resolved by domain.
-_CELL_MAP: dict[tuple[str, str], str] = {
-    # build row
-    ("code", "build"): "code-writer",
-    ("docs_prose", "build"): "doc-writer",
-    ("any", "build"): "code-writer",  # default build = code-writer
-    # diagnose row — domain splits debugger vs investigator
-    # scope/span distinguishes; here span≥2 → investigator captured in extractor
-    # The extractor result carries the span count in extras; we use posture name
-    # "diagnose" with span info to route.
-    ("code", "diagnose"): "debugger",
-    ("infra_deploy", "diagnose"): "investigator",
-    ("any", "diagnose"): "investigator",  # cross-layer default
-    # assess row
-    ("code", "assess"): "code-reviewer",
-    ("project_meta", "assess"): "project-reviewer",
-    ("any", "assess"): "code-reviewer",
-    # critique row
-    ("code", "critique"): "inquisitor",
-    ("any", "critique"): "approach-critic",
-    # idea-critique row
-    ("any", "idea-critique"): "approach-critic",
-    # verify row
-    ("any", "verify"): "auditor",
-    # plan row
-    ("project_meta", "plan"): "project-planner",
-    ("infra_deploy", "plan"): "devops",
-    ("any", "plan"): "project-planner",
-    # research row
-    ("any", "research"): "researcher",
-    # operate row
-    ("any", "operate"): "ops",
-}
+# Canonical cell map lives in claude_wayfinder.match._cells._CELL_MAP.
+# Lookup via cell_map_lookup(domain, posture) — imported above.
 
 # ---------------------------------------------------------------------------
 # SystemResult
@@ -431,10 +399,7 @@ def _candidate_agents_from_postures(
         if p == "diagnose" and area_span >= 2:
             agent = "investigator"
         else:
-            agent = _CELL_MAP.get(
-                (domain, p),
-                _CELL_MAP.get(("any", p)),
-            )
+            agent = cell_map_lookup(domain, p)
         if agent and agent not in seen:
             candidates.append(agent)
             seen.add(agent)
@@ -504,10 +469,7 @@ def _route_from_postures(
         # composed delegation and the false-default-build metric can count it.
         # Confidence remains advisory (0.5) per §10.4 (contributes posture,
         # not confidence).
-        agent = _CELL_MAP.get(
-            (domain, "build"),
-            _CELL_MAP.get(("any", "build")),
-        )
+        agent = cell_map_lookup(domain, "build")
         return agent, 0.5
 
     # Diagnose + span≥2 → investigator regardless of domain
@@ -515,10 +477,7 @@ def _route_from_postures(
         agent = "investigator"
     else:
         # Look up cell (domain-specific first, then any)
-        agent = _CELL_MAP.get(
-            (domain, winning_posture),
-            _CELL_MAP.get(("any", winning_posture)),
-        )
+        agent = cell_map_lookup(domain, winning_posture)
 
     if agent is None:
         return None, 0.5
@@ -1016,10 +975,7 @@ def run_encoder(
             continue
 
         # Route via domain + build default (posture not computed here)
-        agent = _CELL_MAP.get(
-            (domain, "build"),
-            _CELL_MAP.get(("any", "build")),
-        )
+        agent = cell_map_lookup(domain, "build")
 
         if agent and agent in catalog_agent_names:
             decision = "delegate"

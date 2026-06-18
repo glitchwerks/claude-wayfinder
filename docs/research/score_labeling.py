@@ -1,3 +1,6 @@
+# FROZEN RESEARCH ARTIFACT — historical probe. The canonical cell map is
+# src/claude_wayfinder/match/_cells.py. Do NOT treat this copy as live policy.
+
 """Blind LLM labeling accuracy scorer — claude-wayfinder #358.
 
 Reads:
