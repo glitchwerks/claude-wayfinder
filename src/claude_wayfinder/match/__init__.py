@@ -37,7 +37,7 @@ Dataclasses:
 
 Functions:
     build_features, decide, group_satisfied, load_catalog, matched_paths_for,
-    score
+    score, score_entries
 
 Constants:
     VALID_DECISIONS, _MIXED_CONTENT_SCORE_EPSILON
@@ -89,6 +89,9 @@ from claude_wayfinder.match._match import (
 )
 from claude_wayfinder.match._match import (
     score as score,
+)
+from claude_wayfinder.match._match import (
+    score_entries as score_entries,
 )
 from claude_wayfinder.match._overrides import (
     OverridesError as OverridesError,
@@ -156,4 +159,5 @@ __all__ = [
     "matched_paths_for",
     "resolve_override",
     "score",
+    "score_entries",
 ]

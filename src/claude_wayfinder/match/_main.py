@@ -24,15 +24,13 @@ from claude_wayfinder.match._catalog import (
     load_catalog,
 )
 from claude_wayfinder.match._decide import decide
-from claude_wayfinder.match._match import build_features, score
+from claude_wayfinder.match._match import build_features, score_entries
 from claude_wayfinder.match._overrides import (
     OverrideRule,
     OverridesError,
     load_overrides,
     resolve_override,
 )
-from claude_wayfinder.match._types import ScoredEntry
-from claude_wayfinder.match_filters import is_agent_routable
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -199,27 +197,10 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     # --- Score all entries ---
-    # is_agent_routable excludes the router agent (routable=False) and
-    # plugin agents (source='plugin') from the scored pool.
-    # The routable flag is set in agent frontmatter; issue #19 replaced
-    # the hardcoded name check with this data-driven field.
-    agent_entries = [
-        e
-        for e in entries
-        if e.kind == "agent" and is_agent_routable(
-            name=e.name, kind=e.kind, source=e.source, routable=e.routable
-        )
-    ]
-    skill_entries = [e for e in entries if e.kind == "skill"]
-
-    scored_agents: list[ScoredEntry] = sorted(
-        [ScoredEntry(entry=e, score=score(e, features)) for e in agent_entries],
-        key=lambda se: (-se.score, se.entry.name),
-    )
-    scored_skills: list[ScoredEntry] = sorted(
-        [ScoredEntry(entry=e, score=score(e, features)) for e in skill_entries],
-        key=lambda se: (-se.score, se.entry.name),
-    )
+    # score_entries filters agents via is_agent_routable (excludes router and
+    # plugin agents), scores every entry, and sorts each pool by
+    # (-score, name).  See match._match.score_entries for details.
+    scored_agents, scored_skills = score_entries(entries, features)
 
     # --- Compose decision ---
     result = decide(scored_agents, scored_skills, features, entries)
