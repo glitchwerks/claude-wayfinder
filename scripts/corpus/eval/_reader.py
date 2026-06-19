@@ -67,6 +67,9 @@ class GoldLabel:
         gold_agent: Expected routing target agent name.
         is_any: True when the prompt is domain-any (should route on
             posture; domain encoder is expected to show high entropy).
+        area_span: Number of distinct layers/areas the task spans (issue
+            #396). ``1`` = single-layer (default); ``2+`` = multi-layer,
+            which routes (diagnose, span≥2) to ``investigator``.
     """
 
     corpus_id: int
@@ -74,6 +77,7 @@ class GoldLabel:
     posture: str
     gold_agent: str
     is_any: bool
+    area_span: int = 1
 
 
 # ---------------------------------------------------------------------------
@@ -228,4 +232,5 @@ def _parse_label_record(record: dict[str, Any]) -> GoldLabel:
         posture=str(record.get("posture", "")),
         gold_agent=str(record.get("gold_agent", "")),
         is_any=bool(record.get("is_any", False)),
+        area_span=int(record.get("area_span", 1)),
     )

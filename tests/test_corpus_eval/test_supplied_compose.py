@@ -3081,3 +3081,758 @@ class TestRunComposedSentinelPropagation:
             f"Before #397 cell_map_lookup falls back to ('any','build') → "
             f"'code-writer', so this returns 'code-writer'."
         )
+
+
+# ===========================================================================
+# Issue #396: area_span signal — (code, diagnose) + span≥2 → investigator
+# ===========================================================================
+#
+# BACKGROUND: _route_from_postures (lines 477-479) already implements:
+#   if winning_posture == "diagnose" and area_span >= 2: agent = "investigator"
+#
+# run_supplied_compose uses the ORACLE path (supplied labels), NOT extractors.
+# Today it calls cell_map_lookup(domain, posture) which returns "debugger" for
+# (code, diagnose).  The span rule is NOT applied on the oracle path.
+#
+# #396 adds a hard override BEFORE the existing sentinel check:
+#   if oracle_posture == "diagnose" and label.area_span >= 2:
+#       agent_out = "investigator"
+#       decision_out = "delegate"
+#       confidence_out = 0.9
+#       posture_routed = True
+#
+# This mirrors the extractor path's diagnose+span rule for oracle entries.
+#
+# Catalog used in these tests: a minimal catalog containing both
+# "debugger" (the current cell_map_lookup result for code/diagnose) and
+# "investigator" (the expected result after #396), plus "code-writer"
+# (any-domain fallback) to keep the catalog from being trivially empty.
+# "infra-debugger" is deliberately absent — we only need the two agents
+# that are in the code domain gate.
+#
+# EXPECTED FAILURE MODES BEFORE IMPLEMENTATION:
+#   test_code_diagnose_span2_routes_to_investigator
+#     → AssertionError: agent='debugger' (cell_map_lookup returns debugger)
+#   test_code_diagnose_span2_decision_is_delegate_at_0_9
+#     → AssertionError: confidence != 0.9 or decision != 'delegate'
+#       (falls through to the existing gated posture-routed path which
+#        gives debugger, not investigator)
+#   test_code_diagnose_span1_routes_to_debugger
+#     → passes (cell_map_lookup already returns "debugger"); synthetic pin
+#   test_code_diagnose_default_span_routes_to_debugger
+#     → passes (area_span absent from GoldLabel → defaults to 1)
+#       but fails at COLLECTION if GoldLabel lacks area_span field
+#   test_infra_deploy_diagnose_span2_routes_to_investigator
+#     → passes or fails depending on infra_deploy gate; pinned for parity
+#   test_sentinel_intact_under_span_rule
+#     → passes (sentinel already fires before span override in contract)
+#   test_non_diagnose_posture_unaffected_by_span_rule
+#     → passes (span rule only activates on posture=="diagnose")
+#   test_gold_data_8_ids_have_area_span_2_and_investigator
+#     → AttributeError or wrong value until gold data edited
+#   test_gold_data_34774_has_default_span_and_researcher
+#     → AttributeError until GoldLabel gains area_span field
+
+# Minimal catalog for span-rule tests.
+# Contains "debugger" (current code/diagnose cell winner), "investigator"
+# (expected span≥2 winner), and "code-writer" (fallback).
+# Both debugger and investigator are in the code domain gate.
+_SPAN_SIGNAL_CATALOG_ENTRIES: list[dict[str, Any]] = [
+    {
+        "name": "debugger",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["debugger"],
+            "path_globs": ["**/*.py"],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "debug", "weight": 1.0},
+                {"term": "error", "weight": 0.5},
+                {"term": "traceback", "weight": 0.8},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    {
+        "name": "investigator",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["investigator"],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "investigate", "weight": 1.0},
+                {"term": "figure", "weight": 0.5},
+                {"term": "debug", "weight": 0.7},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    {
+        "name": "code-writer",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["code-writer"],
+            "path_globs": ["**/*.py"],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "implement", "weight": 1.0},
+                {"term": "build", "weight": 0.8},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    {
+        "name": "ops",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": ["gh", "git"],
+            "agent_mentions": ["ops"],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "run", "weight": 0.5},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+]
+
+
+@pytest.fixture()
+def fixture_span_signal_catalog_path(tmp_path: Path) -> Path:
+    """Write the minimal catalog for span-rule tests.
+
+    Contains debugger (current code/diagnose cell winner), investigator
+    (expected span>=2 winner), code-writer (any-domain fallback), and ops
+    (any-domain).  Both debugger and investigator are in the code gate.
+    """
+    catalog = {"entries": _SPAN_SIGNAL_CATALOG_ENTRIES}
+    path = tmp_path / "span-signal-catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+def _make_entry_with_span(
+    corpus_id: int,
+    task_description: str,
+    domain: str,
+    posture: str,
+    gold_agent: str,
+    area_span: int,
+) -> tuple[CorpusEntry, GoldLabel]:
+    """Return a CorpusEntry + GoldLabel pair with an explicit area_span.
+
+    Args:
+        corpus_id: Unique ID for the entry.
+        task_description: Free-text task description.
+        domain: Gold domain label.
+        posture: Gold posture label.
+        gold_agent: Expected routing target agent name.
+        area_span: Gold area span count (1 = single-layer, 2+ = multi-layer).
+
+    Returns:
+        Tuple of (CorpusEntry, GoldLabel) with area_span set on the label.
+    """
+    entry = CorpusEntry(
+        corpus_id=corpus_id,
+        task_description=task_description,
+        file_paths=[],
+        agent_mentions=[],
+        tool_mentions=[],
+        command_prefix=None,
+        stratum={
+            "decision_band": "delegate",
+            "td_length_band": "short",
+            "file_paths_present": False,
+        },
+        raw={},
+    )
+    label = GoldLabel(
+        corpus_id=corpus_id,
+        domain=domain,
+        posture=posture,
+        gold_agent=gold_agent,
+        is_any=False,
+        area_span=area_span,
+    )
+    return entry, label
+
+
+class TestAreaSpanRouteInSuppliedCompose:
+    """Issue #396: area_span≥2 on (code,diagnose) labels → investigator.
+
+    All tests in this class must be RED before:
+      1. GoldLabel.area_span field is added to _reader.py.
+      2. run_supplied_compose hard-override for diagnose+span>=2 is added.
+    After correct implementation all tests must be GREEN.
+    """
+
+    def test_code_diagnose_span2_routes_to_investigator(
+        self, fixture_span_signal_catalog_path: Path
+    ) -> None:
+        """(code, diagnose) entry + label area_span=2 → agent == 'investigator'.
+
+        The span rule mirrors _route_from_postures lines 477-479:
+          if winning_posture == 'diagnose' and area_span >= 2:
+              agent = 'investigator'
+
+        Before #396: cell_map_lookup('code','diagnose') returns 'debugger';
+        the span check is absent on the oracle path → agent='debugger'.
+        After #396: the hard override fires before the gate/catalog check
+        and agent='investigator'.
+
+        RED: AssertionError — agent='debugger' before implementation.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=1,
+            task_description=(
+                "The test suite is failing after the refactor — "
+                "debug why the error handling breaks across both "
+                "the API layer and the database layer."
+            ),
+            domain="code",
+            posture="diagnose",
+            gold_agent="investigator",
+            area_span=2,
+        )
+        results = run_supplied_compose(
+            [entry], fixture_span_signal_catalog_path, {1: label}
+        )
+        assert len(results) == 1
+        assert results[0].agent == "investigator", (
+            f"(code, diagnose) + area_span=2 must route to 'investigator' "
+            f"(mirrors _route_from_postures diagnose+span rule, issue #396). "
+            f"Got agent={results[0].agent!r}. "
+            f"Before #396 cell_map_lookup returns 'debugger' and span is "
+            f"not checked on the oracle path."
+        )
+
+    def test_code_diagnose_span2_decision_is_delegate_at_0_9(
+        self, fixture_span_signal_catalog_path: Path
+    ) -> None:
+        """(code, diagnose) + area_span=2 → decision='delegate', confidence=0.9.
+
+        The hard override sets decision_out='delegate', confidence_out=0.9
+        and posture_routed=True, identical to the normal posture-pick path.
+
+        RED: AssertionError — either agent is 'debugger' (wrong agent) or
+        the override is absent, meaning confidence/decision may differ.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=2,
+            task_description=(
+                "Figure out why the deploy pipeline breaks in staging "
+                "but not locally — spans the CI config and the app code."
+            ),
+            domain="code",
+            posture="diagnose",
+            gold_agent="investigator",
+            area_span=2,
+        )
+        results = run_supplied_compose(
+            [entry], fixture_span_signal_catalog_path, {2: label}
+        )
+        r = results[0]
+        assert r.decision == "delegate", (
+            f"(code, diagnose) + area_span=2 must produce decision='delegate'; "
+            f"got decision={r.decision!r}."
+        )
+        assert r.confidence == 0.9, (
+            f"(code, diagnose) + area_span=2 must produce confidence=0.9; "
+            f"got confidence={r.confidence}."
+        )
+
+    def test_code_diagnose_span2_posture_routed_is_true(
+        self, fixture_span_signal_catalog_path: Path
+    ) -> None:
+        """(code, diagnose) + area_span=2 → extras['posture_routed'] is True.
+
+        The override fires BEFORE the sentinel check (per spec), setting
+        posture_routed=True — the entry did NOT fall through to decide().
+
+        RED: AssertionError — posture_routed flag reflects wrong path.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=3,
+            task_description=(
+                "Production errors after the deployment — spans "
+                "the backend service and the infra config."
+            ),
+            domain="code",
+            posture="diagnose",
+            gold_agent="investigator",
+            area_span=2,
+        )
+        results = run_supplied_compose(
+            [entry], fixture_span_signal_catalog_path, {3: label}
+        )
+        assert results[0].extras.get("posture_routed") is True, (
+            f"(code, diagnose) + area_span=2 must set posture_routed=True; "
+            f"got {results[0].extras.get('posture_routed')!r}."
+        )
+
+    def test_code_diagnose_span1_routes_to_debugger_cell_map_fallback(
+        self, fixture_span_signal_catalog_path: Path
+    ) -> None:
+        """(code, diagnose) + area_span=1 → agent == 'debugger' (cell-map).
+
+        SYNTHETIC TEST — pins the debugger fallback.  When area_span < 2
+        the span rule does not fire; cell_map_lookup('code','diagnose')
+        returns 'debugger' → posture-routed to 'debugger'.
+
+        No real gold row has area_span=1 for (code, diagnose) + investigator
+        (all such rows have area_span=2 per the #396 data edit).
+
+        This test is RED at COLLECTION time until GoldLabel gains area_span
+        (TypeError: __init__() got unexpected keyword 'area_span').
+        After GoldLabel is updated but before the span override, it will
+        pass (debugger is the current cell winner).  After implementation it
+        must still pass (span=1 must NOT trigger the investigator override).
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=4,
+            task_description=(
+                "The login endpoint throws a 500 — debug the stack trace."
+            ),
+            domain="code",
+            posture="diagnose",
+            gold_agent="debugger",
+            area_span=1,
+        )
+        results = run_supplied_compose(
+            [entry], fixture_span_signal_catalog_path, {4: label}
+        )
+        assert results[0].agent == "debugger", (
+            f"(code, diagnose) + area_span=1 must route to 'debugger' "
+            f"(span rule must NOT fire for area_span < 2). "
+            f"Got agent={results[0].agent!r}."
+        )
+
+    def test_code_diagnose_default_span_routes_to_debugger(
+        self, fixture_span_signal_catalog_path: Path
+    ) -> None:
+        """(code, diagnose) + label with area_span absent → agent == 'debugger'.
+
+        When area_span is absent from the label record it defaults to 1.
+        The span rule must NOT fire (1 < 2) → cell_map_lookup gives debugger.
+
+        This test is RED at COLLECTION time until GoldLabel gains area_span
+        field (TypeError on construction).
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        # Construct a GoldLabel WITHOUT providing area_span — relies on the
+        # default value (area_span: int = 1) added in Phase 2.
+        entry = CorpusEntry(
+            corpus_id=5,
+            task_description=(
+                "The login endpoint throws a 500 — debug the stack trace."
+            ),
+            file_paths=[],
+            agent_mentions=[],
+            tool_mentions=[],
+            command_prefix=None,
+            stratum={
+                "decision_band": "delegate",
+                "td_length_band": "short",
+                "file_paths_present": False,
+            },
+            raw={},
+        )
+        label = GoldLabel(
+            corpus_id=5,
+            domain="code",
+            posture="diagnose",
+            gold_agent="debugger",
+            is_any=False,
+            # area_span intentionally omitted — must default to 1
+        )
+        results = run_supplied_compose(
+            [entry], fixture_span_signal_catalog_path, {5: label}
+        )
+        assert results[0].agent == "debugger", (
+            f"(code, diagnose) + default area_span must route to 'debugger' "
+            f"(default is 1, span rule does not fire). "
+            f"Got agent={results[0].agent!r}."
+        )
+
+    def test_infra_deploy_diagnose_span2_routes_to_investigator(
+        self, fixture_span_signal_catalog_path: Path
+    ) -> None:
+        """Cross-domain parity: (infra_deploy, diagnose) + area_span=2 → investigator.
+
+        The spec says the override fires 'regardless of domain', mirroring
+        _route_from_postures lines 477-479 exactly.  This test locks that
+        the hard override is domain-agnostic.
+
+        Note: cell_map_lookup('infra_deploy','diagnose') already returns
+        'investigator', so this test pins the span rule does not BREAK the
+        existing infra_deploy/diagnose path (i.e. it still gets investigator
+        regardless of whether the override or the cell-map path fired).
+        The cross-domain parity assertion is captured by the code/diagnose
+        tests above; this test guards regressions on the infra_deploy path.
+
+        RED at COLLECTION until GoldLabel gains area_span field.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=6,
+            task_description=(
+                "Production deploy keeps failing — spans both the IaC "
+                "config and the application startup code."
+            ),
+            domain="infra_deploy",
+            posture="diagnose",
+            gold_agent="investigator",
+            area_span=2,
+        )
+        results = run_supplied_compose(
+            [entry], fixture_span_signal_catalog_path, {6: label}
+        )
+        assert results[0].agent == "investigator", (
+            f"(infra_deploy, diagnose) + area_span=2 must route to "
+            f"'investigator' (domain-agnostic span rule, issue #396). "
+            f"Got agent={results[0].agent!r}."
+        )
+
+    def test_sentinel_intact_under_span_rule(
+        self, fixture_project_meta_build_catalog_path: Path
+    ) -> None:
+        """Regression: sentinel branch intact — span rule must not clobber it.
+
+        (project_meta, build) → SELF_HANDLE_SENTINEL.  The sentinel fires
+        AFTER the span override (which only fires on diagnose+span>=2).
+        With posture='build' the span rule does NOT apply, so the sentinel
+        must still fire as implemented by #397.
+
+        Uses the project_meta/build catalog from TestSelfHandleSentinelCompose
+        (already in this file).
+
+        RED: AssertionError on decision until #397 is also implemented.
+        After both #396 and #397: sentinel test is GREEN regardless of span.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=7,
+            task_description=(
+                "Rename the Claude Code skill session-variance to "
+                "session-analysis in the claude-prospector repo."
+            ),
+            domain="project_meta",
+            posture="build",
+            gold_agent="self_handle",
+            area_span=2,
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_project_meta_build_catalog_path,
+            {7: label},
+        )
+        assert results[0].decision == "self_handle", (
+            f"Sentinel (project_meta, build) must produce decision='self_handle' "
+            f"even when area_span=2 (span rule only applies to diagnose posture). "
+            f"Got decision={results[0].decision!r}."
+        )
+        assert results[0].agent is None, (
+            f"Sentinel must produce agent=None; "
+            f"got agent={results[0].agent!r}."
+        )
+
+    def test_non_diagnose_posture_unaffected_by_span_rule(
+        self, fixture_span_signal_catalog_path: Path
+    ) -> None:
+        """The span rule only fires on posture='diagnose'; build is unaffected.
+
+        A (code, build) entry with area_span=2 must NOT route to investigator.
+        It must route via the normal cell-map path: cell_map_lookup('code',
+        'build') → 'code-writer' → agent='code-writer'.
+
+        RED at COLLECTION until GoldLabel gains area_span field.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=8,
+            task_description="implement the new cache module",
+            domain="code",
+            posture="build",
+            gold_agent="code-writer",
+            area_span=2,
+        )
+        results = run_supplied_compose(
+            [entry], fixture_span_signal_catalog_path, {8: label}
+        )
+        assert results[0].agent != "investigator", (
+            f"(code, build) + area_span=2 must NOT route to 'investigator' "
+            f"(span rule only applies to posture='diagnose'). "
+            f"Got agent={results[0].agent!r}."
+        )
+        from claude_wayfinder.match._cells import cell_map_lookup
+        expected = cell_map_lookup("code", "build")
+        assert results[0].agent == expected, (
+            f"(code, build) + area_span=2 must route via cell-map to "
+            f"{expected!r}; got agent={results[0].agent!r}."
+        )
+
+
+# ===========================================================================
+# Issue #396: gold-data guard — 8 ids have area_span=2, 34774 has default 1
+# ===========================================================================
+#
+# These tests load the REAL committed gold file and assert the data edit
+# landed.  They are RED until docs/research/2026-06-12-gold-labels-redacted.jsonl
+# is updated with "area_span": 2 on the 8 investigator rows.
+#
+# Path discipline: uses _REPO_ROOT / _RESEARCH_DIR anchors (same as
+# TestSelfHandleSentinelGoldIds) so the paths are cwd-independent and
+# resolve correctly on CI Linux runners.
+
+_EIGHT_SPAN2_IDS: frozenset[int] = frozenset({
+    33660, 35229, 35233, 35266, 35268, 35297, 35317, 35414,
+})
+_OUT_OF_SCOPE_SPAN_ID: int = 34774
+
+
+class TestGoldDataAreaSpanEdit:
+    """Issue #396: gold-data guard for the 8 investigator (code,diagnose) rows.
+
+    Loads the committed gold file and asserts:
+      - Each of the 8 area_span target IDs has area_span >= 2 AND
+        gold_agent == 'investigator'.
+      - Corpus ID 34774 (gold_agent='researcher') has area_span < 2
+        (default 1) and must NOT be affected by the data edit.
+
+    All tests are RED until:
+      1. GoldLabel gains the area_span field (#396 Phase 2).
+      2. The gold JSONL is updated with "area_span": 2 on the 8 rows.
+    """
+
+    _GOLD_LABELS_PATH: Path = (
+        _RESEARCH_DIR / "2026-06-12-gold-labels-redacted.jsonl"
+    )
+
+    def test_eight_ids_have_area_span_2_and_investigator_gold_agent(
+        self,
+    ) -> None:
+        """All 8 target IDs have area_span >= 2 and gold_agent == 'investigator'.
+
+        Before #396: loaded GoldLabel will raise AttributeError on .area_span
+        (field absent from the frozen dataclass).  After GoldLabel is updated
+        but before the data edit, area_span will be 1 (default) — not 2.
+        After both changes all 8 IDs must satisfy the assertion.
+
+        RED: AttributeError (no area_span field) until GoldLabel updated.
+        Then: AssertionError (area_span==1) until gold data edited.
+        """
+        from scripts.corpus.eval._reader import load_labels
+
+        all_labels = load_labels(self._GOLD_LABELS_PATH)
+        missing_ids = _EIGHT_SPAN2_IDS - set(all_labels.keys())
+        assert not missing_ids, (
+            f"Gold file missing expected corpus IDs: {sorted(missing_ids)}. "
+            f"Check {self._GOLD_LABELS_PATH}."
+        )
+
+        failures: list[str] = []
+        for cid in sorted(_EIGHT_SPAN2_IDS):
+            label = all_labels[cid]
+            if label.gold_agent != "investigator":
+                failures.append(
+                    f"  {cid}: gold_agent={label.gold_agent!r} "
+                    f"(expected 'investigator')"
+                )
+            if label.area_span < 2:
+                failures.append(
+                    f"  {cid}: area_span={label.area_span!r} "
+                    f"(expected >= 2)"
+                )
+        assert not failures, (
+            "Gold data edit validation failed for issue #396. "
+            "Each of the 8 investigator (code,diagnose) rows must have "
+            "area_span >= 2 after the data edit:\n"
+            + "\n".join(failures)
+        )
+
+    def test_34774_has_default_span_and_researcher_gold_agent(self) -> None:
+        """Corpus ID 34774 has area_span < 2 and gold_agent == 'researcher'.
+
+        34774 is (code, diagnose, gold_agent=researcher) — an out-of-scope
+        #407 residual.  It must NOT receive area_span=2 in the data edit
+        (it must NOT route to investigator via the span rule).
+
+        RED: AttributeError (no area_span field) until GoldLabel updated.
+        After GoldLabel is updated and gold data is NOT edited for 34774:
+        area_span defaults to 1 → test passes.
+        """
+        from scripts.corpus.eval._reader import load_labels
+
+        all_labels = load_labels(self._GOLD_LABELS_PATH)
+        assert _OUT_OF_SCOPE_SPAN_ID in all_labels, (
+            f"corpus_id {_OUT_OF_SCOPE_SPAN_ID} must be present in gold file. "
+            f"Check {self._GOLD_LABELS_PATH}."
+        )
+        label = all_labels[_OUT_OF_SCOPE_SPAN_ID]
+        assert label.gold_agent == "researcher", (
+            f"corpus_id {_OUT_OF_SCOPE_SPAN_ID} must have gold_agent='researcher'; "
+            f"got {label.gold_agent!r}. "
+            f"This ID is an out-of-scope #407 residual and must NOT be relabeled."
+        )
+        assert label.area_span < 2, (
+            f"corpus_id {_OUT_OF_SCOPE_SPAN_ID} must have area_span < 2 "
+            f"(must NOT receive the #396 data edit); "
+            f"got area_span={label.area_span!r}."
+        )
+
+
+# ===========================================================================
+# Issue #396 / PR #411 — Codex P2: span override must check catalog
+# ===========================================================================
+#
+# BACKGROUND (PR #411): run_supplied_compose added a hard override:
+#   if oracle_posture == "diagnose" and label.area_span >= 2:
+#       agent_out = "investigator"; decision_out = "delegate"; ...
+#
+# Codex (P2) flagged that this override bypasses the catalog/routability
+# guard used on the normal posture-routed path.  Against a catalog where
+# "investigator" is ABSENT / non-routable, the override still emits a
+# high-confidence delegate to an un-routable agent — a phantom route.
+#
+# PHASE-2 FIX (not yet implemented):
+#   Add `and "investigator" in catalog_agent_names` to the override
+#   condition.  When investigator is absent the override does NOT fire;
+#   control falls to the sentinel/gated/decide() path, posture_routed
+#   stays False.
+#
+# THIS TEST: RED now (override routes to investigator regardless of catalog),
+# GREEN after the Phase-2 guard is added.
+#
+# Catalog: _SPAN_SIGNAL_CATALOG_ENTRIES without "investigator" — debugger,
+# code-writer, and ops only.  When the guard is absent the override fires
+# and routes to "investigator" (phantom); after the guard, the override
+# is skipped and the normal gated path fires instead.
+
+_SPAN_SIGNAL_NO_INVESTIGATOR_CATALOG_ENTRIES: list[dict[str, Any]] = [
+    entry
+    for entry in _SPAN_SIGNAL_CATALOG_ENTRIES
+    if entry["name"] != "investigator"
+]
+
+
+@pytest.fixture()
+def fixture_span_signal_no_investigator_catalog_path(tmp_path: Path) -> Path:
+    """Write the span-signal catalog with investigator removed.
+
+    Identical to fixture_span_signal_catalog_path except the
+    'investigator' entry is excluded.  Used to confirm the span
+    override does not phantom-route to an absent agent.
+    """
+    catalog = {"entries": _SPAN_SIGNAL_NO_INVESTIGATOR_CATALOG_ENTRIES}
+    path = tmp_path / "span-signal-no-investigator-catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+class TestSpanOverrideRespectsInvestigatorCatalogPresence:
+    """PR #411 / Codex P2: span override must not phantom-route to absent agent.
+
+    When investigator is absent from the catalog the (code, diagnose) +
+    area_span>=2 override must NOT fire.  Without the Phase-2 guard the
+    override ignores the catalog entirely and emits a phantom delegate to
+    'investigator'.  After the guard the override is skipped and control
+    falls to the normal gated/decide() path.
+
+    This test is RED until the guard
+    `and "investigator" in catalog_agent_names` is added to the override
+    condition in run_supplied_compose.
+    """
+
+    def test_span_override_absent_when_investigator_not_in_catalog(
+        self,
+        fixture_span_signal_no_investigator_catalog_path: Path,
+    ) -> None:
+        """Override must not route to investigator when it is absent from catalog.
+
+        Setup:
+          - Catalog: debugger, code-writer, ops (no investigator).
+          - Entry: domain='code', posture='diagnose', area_span=2.
+          - Without the Phase-2 guard: override fires, result.agent ==
+            'investigator' (phantom route — agent is not in catalog).
+          - After the Phase-2 guard: override does NOT fire;
+            result.agent != 'investigator' (core assertion).
+
+        Also asserts extras['posture_routed'] is False to confirm
+        control fell through to the decide() path, not the override.
+
+        RED: AssertionError — agent == 'investigator' before the guard
+        is added to run_supplied_compose.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=901,
+            task_description=(
+                "The test suite is failing after the refactor — "
+                "debug why the error handling breaks across both "
+                "the API layer and the database layer."
+            ),
+            domain="code",
+            posture="diagnose",
+            gold_agent="investigator",
+            area_span=2,
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_span_signal_no_investigator_catalog_path,
+            {901: label},
+        )
+        assert len(results) == 1
+        r = results[0]
+        # Core assertion: no phantom route to an agent absent from catalog.
+        assert r.agent != "investigator", (
+            f"Override must NOT route to 'investigator' when it is absent "
+            f"from the catalog (Codex P2, PR #411). "
+            f"Got agent={r.agent!r}. "
+            f"Fix: add `and \"investigator\" in catalog_agent_names` to the "
+            f"span-override condition in run_supplied_compose."
+        )
+        # Secondary assertion: override did not fire, so posture_routed
+        # must be False (control fell through to the gated/decide() path).
+        assert r.extras.get("posture_routed") is False, (
+            f"When the span override does not fire, posture_routed must be "
+            f"False (control fell to decide()); "
+            f"got posture_routed={r.extras.get('posture_routed')!r}."
+        )
