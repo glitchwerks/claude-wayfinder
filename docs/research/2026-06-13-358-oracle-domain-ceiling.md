@@ -1,5 +1,7 @@
 # Oracle-Domain Ceiling Experiment — #358
 
+> **Gold adjudication notice (#402).** This is a frozen, dated record. The gold labels it consumed have since been adjudicated **in place** (#364/#394: 5 entries; #398/#399: corpus 33692 `assess`→`operate`; plus any later gold-ownership edits). Counts, distributions, and the gold sha cited below reflect the gold **as of this report's date** and are intentionally **not** updated — the committed redacted jsonl (`docs/research/2026-06-12-gold-labels-redacted.jsonl`) is the live source of truth. A reader cross-referencing current gold will see expected differences (e.g. `assess`/`operate`, `diagnose`/`research` posture counts). Per the frozen-snapshot model decided in #402, this record is preserved as historical evidence, not rewritten.
+
 **Date:** 2026-06-13
 **Branch:** feat/330-measurement-run
 **Question:** Can a perfect (oracle) domain label beat the lexical baseline? If not, no real LLM labeler will.
