@@ -349,10 +349,22 @@ def _make_catalog(tmp_path: Path, entries: list[dict]) -> Path:
     return p
 
 
-# Canonical ISO-8601 timestamp within the default 30-day window.
-_RECENT_TS = "2026-05-20T12:00:00+00:00"
-# Timestamp well outside any window.
-_OLD_TS = "2020-01-01T00:00:00+00:00"
+# Timestamps computed at module load so they never age out of the
+# rolling window.  Using a single ``_now`` anchor makes the relationship
+# between the two values explicit and ensures consistent behaviour
+# regardless of when the test suite is run.
+#
+# _RECENT_TS: 1 hour ago — safely inside the tightest window any test
+#   uses (``--window 1d``), so events tagged with it are always counted.
+# _OLD_TS:    365 days ago — safely outside *all* windows exercised by
+#   the test suite, so events tagged with it are always excluded.
+_now = datetime.datetime.now(datetime.timezone.utc)
+_RECENT_TS: str = (
+    _now - datetime.timedelta(hours=1)
+).isoformat()
+_OLD_TS: str = (
+    _now - datetime.timedelta(days=365)
+).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -1214,7 +1226,7 @@ class TestHealthCliDefaults:
         bypass_line = json.dumps({
             "type": "router_drift",
             "category": "bypass",
-            "ts": "2026-05-20T12:00:00+00:00",
+            "ts": _RECENT_TS,
             "session_id": "sess-should-be-ignored",
         }) + "\n"
 
