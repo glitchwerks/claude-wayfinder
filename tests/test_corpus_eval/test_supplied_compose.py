@@ -2296,3 +2296,233 @@ class TestInfraDeployBuildRoutesToCodeWriter:
             f"Got agent={results[0].agent!r}. "
             f"The correct agent is 'code-writer' per issue #364."
         )
+
+
+# ===========================================================================
+# Anchor 11 (PR #394 review): cell-winner-gated-out guard — docs_prose/assess
+# ===========================================================================
+#
+# HISTORY:  Before #364, Anchors 8 and 9 exercised the branch where the cell
+# winner (code-writer) was present in the catalog but NOT in the domain gate
+# (infra_deploy).  #364 added code-writer to the infra_deploy gate, so those
+# two anchors were updated to assert the new positive-route contract — leaving
+# the "cell winner in catalog, gated out of domain" branch UNTESTED.
+#
+# This anchor re-establishes that guard using a (domain, posture) pair that
+# is still gated out after #364:
+#
+#   domain="docs_prose", posture="assess"
+#   cell_map_lookup("docs_prose", "assess") → no direct key
+#     → falls back to ("any", "assess") → "code-reviewer"
+#   DOMAIN_AGENT_MAP["docs_prose"] = frozenset({"doc-writer"}) | ANY_DOMAIN_AGENTS
+#     = {"doc-writer","investigator","approach-critic","auditor",
+#        "researcher","ops","project-planner"}
+#   "code-reviewer" is NOT in that set → gated out.
+#
+# Catalog: code-reviewer (routable, keyword "review" → scores >0 on the task)
+#          + doc-writer (routable, keyword "document" → any-domain fallback)
+#
+# Expected behavior (cell-winner-gated-out branch):
+#   - preferred = "code-reviewer"
+#   - preferred in catalog_agent_names → True
+#   - preferred in gated_names → False  (core gate check fails)
+#   → posture_routed stays False
+#   → system falls back to decide(gated_agents)
+#   → result is NOT delegate@0.9 and agent is NOT "code-reviewer"
+#
+# Algorithm reference (scripts/corpus/eval/_systems.py ~lines 1044-1047):
+#   if (
+#       preferred
+#       and preferred in gated_names        ← THIS check fails here
+#       and preferred in catalog_agent_names
+#   ):
+#       posture_routed = True; ...
+#
+# A regression that deletes or weakens the `preferred in gated_names` check
+# would cause code-reviewer to be delegated@0.9 despite being gated out —
+# exactly what these assertions detect.
+
+_DOCS_PROSE_ASSESS_GATED_OUT_CATALOG: list[dict[str, Any]] = [
+    # code-reviewer: routable, scores >0 on "review" keyword.
+    # Cell (docs_prose, assess) resolves to "code-reviewer" via (any, assess).
+    # code-reviewer is NOT in the docs_prose gate — it must be gated out.
+    {
+        "name": "code-reviewer",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["code-reviewer"],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "review", "weight": 1.0},
+                {"term": "assess", "weight": 0.8},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    # doc-writer: in docs_prose gate, scores on "document" keyword.
+    # Present so the gated candidate list is non-empty after gate_agents(),
+    # giving decide() a concrete candidate.
+    {
+        "name": "doc-writer",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["doc-writer"],
+            "path_globs": ["**/*.md"],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "document", "weight": 1.0},
+                {"term": "docs", "weight": 0.8},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+]
+
+
+@pytest.fixture()
+def fixture_docs_prose_assess_gated_out_catalog_path(tmp_path: Path) -> Path:
+    """Write the catalog for the docs_prose/assess cell-winner-gated-out test.
+
+    Catalog contains code-reviewer (keyword: review/assess) and doc-writer
+    (keyword: document).  code-reviewer is the cell-map winner for
+    (docs_prose, assess) — resolved via (any, assess) — but is NOT in the
+    docs_prose gate.  doc-writer IS in the gate and provides a concrete
+    gated candidate so decide() has something to work with.
+    """
+    catalog = {"entries": _DOCS_PROSE_ASSESS_GATED_OUT_CATALOG}
+    path = tmp_path / "docs-prose-assess-gated-out.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+class TestCellWinnerGatedOutDocsProseAssess:
+    """Anchor 11: post-#364 guard for the cell-winner-gated-out branch.
+
+    Replaces the coverage the Anchor-8/9 inversion removed (PR #394 review).
+    The old Anchors 8 and 9 used infra_deploy/build to show code-writer was
+    gated out.  #364 fixed that — code-writer is now in the infra_deploy gate
+    — so Anchors 8/9 were rewritten to assert the positive route.  This
+    anchor restores the ``preferred in gated_names → False`` guard using a
+    pair that is STILL gated out: docs_prose/assess → code-reviewer.
+
+    Setup:
+      domain="docs_prose", posture="assess"
+      cell_map_lookup("docs_prose","assess") → "code-reviewer" (via any/assess)
+      DOMAIN_AGENT_MAP["docs_prose"] = frozenset({"doc-writer"}) | ANY_DOMAIN_AGENTS
+      "code-reviewer" NOT in that set → gated out
+      catalog: code-reviewer (review/assess keywords) + doc-writer (document keyword)
+      task_description contains "review" → code-reviewer scores >0 in the catalog
+
+    Expected: preferred in gated_names → False → posture_routed stays False
+              result is not delegate@0.9; agent is not "code-reviewer".
+    """
+
+    def test_posture_routed_is_false_when_cell_winner_gated_out(
+        self, fixture_docs_prose_assess_gated_out_catalog_path: Path
+    ) -> None:
+        """extras['posture_routed'] is False when cell winner is gated out.
+
+        domain=docs_prose, posture=assess → cell gives "code-reviewer".
+        code-reviewer is NOT in the docs_prose gate → preferred in
+        gated_names is False → posture_routed stays False.
+
+        Replaces the Anchor-8/9 pre-#364 guard for the same branch
+        (infra_deploy/build was the old example; see PR #394 review).
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="review and assess the documentation",
+            domain="docs_prose",
+            posture="assess",
+            gold_agent="doc-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_docs_prose_assess_gated_out_catalog_path,
+            {1: label},
+        )
+        assert len(results) == 1
+        assert results[0].extras.get("posture_routed") is False, (
+            f"docs_prose/assess cell winner (code-reviewer) is gated out — "
+            f"posture_routed must be False, "
+            f"got {results[0].extras.get('posture_routed')!r}"
+        )
+
+    def test_not_delegate_at_0_9_when_cell_winner_gated_out(
+        self, fixture_docs_prose_assess_gated_out_catalog_path: Path
+    ) -> None:
+        """Result is not a delegate at confidence 0.9 when cell winner gated out.
+
+        The posture-routed path (when it fires) sets decision='delegate'
+        and confidence=0.9.  When the gate check fails, that path is
+        skipped; the fallback decide() path produces a different confidence.
+        Asserts the system did NOT silently take the posture-routed path.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="review and assess the documentation",
+            domain="docs_prose",
+            posture="assess",
+            gold_agent="doc-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_docs_prose_assess_gated_out_catalog_path,
+            {1: label},
+        )
+        r = results[0]
+        # The posture-routed path produces (decision="delegate", confidence=0.9)
+        # simultaneously — the gated-out branch must not produce that pair.
+        is_posture_routed_result = (
+            r.decision == "delegate" and r.confidence == 0.9
+        )
+        assert not is_posture_routed_result, (
+            f"Cell winner gated out — result must not be delegate@0.9. "
+            f"Got decision={r.decision!r}, confidence={r.confidence}"
+        )
+
+    def test_agent_is_not_code_reviewer_when_gated_out(
+        self, fixture_docs_prose_assess_gated_out_catalog_path: Path
+    ) -> None:
+        """Returned agent is NOT code-reviewer when it is gated out of docs_prose.
+
+        code-reviewer is the cell-map preferred agent for (docs_prose, assess)
+        but is excluded by the docs_prose domain gate.  The fallback
+        decide() call must not return "code-reviewer" as the routed agent.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="review and assess the documentation",
+            domain="docs_prose",
+            posture="assess",
+            gold_agent="doc-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_docs_prose_assess_gated_out_catalog_path,
+            {1: label},
+        )
+        assert results[0].agent != "code-reviewer", (
+            f"code-reviewer is gated out of docs_prose — "
+            f"must not be returned as the routed agent, "
+            f"got agent={results[0].agent!r}"
+        )
