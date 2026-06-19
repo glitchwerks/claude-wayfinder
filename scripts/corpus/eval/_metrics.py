@@ -507,9 +507,19 @@ def metric_routing_correctness(
     """Compute routing correctness (RC) across all labeled results.
 
     RC is the fraction of labeled corpus entries where the system's
-    ``agent`` matches the gold ``gold_agent``, regardless of the
-    ``decision`` field value.  A non-delegate result with the correct
-    agent still counts toward RC (decision is irrelevant).
+    prediction matches gold.  A result counts as correct when EITHER:
+
+    - ``r.agent == gold_agent`` (existing path — real-agent match), OR
+    - ``r.decision == "self_handle"`` AND ``gold_agent == "self_handle"``
+      (self_handle normalization — abstain sentinel matches gold abstain).
+
+    The self_handle normalization credits deliberate abstentions when gold
+    also calls for abstention.  Note: ``decision == "self_handle_unaided"``
+    is NOT credited as matching ``gold_agent == "self_handle"`` — only an
+    explicit ``decision == "self_handle"`` receives this treatment.
+
+    A non-delegate result with a matching real agent still counts toward
+    RC (decision is irrelevant for the real-agent path).
 
     Returns ``float('nan')`` when no result has a matching label.
 
@@ -524,9 +534,15 @@ def metric_routing_correctness(
     labeled = [r for r in results if r.corpus_id in labels]
     if not labeled:
         return float("nan")
-    correct = sum(
-        1 for r in labeled if r.agent == labels[r.corpus_id].gold_agent
-    )
+
+    def _is_correct(r: SystemResult) -> bool:
+        gold = labels[r.corpus_id].gold_agent
+        if r.agent == gold:
+            return True
+        # self_handle normalization: deliberate abstention matches gold abstain
+        return r.decision == "self_handle" and gold == "self_handle"
+
+    correct = sum(1 for r in labeled if _is_correct(r))
     return round(correct / len(labeled), 4)
 
 
