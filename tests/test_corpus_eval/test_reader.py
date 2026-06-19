@@ -183,6 +183,91 @@ class TestLoadLabels:
 
 
 # ---------------------------------------------------------------------------
+# GoldLabel.area_span — issue #396 (RED until Phase 2 implementation)
+# ---------------------------------------------------------------------------
+
+
+class TestGoldLabelAreaSpan:
+    """GoldLabel gains a trailing ``area_span: int = 1`` field (#396).
+
+    All tests in this class must be RED until:
+      1. ``GoldLabel`` dataclass gains ``area_span: int = 1`` field.
+      2. ``_parse_label_record`` reads ``area_span=int(record.get(..., 1))``.
+    """
+
+    def test_area_span_2_parsed_from_label_record(
+        self, tmp_path: Path
+    ) -> None:
+        """A record with 'area_span': 2 → parsed GoldLabel.area_span == 2.
+
+        Writes a minimal gold-label JSONL containing ``area_span: 2`` and
+        confirms that ``load_labels`` surfaces the parsed value via
+        ``GoldLabel.area_span``.
+        """
+        import json
+
+        label_record = {
+            "corpus_id": 33660,
+            "domain": "code",
+            "posture": "diagnose",
+            "gold_agent": "investigator",
+            "is_any": False,
+            "area_span": 2,
+        }
+        labels_file = tmp_path / "labels.jsonl"
+        labels_file.write_text(
+            json.dumps(label_record) + "\n",
+            encoding="utf-8",
+        )
+        labels = load_labels(labels_file)
+        assert 33660 in labels, (
+            "corpus_id 33660 must be present in loaded labels"
+        )
+        label = labels[33660]
+        assert label.area_span == 2, (
+            f"Expected GoldLabel.area_span == 2 for record with "
+            f"'area_span': 2; got {label.area_span!r}. "
+            f"GoldLabel likely lacks the area_span field (issue #396)."
+        )
+
+    def test_area_span_defaults_to_1_when_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """A record with NO 'area_span' key → GoldLabel.area_span == 1.
+
+        The field must default to 1 (single-layer) when the key is absent
+        from the raw record, preserving backward compatibility with all
+        existing gold-label rows that predate issue #396.
+        """
+        import json
+
+        label_record = {
+            "corpus_id": 34774,
+            "domain": "code",
+            "posture": "diagnose",
+            "gold_agent": "researcher",
+            "is_any": False,
+            # area_span intentionally absent
+        }
+        labels_file = tmp_path / "labels.jsonl"
+        labels_file.write_text(
+            json.dumps(label_record) + "\n",
+            encoding="utf-8",
+        )
+        labels = load_labels(labels_file)
+        assert 34774 in labels, (
+            "corpus_id 34774 must be present in loaded labels"
+        )
+        label = labels[34774]
+        assert label.area_span == 1, (
+            f"Expected GoldLabel.area_span == 1 (default) for record "
+            f"with no 'area_span' key; got {label.area_span!r}. "
+            f"_parse_label_record must default to int(record.get"
+            f"('area_span', 1)) (issue #396)."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Contract test: reader must parse the real builder-emitted shape
 # ---------------------------------------------------------------------------
 
