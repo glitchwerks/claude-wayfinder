@@ -1237,14 +1237,19 @@ def run_supplied_compose(
             preferred = cell_map_lookup(domain_for_lookup, oracle_posture)
             area_span = label.area_span if label else 1
             if oracle_posture == "diagnose" and area_span >= 2:
-                # #396: broad/cross-layer diagnose routes to investigator
-                # regardless of domain — mirrors _route_from_postures
-                # (run_composed). area_span is a gold axis supplied via
-                # GoldLabel; production derives it from text (E7).
-                agent_out = "investigator"
-                decision_out = "delegate"
-                confidence_out = 0.9
-                posture_routed = True
+                # #396/#411 (Codex P2): broad/cross-layer diagnose routes to
+                # investigator regardless of domain — mirrors
+                # _route_from_postures (run_composed). area_span is a gold
+                # axis supplied via GoldLabel; production derives it from
+                # text (E7). Routability guard: only fire when investigator
+                # is a routable catalog agent; absent → posture_routed stays
+                # False and control falls to the decide() fallback below.
+                if "investigator" in catalog_agent_names:
+                    agent_out = "investigator"
+                    decision_out = "delegate"
+                    confidence_out = 0.9
+                    posture_routed = True
+                # else: investigator absent — skip posture routing; decide() fires below
             # #397: sentinel short-circuits BEFORE the gate/catalog checks;
             # it is a routing instruction, not a routable agent.  It must
             # never reach genuine_gated_names or appear in extras["scores"].

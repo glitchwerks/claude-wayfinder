@@ -3716,3 +3716,123 @@ class TestGoldDataAreaSpanEdit:
             f"(must NOT receive the #396 data edit); "
             f"got area_span={label.area_span!r}."
         )
+
+
+# ===========================================================================
+# Issue #396 / PR #411 — Codex P2: span override must check catalog
+# ===========================================================================
+#
+# BACKGROUND (PR #411): run_supplied_compose added a hard override:
+#   if oracle_posture == "diagnose" and label.area_span >= 2:
+#       agent_out = "investigator"; decision_out = "delegate"; ...
+#
+# Codex (P2) flagged that this override bypasses the catalog/routability
+# guard used on the normal posture-routed path.  Against a catalog where
+# "investigator" is ABSENT / non-routable, the override still emits a
+# high-confidence delegate to an un-routable agent — a phantom route.
+#
+# PHASE-2 FIX (not yet implemented):
+#   Add `and "investigator" in catalog_agent_names` to the override
+#   condition.  When investigator is absent the override does NOT fire;
+#   control falls to the sentinel/gated/decide() path, posture_routed
+#   stays False.
+#
+# THIS TEST: RED now (override routes to investigator regardless of catalog),
+# GREEN after the Phase-2 guard is added.
+#
+# Catalog: _SPAN_SIGNAL_CATALOG_ENTRIES without "investigator" — debugger,
+# code-writer, and ops only.  When the guard is absent the override fires
+# and routes to "investigator" (phantom); after the guard, the override
+# is skipped and the normal gated path fires instead.
+
+_SPAN_SIGNAL_NO_INVESTIGATOR_CATALOG_ENTRIES: list[dict[str, Any]] = [
+    entry
+    for entry in _SPAN_SIGNAL_CATALOG_ENTRIES
+    if entry["name"] != "investigator"
+]
+
+
+@pytest.fixture()
+def fixture_span_signal_no_investigator_catalog_path(tmp_path: Path) -> Path:
+    """Write the span-signal catalog with investigator removed.
+
+    Identical to fixture_span_signal_catalog_path except the
+    'investigator' entry is excluded.  Used to confirm the span
+    override does not phantom-route to an absent agent.
+    """
+    catalog = {"entries": _SPAN_SIGNAL_NO_INVESTIGATOR_CATALOG_ENTRIES}
+    path = tmp_path / "span-signal-no-investigator-catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+class TestSpanOverrideRespectsInvestigatorCatalogPresence:
+    """PR #411 / Codex P2: span override must not phantom-route to absent agent.
+
+    When investigator is absent from the catalog the (code, diagnose) +
+    area_span>=2 override must NOT fire.  Without the Phase-2 guard the
+    override ignores the catalog entirely and emits a phantom delegate to
+    'investigator'.  After the guard the override is skipped and control
+    falls to the normal gated/decide() path.
+
+    This test is RED until the guard
+    `and "investigator" in catalog_agent_names` is added to the override
+    condition in run_supplied_compose.
+    """
+
+    def test_span_override_absent_when_investigator_not_in_catalog(
+        self,
+        fixture_span_signal_no_investigator_catalog_path: Path,
+    ) -> None:
+        """Override must not route to investigator when it is absent from catalog.
+
+        Setup:
+          - Catalog: debugger, code-writer, ops (no investigator).
+          - Entry: domain='code', posture='diagnose', area_span=2.
+          - Without the Phase-2 guard: override fires, result.agent ==
+            'investigator' (phantom route — agent is not in catalog).
+          - After the Phase-2 guard: override does NOT fire;
+            result.agent != 'investigator' (core assertion).
+
+        Also asserts extras['posture_routed'] is False to confirm
+        control fell through to the decide() path, not the override.
+
+        RED: AssertionError — agent == 'investigator' before the guard
+        is added to run_supplied_compose.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry_with_span(
+            corpus_id=901,
+            task_description=(
+                "The test suite is failing after the refactor — "
+                "debug why the error handling breaks across both "
+                "the API layer and the database layer."
+            ),
+            domain="code",
+            posture="diagnose",
+            gold_agent="investigator",
+            area_span=2,
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_span_signal_no_investigator_catalog_path,
+            {901: label},
+        )
+        assert len(results) == 1
+        r = results[0]
+        # Core assertion: no phantom route to an agent absent from catalog.
+        assert r.agent != "investigator", (
+            f"Override must NOT route to 'investigator' when it is absent "
+            f"from the catalog (Codex P2, PR #411). "
+            f"Got agent={r.agent!r}. "
+            f"Fix: add `and \"investigator\" in catalog_agent_names` to the "
+            f"span-override condition in run_supplied_compose."
+        )
+        # Secondary assertion: override did not fire, so posture_routed
+        # must be False (control fell through to the gated/decide() path).
+        assert r.extras.get("posture_routed") is False, (
+            f"When the span override does not fire, posture_routed must be "
+            f"False (control fell to decide()); "
+            f"got posture_routed={r.extras.get('posture_routed')!r}."
+        )
