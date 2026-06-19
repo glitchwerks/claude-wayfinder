@@ -66,7 +66,11 @@ DOMAIN RULES:
 - infra_deploy: terraform/, bicep/, .github/workflows/, deployment commands
   (az, kubectl, docker, terraform), topology/provider questions
 - data: database schemas, migrations, data pipeline files, query languages
-- docs_prose: docs/**, *.md, *.rst, README files, prose artifact targets
+- docs_prose: docs/**, *.md, *.rst, README files, prose artifact targets.
+  ACTION decides domain: EDITING the prose of an existing plan/spec/design
+  doc (docs/**, docs/superpowers/plans|specs/*.md target, posture build) ->
+  docs_prose. READING a plan/spec doc to SCOPE new work (posture plan,
+  deliverable = a new plan) -> project_meta.
 - project_meta: issue/PR scope, project planning, spec/plan file paths,
   VCS metadata, GitHub/VCS state operations (issue queries, PR queries and
   writes, repo metadata, CI status checks) -- even with no file paths
@@ -84,6 +88,11 @@ POSTURE RULES (apply in order; first match wins):
    CRITICAL BOUNDARY: "operate" requires NO review/critique intent.
    A bare PR status/CI check = operate. "Review PR #N diff" or
    "critique the approach" = assess or critique, NOT operate.
+   EXEMPTION: a GitHub-issue/PR read that is a MEANS to a subsequent
+   codebase investigation (read issue to understand scope, THEN
+   explore/grep/read code to assess feasibility or behaviour) is NOT
+   operate -- dominant intent is investigation -> diagnose (branch b).
+   operate fires only when the GitHub/VCS state-read IS the deliverable.
 2. diagnose: EITHER (a) machine-emitted failure output in prompt (stacktrace,
    test-runner summary like "FAILED tests/...", compiler diagnostic, panic:)
    AND cause not stated (no causal connective like "after/because/due to/
@@ -106,11 +115,15 @@ POSTURE RULES (apply in order; first match wins):
    code/architecture artifact present -> inquisitor path, OR no artifact present
 6. plan: no artifact-bearing evidence AND scope-frame markers ("roadmap",
    "phases", "milestones", "scope", "requirements")
-7. research: no artifact-bearing evidence AND prior-art markers ("prior art",
-   "what exists", "alternatives", "has anyone"). Prior-art /
-   alternatives DISCOVERY only -- surveying what already exists out there.
-   Reading a SPECIFIC existing codebase's behaviour is diagnose (branch b),
-   not research.
+7. research: prior-art markers ("prior art", "what exists", "alternatives",
+   "has anyone"). Prior-art / alternatives DISCOVERY only -- surveying what
+   already exists out there. SUBJECT-vs-REFERENCE test for artifacts: research
+   MAY apply WITH artifacts when the artifact is a REFERENCE, BASELINE, or
+   CONSTRAINT that seeds an open exploration (deliverable = discovered options).
+   research does NOT apply when the artifact is the SUBJECT being understood
+   or worked (-> diagnose or build). The artifact's ROLE decides, not its
+   presence. Reading a SPECIFIC existing codebase's behaviour is diagnose
+   (branch b), not research.
 8. build: DEFAULT -- use when no other posture fires; or when target behavior
    is known and no failure evidence is present
 

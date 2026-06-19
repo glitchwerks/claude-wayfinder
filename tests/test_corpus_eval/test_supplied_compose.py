@@ -2868,6 +2868,9 @@ class TestSelfHandleSentinelGoldIds:
     Corpus ID 34712 is ALSO (project_meta, build) but gold_agent=doc-writer
     (a plan-doc edit — a known cell impurity, out of scope for #397).
     Do NOT assert anything about 34712 routing to self_handle.
+    NOTE (#410): 34712 will be relabelled domain -> docs_prose so it routes
+    correctly to doc-writer instead of hitting the sentinel.  See
+    TestCorpus34712RelabelledToDocsProse for the #410 contract tests.
 
     All tests in this class are RED until _cells.py + _systems.py are updated.
     """
@@ -3003,6 +3006,9 @@ class TestSelfHandleSentinelGoldIds:
         plan-doc edit that is an out-of-scope cell impurity.  The sentinel
         does NOT fix 34712; this test simply guards that our set of IDs
         does not accidentally include it.
+        NOTE (#410): 34712's domain will be relabelled docs_prose (not
+        project_meta) — it will then route correctly to doc-writer.  This
+        set-membership guard remains valid regardless of the relabel.
 
         This test is always GREEN (it asserts a set membership invariant).
         """
@@ -3835,4 +3841,308 @@ class TestSpanOverrideRespectsInvestigatorCatalogPresence:
             f"When the span override does not fire, posture_routed must be "
             f"False (control fell to decide()); "
             f"got posture_routed={r.extras.get('posture_routed')!r}."
+        )
+
+
+# ===========================================================================
+# Issue #410: corpus 34712 relabelled project_meta → docs_prose
+# ===========================================================================
+#
+# BACKGROUND: corpus 34712 is a plan-doc edit
+# (docs/superpowers/plans/...md).  Its gold_agent is doc-writer.
+# Before #410 its domain is "project_meta" and posture is "build".
+# Because (project_meta, build) maps to SELF_HANDLE_SENTINEL (#397),
+# 34712 routes to self_handle — a miss versus its gold_agent doc-writer.
+#
+# #410 option 1 (user-ratified): relabel domain project_meta → docs_prose.
+# (docs_prose, build) → doc-writer already exists in the cell map,
+# so no _cells.py / _systems.py change is needed; only the gold-data
+# file changes.
+#
+# THREE TEST GROUPS — all RED until the gold-data relabel lands:
+#
+#   A. Routing mechanism (fixture-based):
+#      Build a synthetic (docs_prose, build, gold_agent=doc-writer) entry,
+#      run run_supplied_compose, and assert it routes to doc-writer.
+#      This exercises the cell map directly; the test itself may be green
+#      today if the cell map is already correct — the RED comes from B + C.
+#
+#   B. Gold-data guard:
+#      Load the committed gold JSONL and assert labels[34712].domain ==
+#      "docs_prose".  RED now (currently "project_meta").
+#
+#   C. Real end-to-end:
+#      Join label-blind-prompts.jsonl to real gold for 34712, run
+#      run_supplied_compose, and assert decision="delegate",
+#      agent="doc-writer".  RED now (currently routes to self_handle).
+#
+# EXPECTED FAILURE MODES BEFORE IMPLEMENTATION:
+#   test_docs_prose_build_routes_to_doc_writer_via_cell_map
+#     → may pass (cell map is correct), but B + C are the true guards
+#   test_gold_label_34712_domain_is_docs_prose
+#     → AssertionError: domain == "project_meta", expected "docs_prose"
+#   test_gold_label_34712_posture_unchanged
+#     → passes (posture stays "build")
+#   test_gold_label_34712_gold_agent_unchanged
+#     → passes (gold_agent stays "doc-writer")
+#   test_34712_real_entry_routes_to_doc_writer
+#     → AssertionError: agent == None / decision == "self_handle"
+#       (sentinel fires because gold domain is still project_meta)
+
+# ---------------------------------------------------------------------------
+# Catalog for #410 fixture-based routing test.
+# Reuse _COMPOSE_CATALOG_ENTRIES (already contains doc-writer + code-writer
+# + ops) rather than defining a new constant.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def fixture_docs_prose_build_catalog_path(tmp_path: Path) -> Path:
+    """Write a catalog that contains doc-writer for docs_prose routing tests.
+
+    Reuses _COMPOSE_CATALOG_ENTRIES which already includes doc-writer
+    (keywords: document, docs) and code-writer (keywords: implement, build,
+    feature) as well as ops.  doc-writer is in the docs_prose domain gate.
+    """
+    catalog = {"entries": _COMPOSE_CATALOG_ENTRIES}
+    path = tmp_path / "docs-prose-build-catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+class TestCorpus34712RelabelledToDocsProse:
+    """Issue #410: 34712 relabelled docs_prose → routes to doc-writer.
+
+    Corpus 34712 is a plan-doc edit whose gold_agent is doc-writer.
+    Before #410 its domain is project_meta; the #397 sentinel routes it
+    to self_handle (a miss).  #410 relabels it docs_prose so that
+    cell_map_lookup("docs_prose","build") == "doc-writer" fires correctly.
+
+    Tests B and C are RED until the gold-data relabel lands.
+    """
+
+    # Paths resolved via _RESEARCH_DIR (cwd-independent; safe on CI).
+    _GOLD_LABELS_PATH: Path = (
+        _RESEARCH_DIR / "2026-06-12-gold-labels-redacted.jsonl"
+    )
+    _PROMPTS_PATH: Path = (
+        _RESEARCH_DIR / "label-blind-prompts.jsonl"
+    )
+    _CORPUS_ID: int = 34712
+
+    # -----------------------------------------------------------------------
+    # A. Routing mechanism — synthetic fixture-based test
+    # -----------------------------------------------------------------------
+
+    def test_docs_prose_build_routes_to_doc_writer_via_cell_map(
+        self,
+        fixture_docs_prose_build_catalog_path: Path,
+    ) -> None:
+        """Synthetic (docs_prose, build, gold=doc-writer) entry routes correctly.
+
+        Verifies that the cell map already maps (docs_prose, build) to
+        doc-writer and that run_supplied_compose uses it.  This test
+        exercises the routing mechanism independently of the gold-data
+        relabel; it serves as a contract pin so the implementer knows
+        no _cells.py change is needed.
+
+        Expected: decision="delegate", agent="doc-writer",
+        extras["posture_routed"] is True.
+
+        Note: this test may be GREEN today (cell map is already correct);
+        the red guards for #410 are tests B and C below.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=self._CORPUS_ID,
+            task_description=(
+                "Edit an existing implementation plan markdown file to add "
+                "a new backend-less Slice P parallel to Slice 0. Update "
+                "slice descriptions and the dependency graph. "
+                "Prose/planning doc edit."
+            ),
+            domain="docs_prose",
+            posture="build",
+            gold_agent="doc-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_docs_prose_build_catalog_path,
+            {self._CORPUS_ID: label},
+        )
+        assert len(results) == 1, (
+            f"Expected 1 result, got {len(results)}"
+        )
+        r = results[0]
+        assert r.decision == "delegate", (
+            f"(docs_prose, build) with doc-writer in catalog must produce "
+            f"decision='delegate'; got decision={r.decision!r}."
+        )
+        assert r.agent == "doc-writer", (
+            f"cell_map_lookup('docs_prose','build') returns 'doc-writer'; "
+            f"run_supplied_compose must delegate to it. "
+            f"Got agent={r.agent!r}."
+        )
+        assert r.extras.get("posture_routed") is True, (
+            f"Oracle posture path must set posture_routed=True; "
+            f"got posture_routed={r.extras.get('posture_routed')!r}."
+        )
+
+    # -----------------------------------------------------------------------
+    # B. Gold-data guard — domain relabel verification
+    # -----------------------------------------------------------------------
+
+    def test_gold_label_34712_domain_is_docs_prose(self) -> None:
+        """Gold label for 34712 must have domain='docs_prose' after #410.
+
+        Loads the committed gold JSONL and asserts the domain field.
+        RED now: domain is currently 'project_meta'.
+
+        Path discipline: resolved via _RESEARCH_DIR (never an absolute
+        I:/ path — that FileNotFoundErrors on CI's Linux runner).
+        """
+        from scripts.corpus.eval._reader import load_labels
+
+        all_labels = load_labels(self._GOLD_LABELS_PATH)
+        assert self._CORPUS_ID in all_labels, (
+            f"corpus_id {self._CORPUS_ID} must be present in "
+            f"{self._GOLD_LABELS_PATH}."
+        )
+        label = all_labels[self._CORPUS_ID]
+        assert label.domain == "docs_prose", (
+            f"corpus_id {self._CORPUS_ID} must have domain='docs_prose' "
+            f"after #410 relabel; got domain={label.domain!r}. "
+            f"The domain 'project_meta' causes the #397 sentinel to fire "
+            f"and route 34712 to self_handle instead of doc-writer."
+        )
+
+    def test_gold_label_34712_posture_unchanged(self) -> None:
+        """Posture for 34712 stays 'build' after the #410 relabel.
+
+        Only the domain changes; posture and gold_agent must be untouched.
+        """
+        from scripts.corpus.eval._reader import load_labels
+
+        all_labels = load_labels(self._GOLD_LABELS_PATH)
+        assert self._CORPUS_ID in all_labels, (
+            f"corpus_id {self._CORPUS_ID} must be present in gold file."
+        )
+        label = all_labels[self._CORPUS_ID]
+        assert label.posture == "build", (
+            f"corpus_id {self._CORPUS_ID} posture must stay 'build' after "
+            f"#410 (only domain changes); got posture={label.posture!r}."
+        )
+
+    def test_gold_label_34712_gold_agent_unchanged(self) -> None:
+        """gold_agent for 34712 stays 'doc-writer' after the #410 relabel.
+
+        The relabel touches domain only; gold_agent must remain doc-writer.
+        """
+        from scripts.corpus.eval._reader import load_labels
+
+        all_labels = load_labels(self._GOLD_LABELS_PATH)
+        assert self._CORPUS_ID in all_labels, (
+            f"corpus_id {self._CORPUS_ID} must be present in gold file."
+        )
+        label = all_labels[self._CORPUS_ID]
+        assert label.gold_agent == "doc-writer", (
+            f"corpus_id {self._CORPUS_ID} gold_agent must stay 'doc-writer' "
+            f"after #410 (only domain changes); "
+            f"got gold_agent={label.gold_agent!r}."
+        )
+
+    # -----------------------------------------------------------------------
+    # C. Real end-to-end — 34712 routes to doc-writer
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _load_34712_entry_and_label() -> tuple[CorpusEntry, GoldLabel]:
+        """Load corpus 34712 from committed research files.
+
+        Returns:
+            Tuple of (CorpusEntry, GoldLabel) for corpus 34712.
+        """
+        import json as _json
+
+        from scripts.corpus.eval._reader import load_labels
+
+        all_labels = load_labels(
+            _RESEARCH_DIR / "2026-06-12-gold-labels-redacted.jsonl"
+        )
+        label = all_labels[34712]
+
+        entry: CorpusEntry | None = None
+        prompts_path = _RESEARCH_DIR / "label-blind-prompts.jsonl"
+        with open(prompts_path, encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                rec = _json.loads(line)
+                if int(rec["corpus_id"]) == 34712:
+                    entry = CorpusEntry(
+                        corpus_id=34712,
+                        task_description=str(
+                            rec.get("task_description", "")
+                        ),
+                        file_paths=list(rec.get("file_paths") or []),
+                        agent_mentions=list(
+                            rec.get("agent_mentions") or []
+                        ),
+                        tool_mentions=list(
+                            rec.get("tool_mentions") or []
+                        ),
+                        command_prefix=rec.get("command_prefix") or None,
+                        stratum={},
+                        raw=rec,
+                    )
+                    break
+
+        assert entry is not None, (
+            "corpus_id 34712 not found in label-blind-prompts.jsonl. "
+            "The file must contain this entry for the end-to-end test."
+        )
+        return entry, label
+
+    def test_34712_real_entry_routes_to_doc_writer(
+        self,
+        fixture_docs_prose_build_catalog_path: Path,
+    ) -> None:
+        """Real corpus 34712 entry routes to doc-writer after #410 relabel.
+
+        Joins label-blind-prompts.jsonl to gold labels and runs
+        run_supplied_compose against a catalog containing doc-writer.
+
+        Before #410: gold domain is project_meta → #397 sentinel fires →
+        decision='self_handle', agent=None (a miss vs gold_agent=doc-writer).
+
+        After #410: gold domain is docs_prose → cell_map_lookup returns
+        doc-writer → decision='delegate', agent='doc-writer'.
+
+        RED now: routes to self_handle because domain is still project_meta.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = self._load_34712_entry_and_label()
+        results = run_supplied_compose(
+            [entry],
+            fixture_docs_prose_build_catalog_path,
+            {34712: label},
+        )
+        assert len(results) == 1, (
+            f"Expected 1 result for corpus 34712, got {len(results)}"
+        )
+        r = results[0]
+        assert r.decision == "delegate", (
+            f"corpus 34712 must route to delegate after #410 relabel; "
+            f"got decision={r.decision!r}. "
+            f"Before #410 the domain is 'project_meta' which triggers the "
+            f"#397 sentinel (self_handle). After #410 it becomes "
+            f"'docs_prose' and routes correctly to doc-writer."
+        )
+        assert r.agent == "doc-writer", (
+            f"corpus 34712 (plan-doc edit) must route to 'doc-writer' after "
+            f"#410 relabel; got agent={r.agent!r}. "
+            f"Before #410: domain=project_meta → sentinel → agent=None."
         )
