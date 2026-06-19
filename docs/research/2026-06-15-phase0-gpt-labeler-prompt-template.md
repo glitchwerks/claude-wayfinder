@@ -9,6 +9,8 @@ establish an independent routing-correctness floor.
 
 ---
 
+> **Taxonomy update notice (#395).** This template records the prompt **as sent in spike #382 (2026-06-15)** and is preserved unedited as a historical record. The `diagnose`/`research` posture boundary was subsequently broadened (#395 / #364 Q2): read-only investigation of how existing/external code behaves — no failure pasted, no prior-art markers — now resolves to `diagnose`, not `research`. Current labeling guidance lives in `docs/research/label-taxonomy.md` §3 and `docs/research/2026-06-12-gold-labeling-rubric.md` §3 Step 1. A future independent-labeler run should use an updated template, not this frozen one.
+
 ## Prompt template (sent to `codex exec --sandbox read-only`)
 
 The `{{ENTRIES_JSON}}` placeholder is replaced with the batch's entries,

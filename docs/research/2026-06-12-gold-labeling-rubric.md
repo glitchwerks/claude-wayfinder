@@ -85,12 +85,12 @@ The eight postures and their primary evidence are:
 | Posture | Primary evidence (from §10 extractor definitions) |
 |---------|---------------------------------------------------|
 | `build` | **Unmarked default** — no posture extractor fires but artifact/file-path evidence or domain signal is present (§10.4). "Write X / add Y" requests with no other marker. |
-| `diagnose` | Machine-emitted failure output pasted in prompt (stacktrace, test-runner summary, compiler diagnostic, `panic:` — §10 E1/E2 extractor patterns); cause not yet known |
+| `diagnose` | **(a)** Machine-emitted failure output pasted in prompt (stacktrace, test-runner summary, compiler diagnostic, `panic:` — §10 E1/E2 extractor patterns); cause not yet known. **(b)** Read-only investigation of how existing/external code or a system *behaves* — comprehending an unfamiliar codebase, external-repo mechanics, or platform behaviour — with no failure pasted and no prior-art/alternatives markers (broadened per #395 / #364 Q2). |
 | `assess` | PR URL, diff hunk, or `PR #N` reference present (§10 E3); or `tool_mentions` includes `get_pull_request*` |
 | `critique` | Challenge-frame markers from §10 E10 frozen set **and** either (a) code/architecture artifact present → inquisitor path, or (b) no artifact → approach-critic path |
 | `verify` | Two or more distinct artifact references plus relational conformance marker (§10 E5: "consistent with", "matches", "conforms to", "drifted from", etc.) |
 | `plan` | No artifact-bearing evidence (§10 E9 gate) plus scope-frame markers from §10 E10 frozen set ("roadmap", "phases", "milestones", "scope") |
-| `research` | No artifact-bearing evidence (§10 E9 gate) plus prior-art markers from §10 E10 frozen set ("prior art", "what exists", "alternatives", "has anyone") |
+| `research` | No artifact-bearing evidence (§10 E9 gate) plus prior-art markers from §10 E10 frozen set ("prior art", "what exists", "alternatives", "has anyone"). Prior-art/alternatives *discovery* only — surveying what already exists out there. Investigating a specific existing codebase's behaviour is `diagnose` branch (b), not `research`. |
 | `operate` | Non-null `command_prefix` field, or VCS-command shape in prompt (§10 E8) |
 
 **The unmarked default is `build`, not low-confidence.** A prompt with no posture marker
@@ -159,6 +159,8 @@ Derive `gold_agent` in two sub-steps:
 † `diagnose` split: single-layer (code stacktrace, `file_paths` span ≤ 1 area) → `debugger`;
 spans multiple layers (`file_paths` across code + infra + data areas, or layer nouns name
 ≥ 2 distinct layers) → `investigator` (Spec E §9.1, §10 E7).
+
+**Branch-(b) diagnose gold-agent rule (#395).** For branch-(b) diagnose — read-only behaviour investigation with no pasted failure — the §10 E7 failure-span criterion does not apply (there is no failure to span); derive the gold agent from investigation **breadth** instead. Comprehending an external repo, an unfamiliar whole codebase, or a system's end-to-end behaviour is inherently cross-cutting → `investigator` (the default for branch b). A narrowly-scoped single-file / single-function behaviour question with no cross-layer reach → `debugger`. (Worked: 35229/35266/35297 are external-repo / whole-codebase comprehension → `investigator`; 34774 keeps `researcher` via the E11 directive-mention override regardless of posture.)
 
 ‡ `critique` split: code/architecture artifact present → `inquisitor`; idea only, no artifact
 → `approach-critic` (Spec E §9.1, §10.2 E9/E10 note).
@@ -252,17 +254,19 @@ These examples use **invented prompts**. No raw corpus prompt text appears in th
 
 ### Ex 6 — Genuinely disputed (two defensible readings)
 
-> "What if we stored the catalog on disk between sessions instead of rebuilding it on every call? Is that a reasonable approach?"
+> "Are there existing libraries for persisting a build-on-startup catalog across sessions, and is rolling our own a reasonable approach?"
 > `file_paths: []`
 
-- **Reading A:** E9 fires (no artifacts); E10 proposal frame + implicit prior-art question →
-  `research × *any*` → `researcher`.
-- **Reading B:** E9 fires; E10 bare proposal + "reasonable approach" soundness question →
+- **Reading A:** E9 fires (no artifacts); explicit prior-art question ("are there existing
+  libraries…") → `research × *any*` → `researcher`. Genuine prior-art/alternatives discovery —
+  "what already exists out there" — per the §3 Step 1 narrowed `research` definition.
+- **Reading B:** E9 fires; "is rolling our own a reasonable approach?" soundness question →
   `critique × *any* × no-artifact` → `approach-critic`.
-- **Both readings are defensible.** The routing table's delineation: "what prior art exists?" →
-  `researcher`; "is this idea sound?" → `approach-critic`. The prompt combines both intents
-  without a decisive signal.
-- **Label:** `disputed: true`, `dispute_reason: "researcher (prior-art reading: 'what already exists?') vs approach-critic (soundness reading: 'is this idea reasonable?'); routing table delineation does not resolve a prompt that mixes both intents"`.
+- **Both readings are defensible.** The prompt explicitly asks BOTH "what already exists?"
+  (researcher) AND "is our approach sound?" (approach-critic); the routing-table delineation
+  ("what prior art exists?" → `researcher`; "is this idea sound?" → `approach-critic`) does not
+  resolve a prompt that genuinely carries both intents.
+- **Label:** `disputed: true`, `dispute_reason: "researcher (explicit prior-art: 'are there existing libraries?') vs approach-critic (soundness: 'is rolling our own reasonable?'); the prompt genuinely mixes prior-art discovery and design-soundness intents"`.
 - **Confidence:** `"low"`.
 
 ### Ex 7 — Explicit agent mention (directive vs descriptive)
@@ -366,8 +370,8 @@ Condensed from Spec E §9.1 grid and `general-purpose.md § Mandatory Code Routi
 |---|---|---|---|
 | `code-writer` | code | build | target behavior known; default-build |
 | `doc-writer` | docs_prose | build | prose artifact target |
-| `debugger` | code | diagnose | failure + cause unknown + code-bounded (single layer) |
-| `investigator` | *any* / cross | diagnose | failure + cause unknown + spans layers |
+| `debugger` | code | diagnose | (a) failure + cause unknown + code-bounded (single layer); or (b) narrow single-area code-behaviour investigation, no failure |
+| `investigator` | *any* / cross | diagnose | (a) failure + cause unknown + spans layers; or (b) external-repo / whole-codebase / cross-layer behaviour investigation, no failure |
 | `code-reviewer` | code | assess | PR / diff present (non-harsh review) |
 | `inquisitor` | code | assess / critique | harsh review or adversarial code critique |
 | `project-reviewer` | project_meta | assess | spec / plan document present |
@@ -393,3 +397,4 @@ assigned retain their validity unless the amendment entry says otherwise.
 | 2026-06-12 | **E11 explicit-agent-mention override added** (§3 Step 3, routing-table overrides): directive `agent_mentions` field now constitutes near-dispositive pass-through; descriptive mentions distinguished and excluded. Added pre-labeling, before pass 1 began. | commit `5e5c57e`; issue #339 | Applies to rows with non-empty `agent_mentions` (34/168 rows have non-empty directive mentions; 109/168 have the key present including empty lists — see PR #348 correction) |
 | 2026-06-12 | **Domain-of-operate clarification added to §3 Step 2** (post-reliability, checkpoint-ratified): GitHub/VCS state operations carry `domain: "project_meta"` per §9.1 ops row; `is_any` reserved for no-subject-signal prompts. Ratified at user checkpoint after reliability pass yielded 0.775 domain agreement (target 0.85) traced to this ambiguity. | user checkpoint 2026-06-12; issue #339 | Gold labels unchanged — pass-1 labelers already applied the `project_meta` reading; amendment documents the ruling rather than correcting labels |
 | 2026-06-12 | **Two-tier label placement rule adopted** (§2 Artifact placement, §8 Freeze Semantics): full label file (all fields) stays local-only; a redacted axes-only copy (`corpus_id, domain, is_any, posture, gold_agent, confidence, disputed`) is committed at `docs/research/2026-06-12-gold-labels-redacted.jsonl` so a clean checkout can run the #330 gold-dependent metrics. Prior wording made labels frozen on one machine only. Also corrects the E11 coverage count: non-empty `agent_mentions` on 34/168 rows (not 109), E11 fired on 31 rows. | PR #348 review; issue #339 | Gold labels unchanged; only placement rule and reported count corrected |
+| 2026-06-19 | **`diagnose` broadened beyond failure-gated** (§3 Step 1): branch (b) added — read-only investigation of how existing/external code or a system *behaves* (no failure pasted, no prior-art markers) now resolves to `diagnose`, not `research`; `research` narrowed to prior-art/alternatives *discovery*. Per #395 / #364 Q2 adjudication. | issue #395; #364 Q2 | Gold relabeled: 35229/35266/35297 research→diagnose (gold_agent researcher→investigator); 34774 posture research→diagnose (gold_agent stays researcher, E11 directive-mention lock; domain is_any→code); 35414 re-adjudicated research→diagnose (gold_agent `investigator`; subject reading of `src/baton_harness/` — broad package-wide investigation per the branch-(b) breadth rule), `disputed` retained pending the subject-vs-reference research-gate refinement (#407). 34909/34912 previously adjudicated under #394. Re-measured RC delta = 0 (neutral) on the eval harness — the lexical matcher does not yet distinguish these diagnose-boundary cells (orthogonal matcher-coverage gap; code×diagnose tracked in #396). |
