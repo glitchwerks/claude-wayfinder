@@ -1,10 +1,12 @@
 """Two-axis routing policy: domain/posture cell map and per-domain agent gates.
 
 Lifted verbatim from the validated probe at ``docs/research/oracle_two_axis_probe.py``.
-The following known gold discrepancies are intentionally NOT fixed here and
-are tracked in issue #364:
+The following known gold discrepancies are intentionally NOT fixed here (see
+referenced issues for tracking):
 
-- ``infra_deploy`` gate omits ``"code-writer"`` (probe verbatim).
+- ``infra_deploy`` gate now includes ``"code-writer"`` (fix shipped in #364);
+  ``devops`` is advisory-only per charter; ``code-writer`` is the infra
+  implementation agent with the IaC skill attached by file path.
 - ``("code", "diagnose")`` maps to ``"debugger"`` rather than
   ``"investigator"``.
 - ``("infra_deploy", "research")`` resolves via ``("any", "research")`` to
@@ -45,8 +47,9 @@ DOMAIN_AGENT_MAP: dict[str | None, frozenset[str] | None] = {
     "project_meta": (
         frozenset({"project-reviewer", "project-planner"}) | ANY_DOMAIN_AGENTS
     ),
-    # NO code-writer (verbatim from probe; #364 will revisit)
-    "infra_deploy": frozenset({"devops"}) | ANY_DOMAIN_AGENTS,
+    # code-writer added by #364; devops is advisory-only per charter;
+    # code-writer is the infra implementation agent (IaC skill by file path)
+    "infra_deploy": frozenset({"devops", "code-writer"}) | ANY_DOMAIN_AGENTS,
     None: None,  # is_any / unlabeled → no gate
 }
 
