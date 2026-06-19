@@ -107,7 +107,7 @@ POSTURE RULES (apply in order; first match wins):
 6. plan: no artifact-bearing evidence AND scope-frame markers ("roadmap",
    "phases", "milestones", "scope", "requirements")
 7. research: no artifact-bearing evidence AND prior-art markers ("prior art",
-   "what exists", "alternatives", "has anyone", "what if we"). Prior-art /
+   "what exists", "alternatives", "has anyone"). Prior-art /
    alternatives DISCOVERY only -- surveying what already exists out there.
    Reading a SPECIFIC existing codebase's behaviour is diagnose (branch b),
    not research.
