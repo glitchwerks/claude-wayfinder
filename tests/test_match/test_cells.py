@@ -5,11 +5,11 @@ gate_agents (filter a scored list to the agents permitted in a domain).
 
 Provenance: _cells.py is lifted verbatim from a validated probe.
 Deferred-fix locks (see issue #364):
-- "infra_deploy" gate intentionally omits "code-writer"
+- "infra_deploy" gate now INCLUDES "code-writer" (fix shipped in #364)
 - ("code","diagnose") maps to "debugger", not "investigator"
 - ("infra_deploy","research") resolves via ("any","research") to
   "researcher", not "investigator" — gold-correct is investigator
-  but the fix is deferred to #364
+  but the fix is deferred to a future issue
 """
 
 from __future__ import annotations
@@ -180,16 +180,24 @@ class TestDomainAgentMap:
         assert "devops" in infra_set
         assert ANY_DOMAIN_AGENTS.issubset(infra_set)
 
-    def test_infra_deploy_excludes_code_writer_verbatim(self) -> None:
-        """infra_deploy set does NOT contain code-writer.
+    def test_infra_deploy_includes_code_writer(self) -> None:
+        """infra_deploy set includes code-writer (fix shipped in #364).
 
-        Deferred-fix lock (#364): the probe intentionally omits
-        code-writer from the infra_deploy gate.  Lock this until #364
-        adds it.
+        domain=infra_deploy, posture=build tasks are implementation
+        work (IaC / CI-CD files).  The implementer is code-writer with
+        the IaC skill attached — devops is advisory-only per charter.
+        This test is RED until DOMAIN_AGENT_MAP["infra_deploy"] is
+        updated to include "code-writer".
         """
         infra_set = DOMAIN_AGENT_MAP["infra_deploy"]
         assert infra_set is not None
-        assert "code-writer" not in infra_set
+        assert "code-writer" in infra_set, (
+            "DOMAIN_AGENT_MAP['infra_deploy'] must include 'code-writer'. "
+            "infra_deploy/build tasks route to the code-writer implementer "
+            "(IaC skill attached); devops is advisory-only per charter. "
+            "Fix: add 'code-writer' to the infra_deploy frozenset in "
+            "src/claude_wayfinder/match/_cells.py."
+        )
 
     def test_none_key_maps_to_none(self) -> None:
         """DOMAIN_AGENT_MAP[None] is None (is_any / unlabeled sentinel)."""

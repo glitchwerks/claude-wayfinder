@@ -1669,31 +1669,29 @@ class TestFallbackCellWinnerAbsentFromCatalog:
 #   preferred IS in catalog_agent_names (routable)
 #   preferred NOT in gated_names (domain gate excludes it)
 #
-# Deterministic scenario:
-#   domain="infra_deploy", posture="build"
-#   cell_map_lookup("infra_deploy", "build"):
-#     no direct ("infra_deploy", "build") entry → falls back to ("any", "build")
-#     → preferred = "code-writer"
-#   infra_deploy gate = {"devops"} ∪ ANY_DOMAIN_AGENTS
-#     → includes: "investigator", "approach-critic", "auditor", "researcher",
-#                 "ops", "project-planner", "devops"
-#     → EXCLUDES "code-writer" (verbatim from probe; issue #364 will revisit)
-#   Catalog below DOES contain "code-writer" (routable, scores >0 on "build")
-#     so preferred in catalog_agent_names = True
-#   But gated_names = {se.entry.name for se in gated_agents}
-#     = infra_deploy-allowed agents that score >0
-#     "code-writer" is excluded from the gate → NOT in gated_names
-#   → posture-routed block is skipped
-#   → decide(gated_agents) runs → posture_routed=False
+# NOTE (#364): After the infra_deploy gate fix, code-writer IS in the
+# infra_deploy gate, so the original infra_deploy/build scenario no
+# longer exercises this branch.  The class below now tests a different
+# domain (docs_prose with a devops-only catalog) that still exercises
+# the "preferred in catalog, not in gated_names" branch correctly.
 #
-# Reference: _cells.py line 49:
-#   "infra_deploy": frozenset({"devops"}) | ANY_DOMAIN_AGENTS
+# Corrected scenario:
+#   domain="docs_prose", posture="build"
+#   cell_map_lookup("docs_prose", "build") → "doc-writer"
+#   docs_prose gate = {"doc-writer"} ∪ ANY_DOMAIN_AGENTS
+#   Catalog: devops only (NOT in docs_prose gate, scores >0 on "deploy")
+#     preferred="doc-writer" in catalog_agent_names = False (devops is
+#     the only catalog agent, not doc-writer)
+#   → posture-routed block skipped → decide(gated_agents) fires
+#
+# Reference: _cells.py — DOMAIN_AGENT_MAP["infra_deploy"] now includes
+# "code-writer" (fix shipped in #364).
 
-_FALLBACK_PREFERRED_IN_CATALOG_NOT_GATED: list[dict[str, Any]] = [
-    # code-writer IS in catalog (routable) but is excluded from the
-    # infra_deploy domain gate.  Preferred cell lookup resolves to
-    # "code-writer" via ("any","build") fallback, but it fails the
-    # `preferred in gated_names` check.
+_INFRA_BUILD_CODE_WRITER_CATALOG: list[dict[str, Any]] = [
+    # code-writer IS in catalog (routable) and, after #364, IS also in
+    # the infra_deploy domain gate.  Preferred cell lookup resolves to
+    # "code-writer" via ("any","build") fallback AND the gate now allows
+    # it → posture-routed block fires → code-writer is delegated at 0.9.
     {
         "name": "code-writer",
         "kind": "agent",
@@ -1704,18 +1702,18 @@ _FALLBACK_PREFERRED_IN_CATALOG_NOT_GATED: list[dict[str, Any]] = [
         "triggers": {
             "command_prefixes": [],
             "agent_mentions": ["code-writer"],
-            "path_globs": ["**/*.py"],
+            "path_globs": ["**/*.py", "**/*.bicep", "**/*.yml"],
             "path_globs_excluded": [],
             "keywords": [
                 {"term": "implement", "weight": 1.0},
                 {"term": "build", "weight": 0.8},
+                {"term": "deploy", "weight": 0.7},
             ],
             "tool_mentions": [],
             "excludes": [],
         },
     },
-    # ops IS in infra_deploy gate (via ANY_DOMAIN_AGENTS) and scores >0
-    # on "deploy" → decide(gated_agents) returns ops, not code-writer.
+    # ops IS in infra_deploy gate (via ANY_DOMAIN_AGENTS).
     {
         "name": "ops",
         "kind": "agent",
@@ -1729,7 +1727,6 @@ _FALLBACK_PREFERRED_IN_CATALOG_NOT_GATED: list[dict[str, Any]] = [
             "path_globs": [],
             "path_globs_excluded": [],
             "keywords": [
-                {"term": "deploy", "weight": 1.0},
                 {"term": "run", "weight": 0.5},
             ],
             "tool_mentions": [],
@@ -1741,64 +1738,64 @@ _FALLBACK_PREFERRED_IN_CATALOG_NOT_GATED: list[dict[str, Any]] = [
 
 @pytest.fixture()
 def fixture_preferred_in_catalog_not_gated_path(tmp_path: Path) -> Path:
-    """Write the catalog used to test the preferred-in-catalog-not-gated branch.
+    """Write the catalog used to test the infra_deploy/build → code-writer contract.
 
-    Catalog contains code-writer (routable, keyword: build/implement) and ops
-    (routable, keyword: deploy).  Domain=infra_deploy gates OUT code-writer
-    but allows ops (via ANY_DOMAIN_AGENTS).
-
-    When cell_map_lookup("infra_deploy", "build") returns "code-writer" as
-    preferred, that agent is in the catalog but NOT in gated_names — so the
-    posture-routed block is skipped and decide(gated_agents) fires instead.
+    Catalog contains code-writer (routable, keywords: implement/build/deploy)
+    and ops (routable, any-domain).  After #364, the infra_deploy gate
+    INCLUDES code-writer, so cell_map_lookup("infra_deploy", "build") →
+    "code-writer" satisfies both the gate check and the catalog check →
+    posture-routed block fires → code-writer is delegated at confidence 0.9.
     """
-    catalog = {"entries": _FALLBACK_PREFERRED_IN_CATALOG_NOT_GATED}
-    path = tmp_path / "preferred-in-catalog-not-gated.json"
+    catalog = {"entries": _INFRA_BUILD_CODE_WRITER_CATALOG}
+    path = tmp_path / "infra-build-code-writer.json"
     path.write_text(json.dumps(catalog), encoding="utf-8")
     return path
 
 
 class TestFallbackPreferredInCatalogNotGated:
-    """Anchor 8: posture present, cell-winner in catalog but excluded by domain gate.
+    """Anchor 8 (updated for #364): infra_deploy/build routes to code-writer.
 
-    Setup:
+    Setup (post-#364 contract):
       domain="infra_deploy", posture="build"
       cell_map_lookup("infra_deploy","build") → "code-writer" (via any/build)
-      catalog: code-writer (routable, scores >0 on "build") + ops (in gate)
-      infra_deploy gate: includes ops (ANY_DOMAIN_AGENTS) but NOT code-writer
-      task_description="deploy the build" → code-writer scores on "build",
-        ops scores on "deploy"
+      catalog: code-writer (routable, scores >0 on "build"/"deploy") + ops
+      infra_deploy gate: now INCLUDES code-writer (fix shipped in #364) +
+        ops (via ANY_DOMAIN_AGENTS)
+      task_description="implement the build pipeline"
 
     Branch under test (scripts/corpus/eval/_systems.py ~lines 1044-1047):
       if (
           preferred                            ← "code-writer" (truthy)
-          and preferred in gated_names         ← False: excluded by infra_deploy gate
+          and preferred in gated_names         ← True: code-writer now in gate
           and preferred in catalog_agent_names ← True: in catalog
       ):
-    The entire block is False → posture_routed stays False → decide(gated_agents).
+    The block is True → posture_routed=True → code-writer delegated@0.9.
 
-    Expected:
-      - extras["posture_routed"] is False
-      - confidence != 0.9 (posture-routed path not taken)
-      - agent is NOT "code-writer" (gated out of infra_deploy)
+    Expected (new contract after #364):
+      - extras["posture_routed"] is True
+      - confidence == 0.9 (posture-routed path taken)
+      - agent IS "code-writer" (now included in infra_deploy gate)
     """
 
-    def test_posture_routed_is_false_when_preferred_excluded_by_domain_gate(
+    def test_posture_routed_is_true_when_code_writer_in_infra_deploy_gate(
         self, fixture_preferred_in_catalog_not_gated_path: Path
     ) -> None:
-        """extras['posture_routed'] is False when preferred is in catalog but gated out.
+        """extras['posture_routed'] is True when code-writer is in infra_deploy gate.
 
         domain=infra_deploy, posture=build → cell gives "code-writer".
-        code-writer exists in catalog but the infra_deploy gate excludes it
-        → preferred in gated_names is False → posture-routed block skipped.
+        After #364, code-writer IS in the infra_deploy gate, so
+        preferred in gated_names is True → posture-routed block fires.
+        This test is RED until DOMAIN_AGENT_MAP["infra_deploy"] includes
+        "code-writer".
         """
         from scripts.corpus.eval._systems import run_supplied_compose
 
         entry, label = _make_entry(
             corpus_id=1,
-            task_description="deploy the build",
+            task_description="implement the build pipeline",
             domain="infra_deploy",
             posture="build",
-            gold_agent="ops",
+            gold_agent="code-writer",
         )
         results = run_supplied_compose(
             [entry],
@@ -1806,120 +1803,117 @@ class TestFallbackPreferredInCatalogNotGated:
             {1: label},
         )
         assert len(results) == 1
-        assert results[0].extras.get("posture_routed") is False, (
-            f"preferred in catalog but gated out → posture_routed must be "
-            f"False, got {results[0].extras.get('posture_routed')!r}"
+        assert results[0].extras.get("posture_routed") is True, (
+            f"code-writer now in infra_deploy gate → posture_routed must be "
+            f"True, got {results[0].extras.get('posture_routed')!r}. "
+            f"Fix: add 'code-writer' to DOMAIN_AGENT_MAP['infra_deploy'] in "
+            f"src/claude_wayfinder/match/_cells.py."
         )
 
-    def test_confidence_is_not_0_9_when_preferred_excluded_by_domain_gate(
+    def test_confidence_is_0_9_when_code_writer_posture_routed_for_infra_deploy(
         self, fixture_preferred_in_catalog_not_gated_path: Path
     ) -> None:
-        """confidence != 0.9 when the preferred-not-gated fallback fires.
+        """confidence == 0.9 when code-writer is posture-routed for infra_deploy/build.
 
-        The posture-routed path unconditionally sets confidence=0.9.  When
-        the domain gate excludes the preferred agent and the block is skipped,
-        confidence must come from decide(), not from the posture-routed path.
+        The posture-routed path unconditionally sets confidence=0.9.
+        After #364, code-writer IS in the infra_deploy gate so this path fires.
+        This test is RED until DOMAIN_AGENT_MAP["infra_deploy"] includes
+        "code-writer".
         """
         from scripts.corpus.eval._systems import run_supplied_compose
 
         entry, label = _make_entry(
             corpus_id=1,
-            task_description="deploy the build",
+            task_description="implement the build pipeline",
             domain="infra_deploy",
             posture="build",
-            gold_agent="ops",
+            gold_agent="code-writer",
         )
         results = run_supplied_compose(
             [entry],
             fixture_preferred_in_catalog_not_gated_path,
             {1: label},
         )
-        assert results[0].confidence != 0.9, (
-            f"Fallback (preferred gated out) must not produce confidence=0.9; "
-            f"got confidence={results[0].confidence}"
+        assert results[0].confidence == 0.9, (
+            f"Posture-routed code-writer must produce confidence=0.9; "
+            f"got confidence={results[0].confidence}. "
+            f"Fix: add 'code-writer' to DOMAIN_AGENT_MAP['infra_deploy'] in "
+            f"src/claude_wayfinder/match/_cells.py."
         )
 
-    def test_agent_is_not_code_writer_when_gated_out_of_infra_deploy(
+    def test_agent_is_code_writer_for_infra_deploy_build(
         self, fixture_preferred_in_catalog_not_gated_path: Path
     ) -> None:
-        """Returned agent is NOT code-writer; it is from the infra_deploy-gated set.
+        """Returned agent IS code-writer for infra_deploy/build (new contract #364).
 
-        code-writer is the cell-map preferred agent but is excluded by the
-        infra_deploy gate.  decide(gated_agents) runs over the remaining gated
-        candidates (ops scores >0 on "deploy").  The returned agent must not
-        be code-writer — it is either ops (or None if decide returns advisory).
+        code-writer is the cell-map preferred agent for infra_deploy/build
+        (resolved via ("any","build") fallback).  After #364, code-writer
+        IS in the infra_deploy gate → posture-routed block fires →
+        the returned agent must be "code-writer".
+        This test is RED until DOMAIN_AGENT_MAP["infra_deploy"] includes
+        "code-writer" (currently gated out).
         """
         from scripts.corpus.eval._systems import run_supplied_compose
 
         entry, label = _make_entry(
             corpus_id=1,
-            task_description="deploy the build",
+            task_description="implement the build pipeline",
             domain="infra_deploy",
             posture="build",
-            gold_agent="ops",
+            gold_agent="code-writer",
         )
         results = run_supplied_compose(
             [entry],
             fixture_preferred_in_catalog_not_gated_path,
             {1: label},
         )
-        # code-writer must NOT be the result — it is excluded from infra_deploy gate
-        assert results[0].agent != "code-writer", (
-            f"code-writer must be excluded by infra_deploy gate; "
-            f"got agent={results[0].agent!r}"
-        )
-        # The agent must be from the infra_deploy-allowed set or None
-        infra_deploy_allowed = {
-            "devops", "investigator", "approach-critic",
-            "auditor", "researcher", "ops", "project-planner",
-        }
-        assert results[0].agent is None or results[0].agent in infra_deploy_allowed, (
-            f"Fallback agent must be from infra_deploy gate or None; "
-            f"got agent={results[0].agent!r}"
+        assert results[0].agent == "code-writer", (
+            f"infra_deploy/build must route to 'code-writer' after #364. "
+            f"Got agent={results[0].agent!r}. "
+            f"code-writer is currently gated out of DOMAIN_AGENT_MAP['infra_deploy']. "
+            f"Fix: add 'code-writer' to the infra_deploy frozenset in "
+            f"src/claude_wayfinder/match/_cells.py."
         )
 
 
 # ===========================================================================
-# Anchor 9 (Bug #366): Empty-gate fallback MUST NOT force-delegate@0.9
+# Anchor 9 (updated for #364): infra_deploy/build → code-writer@0.9
 # ===========================================================================
 #
-# ROOT CAUSE (issue #366): gate_agents() falls back to the full ungated list
-# when the gate empties.  In run_supplied_compose the posture-pick guard is:
+# HISTORY (issue #366): Before #364, the infra_deploy gate excluded
+# code-writer ({devops} | ANY_DOMAIN_AGENTS only).  When a catalog
+# contained only code-writer, gate_agents empties and falls back to
+# [code-writer] as the ungated list.  The bug caused this fallback to
+# satisfy the posture-pick guard, force-delegating code-writer@0.9.
 #
-#   if preferred and preferred in gated_names and preferred in catalog_agent_names:
-#       posture_routed = True  # delegate@0.9
+# POST-#364 CHANGE: code-writer is now IN the infra_deploy gate.
+# With a code-writer-only catalog:
+#   gate_agents([code-writer], "infra_deploy") → [code-writer]
+#     (genuine survivor — NOT an empty-gate fallback artifact)
+#   preferred = cell_map_lookup("infra_deploy","build") → "code-writer"
+#   preferred in gated_names → True  (genuinely gated in)
+#   preferred in catalog_agent_names → True
+#   → posture_routed = True, confidence = 0.9, agent = "code-writer"
 #
-# When gate_agents empties and falls back to [code-writer], gated_names =
-# {"code-writer"}.  If cell_map_lookup("infra_deploy","build") → "code-writer"
-# (via ("any","build") fallback), then:
-#   preferred="code-writer" in gated_names={"code-writer"} → TRUE  (BUG)
-#   preferred="code-writer" in catalog_agent_names → TRUE
-# → force-delegates to out-of-domain code-writer@0.9.
-#
-# CORRECT BEHAVIOR: empty-gate fallback must NOT satisfy the guard.
-# The system must NOT set posture_routed=True and must NOT set confidence=0.9;
-# it must fall through to decide() (the normal fallback path).
+# This is CORRECT behavior after #364, not the #366 bug.
+# The correct route is: delegate to code-writer@0.9 (posture_routed=True).
 #
 # SETUP:
-#   Catalog: code-writer ONLY (no ANY_DOMAIN_AGENTS in catalog).
+#   Catalog: code-writer ONLY.
 #   domain="infra_deploy", posture="build"
-#   infra_deploy gate = {devops} | ANY_DOMAIN_AGENTS
-#     = {devops, investigator, approach-critic, auditor, researcher,
-#        ops, project-planner}
-#   gate_agents([code-writer], "infra_deploy") → empty → fallback → [code-writer]
-#   cell_map_lookup("infra_deploy","build") → None (no direct cell)
-#     then ("any","build") → "code-writer"
-#   So preferred="code-writer" AND gated_names={"code-writer"} (fallback set)
-#   BUG: preferred in gated_names → True → delegate@0.9 to code-writer
-#   EXPECTED: NOT delegate@0.9 — posture_routed must be False, confidence != 0.9
+#   infra_deploy gate (after #364) = {devops, code-writer} | ANY_DOMAIN_AGENTS
+#   gate_agents([code-writer], "infra_deploy") → [code-writer] (genuine)
+#   cell_map_lookup("infra_deploy","build") → "code-writer" (via any/build)
+#   preferred in gated_names={"code-writer"} → True (genuine gate member)
+#   → posture_routed=True, confidence=0.9, agent="code-writer"
+#   EXPECTED: delegate to code-writer@0.9 with posture_routed=True
 
 _EMPTY_GATE_ONLY_CODE_WRITER_CATALOG: list[dict[str, Any]] = [
     # code-writer is the ONLY agent in this catalog.
-    # It is NOT in the infra_deploy gate (gate = {devops} | ANY_DOMAIN_AGENTS).
-    # When gate_agents([code-writer], "infra_deploy") is called, the result
-    # is empty, triggering the ungated fallback that returns [code-writer].
-    # The bug causes this fallback agent to satisfy the posture-pick guard
-    # and be force-delegated at confidence 0.9.
+    # After #364, code-writer IS in the infra_deploy gate, so
+    # gate_agents([code-writer], "infra_deploy") returns [code-writer]
+    # as a genuine gate survivor (not an empty-gate fallback artifact).
+    # The posture-pick guard fires correctly → code-writer@0.9.
     {
         "name": "code-writer",
         "kind": "agent",
@@ -1947,10 +1941,10 @@ _EMPTY_GATE_ONLY_CODE_WRITER_CATALOG: list[dict[str, Any]] = [
 def fixture_empty_gate_only_code_writer_catalog_path(tmp_path: Path) -> Path:
     """Write a single-agent catalog containing only code-writer.
 
-    code-writer is NOT in the infra_deploy domain gate, so gate_agents
-    returns an empty list and falls back to the ungated [code-writer].
-    This is the minimal repro for bug #366: the empty-gate ungated fallback
-    must NOT satisfy the posture-pick guard for an out-of-domain agent.
+    After #364, code-writer IS in the infra_deploy gate, so
+    gate_agents([code-writer], "infra_deploy") returns [code-writer] as a
+    genuine gate survivor.  The posture-pick guard fires correctly and
+    code-writer is delegated at confidence 0.9.
     """
     catalog = {"entries": _EMPTY_GATE_ONLY_CODE_WRITER_CATALOG}
     path = tmp_path / "empty-gate-code-writer-only.json"
@@ -1959,29 +1953,29 @@ def fixture_empty_gate_only_code_writer_catalog_path(tmp_path: Path) -> Path:
 
 
 class TestEmptyGateFallbackDoesNotDelegateAtNinetyPercent:
-    """Anchor 9 (Bug #366): empty-gate fallback must NOT produce delegate@0.9.
+    """Anchor 9 (updated for #364): code-writer-only catalog routes correctly.
 
-    When gate_agents() returns the ungated list because all candidates were
-    gated out, run_supplied_compose must NOT interpret the ungated fallback
-    list as genuine gate survivors.  The out-of-domain cell winner that
-    appears in gated_names only because of the fallback must NOT trigger
-    the posture-routed delegate@0.9 path.
+    After #364, code-writer is a genuine member of the infra_deploy gate.
+    A code-writer-only catalog for infra_deploy/build produces:
+      gate_agents([code-writer], "infra_deploy") → [code-writer] (genuine)
+      preferred = "code-writer" (cell_map_lookup via any/build)
+      posture-pick guard: True → delegate@0.9
 
-    Expected behavior: posture_routed=False AND confidence != 0.9.
+    Expected behavior (new contract): posture_routed=True, confidence=0.9,
+    agent="code-writer", decision="delegate".
     """
 
-    def test_empty_gate_fallback_posture_routed_is_false(
+    def test_infra_deploy_build_posture_routed_is_true_with_code_writer(
         self,
         fixture_empty_gate_only_code_writer_catalog_path: Path,
     ) -> None:
-        """extras['posture_routed'] is False when gate empties and falls back.
+        """extras['posture_routed'] is True for infra_deploy/build after #364.
 
         domain=infra_deploy, posture=build, catalog=[code-writer only].
-        gate_agents([code-writer], "infra_deploy") empties → returns [code-writer].
-        cell_map_lookup("infra_deploy","build") → "code-writer" (any/build).
-        BUG: preferred in gated_names (fallback set) → posture_routed=True.
-        EXPECTED: posture_routed must be False — fallback survivors are not
-        genuine gate survivors.
+        After #364, gate_agents returns [code-writer] as a genuine survivor.
+        preferred="code-writer" in gated_names → True → posture_routed=True.
+        This test is RED until DOMAIN_AGENT_MAP["infra_deploy"] includes
+        "code-writer".
         """
         from scripts.corpus.eval._systems import run_supplied_compose
 
@@ -1990,7 +1984,7 @@ class TestEmptyGateFallbackDoesNotDelegateAtNinetyPercent:
             task_description="build and deploy the service",
             domain="infra_deploy",
             posture="build",
-            gold_agent="devops",
+            gold_agent="code-writer",
         )
         results = run_supplied_compose(
             [entry],
@@ -1998,21 +1992,24 @@ class TestEmptyGateFallbackDoesNotDelegateAtNinetyPercent:
             {1: label},
         )
         assert len(results) == 1
-        assert results[0].extras.get("posture_routed") is False, (
-            f"Empty-gate fallback must NOT set posture_routed=True. "
-            f"code-writer is only in gated_names because the gate emptied "
-            f"and fell back to the ungated list. "
-            f"Got posture_routed={results[0].extras.get('posture_routed')!r}"
+        assert results[0].extras.get("posture_routed") is True, (
+            f"After #364: code-writer is a genuine infra_deploy gate member. "
+            f"posture_routed must be True, got "
+            f"{results[0].extras.get('posture_routed')!r}. "
+            f"Fix: add 'code-writer' to DOMAIN_AGENT_MAP['infra_deploy'] in "
+            f"src/claude_wayfinder/match/_cells.py."
         )
 
-    def test_empty_gate_fallback_confidence_is_not_0_9(
+    def test_infra_deploy_build_confidence_is_0_9_with_code_writer(
         self,
         fixture_empty_gate_only_code_writer_catalog_path: Path,
     ) -> None:
-        """confidence != 0.9 when the empty-gate fallback fires.
+        """confidence == 0.9 for infra_deploy/build code-writer after #364.
 
-        delegate@0.9 is the posture-routed confidence.  An empty-gate
-        fallback must not reach that path, so confidence must differ.
+        The posture-routed path sets confidence=0.9.  After #364, code-writer
+        is a genuine gate member and this path fires correctly.
+        This test is RED until DOMAIN_AGENT_MAP["infra_deploy"] includes
+        "code-writer".
         """
         from scripts.corpus.eval._systems import run_supplied_compose
 
@@ -2021,31 +2018,31 @@ class TestEmptyGateFallbackDoesNotDelegateAtNinetyPercent:
             task_description="build and deploy the service",
             domain="infra_deploy",
             posture="build",
-            gold_agent="devops",
+            gold_agent="code-writer",
         )
         results = run_supplied_compose(
             [entry],
             fixture_empty_gate_only_code_writer_catalog_path,
             {1: label},
         )
-        assert results[0].confidence != 0.9, (
-            f"Empty-gate fallback must NOT produce confidence=0.9 "
-            f"(the posture-routed value). "
+        assert results[0].confidence == 0.9, (
+            f"After #364: posture-routed code-writer must produce confidence=0.9. "
             f"Got confidence={results[0].confidence}. "
-            f"This means code-writer was force-delegated via the buggy "
-            f"empty-gate path — it should have taken the decide() fallback."
+            f"Fix: add 'code-writer' to DOMAIN_AGENT_MAP['infra_deploy'] in "
+            f"src/claude_wayfinder/match/_cells.py."
         )
 
-    def test_empty_gate_fallback_decision_is_not_delegate_to_out_of_domain_agent(
+    def test_infra_deploy_build_routes_delegate_to_code_writer(
         self,
         fixture_empty_gate_only_code_writer_catalog_path: Path,
     ) -> None:
-        """Decision must NOT be delegate to code-writer at confidence 0.9.
+        """Decision is delegate to code-writer@0.9 for infra_deploy/build after #364.
 
-        The combined assertion: the system must not route (decision=delegate,
-        agent=code-writer, confidence=0.9) when the empty-gate fallback
-        triggered.  Any other outcome (advisory, lower confidence, etc.) is
-        acceptable — the posture-routed path must not have fired.
+        The combined assertion: infra_deploy/build with a code-writer-only
+        catalog must produce decision=delegate, agent=code-writer,
+        confidence=0.9, posture_routed=True.
+        This test is RED until DOMAIN_AGENT_MAP["infra_deploy"] includes
+        "code-writer".
         """
         from scripts.corpus.eval._systems import run_supplied_compose
 
@@ -2054,7 +2051,7 @@ class TestEmptyGateFallbackDoesNotDelegateAtNinetyPercent:
             task_description="build and deploy the service",
             domain="infra_deploy",
             posture="build",
-            gold_agent="devops",
+            gold_agent="code-writer",
         )
         results = run_supplied_compose(
             [entry],
@@ -2062,20 +2059,470 @@ class TestEmptyGateFallbackDoesNotDelegateAtNinetyPercent:
             {1: label},
         )
         r = results[0]
-        # The buggy behavior is: decision=delegate, agent=code-writer,
-        # confidence=0.9, posture_routed=True — all four together.
-        # We assert that this specific combination does NOT occur.
-        is_buggy_route = (
+        is_correct_route = (
             r.decision == "delegate"
             and r.agent == "code-writer"
             and r.confidence == 0.9
             and r.extras.get("posture_routed") is True
         )
-        assert not is_buggy_route, (
-            f"Bug #366 reproduced: empty-gate fallback force-delegated to "
-            f"out-of-domain code-writer@0.9 with posture_routed=True. "
-            f"decision={r.decision!r}, agent={r.agent!r}, "
+        assert is_correct_route, (
+            f"After #364: infra_deploy/build must delegate to code-writer@0.9 "
+            f"with posture_routed=True. "
+            f"Got decision={r.decision!r}, agent={r.agent!r}, "
             f"confidence={r.confidence}, "
             f"posture_routed={r.extras.get('posture_routed')!r}. "
-            f"Expected: posture_routed=False and confidence != 0.9."
+            f"Fix: add 'code-writer' to DOMAIN_AGENT_MAP['infra_deploy'] in "
+            f"src/claude_wayfinder/match/_cells.py."
+        )
+
+
+# ===========================================================================
+# Anchor 10 (#364): Positive route — infra_deploy/build → code-writer
+# ===========================================================================
+#
+# Spec (issue #364, adjudicated):
+#   Tasks with domain=infra_deploy, posture=build (implement/edit an IaC or
+#   CI-CD file) MUST route to code-writer, NOT devops.  devops is
+#   advisory-only; the implementer is code-writer with the IaC skill attached
+#   by file path.  The gold corpus was corrected to match (commit 1705ebc).
+#
+# This anchor is the primary positive assertion for the #364 contract:
+#   - supplied labels: domain="infra_deploy", posture="build", is_any=False
+#   - expected agent: "code-writer"
+#   - expected decision: "delegate" (posture-routed)
+#   - expected posture_routed: True
+#
+# The test is RED against the current (unfixed) _cells.py because
+# DOMAIN_AGENT_MAP["infra_deploy"] currently excludes code-writer.
+
+_INFRA_DEPLOY_BUILD_ROUTABLE_CATALOG: list[dict[str, Any]] = [
+    # code-writer: routable, IaC-shaped keywords, path globs for
+    # infrastructure file types.  After #364 it IS in the infra_deploy gate.
+    {
+        "name": "code-writer",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["code-writer"],
+            "path_globs": ["**/*.bicep", "**/*.yml", "**/*.tf"],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "implement", "weight": 1.0},
+                {"term": "build", "weight": 0.8},
+                {"term": "pipeline", "weight": 0.7},
+                {"term": "deploy", "weight": 0.6},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    # devops: advisory-only per charter; included to confirm it is NOT
+    # the result even when present alongside code-writer.
+    {
+        "name": "devops",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["devops"],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "deploy", "weight": 0.5},
+                {"term": "pipeline", "weight": 0.5},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    # ops: any-domain agent, present as fallback candidate.
+    {
+        "name": "ops",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": ["gh", "git"],
+            "agent_mentions": ["ops"],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "run", "weight": 0.5},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+]
+
+
+@pytest.fixture()
+def fixture_infra_deploy_build_routable_catalog_path(tmp_path: Path) -> Path:
+    """Write the catalog for the primary infra_deploy/build contract test.
+
+    Contains code-writer (IaC keywords), devops (pipeline keywords), and
+    ops (any-domain).  After #364, code-writer IS in the infra_deploy gate,
+    so cell_map_lookup("infra_deploy","build") → "code-writer" (via any/build)
+    satisfies the posture-pick guard → code-writer delegated at 0.9.
+    devops is present but must NOT be the result (advisory-only per charter).
+    """
+    catalog = {"entries": _INFRA_DEPLOY_BUILD_ROUTABLE_CATALOG}
+    path = tmp_path / "infra-deploy-build-routable.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+class TestInfraDeployBuildRoutesToCodeWriter:
+    """Anchor 10 (#364): infra_deploy/build with supplied labels routes to code-writer.
+
+    Exercises the full System-5 supplied-compose path:
+      - supplied labels: domain="infra_deploy", posture="build", is_any=False
+      - cell_map_lookup("infra_deploy","build") → "code-writer" (any/build)
+      - After #364: code-writer IS in infra_deploy gate → posture_routed=True
+      - Expected agent: "code-writer" (NOT devops, NOT ops)
+
+    These tests are RED against the current (unfixed) _cells.py which
+    excludes code-writer from the infra_deploy gate.
+    """
+
+    def test_infra_deploy_build_supplied_labels_routes_to_code_writer(
+        self,
+        fixture_infra_deploy_build_routable_catalog_path: Path,
+    ) -> None:
+        """Supplied labels domain=infra_deploy, posture=build route to code-writer.
+
+        This is the primary positive assertion for issue #364.
+        infra_deploy+build is an implementation task (IaC/CI-CD file edit).
+        The implementer is code-writer — devops is advisory-only per charter.
+        RED until DOMAIN_AGENT_MAP["infra_deploy"] includes "code-writer".
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description=(
+                "implement the Bicep deployment pipeline for the staging slot"
+            ),
+            domain="infra_deploy",
+            posture="build",
+            gold_agent="code-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_infra_deploy_build_routable_catalog_path,
+            {1: label},
+        )
+        assert len(results) == 1
+        assert results[0].agent == "code-writer", (
+            f"infra_deploy/build must route to 'code-writer' (issue #364). "
+            f"Got agent={results[0].agent!r}. "
+            f"code-writer is currently excluded from "
+            f"DOMAIN_AGENT_MAP['infra_deploy'] — it must be added. "
+            f"devops is advisory-only and must NOT be the routing target."
+        )
+
+    def test_infra_deploy_build_decision_is_delegate_not_advisory(
+        self,
+        fixture_infra_deploy_build_routable_catalog_path: Path,
+    ) -> None:
+        """Decision for infra_deploy/build is 'delegate', not 'advisory'.
+
+        Posture-routed routing produces decision='delegate'.  Verifying
+        decision confirms the posture-pick guard fired (not the advisory
+        fallback path).  RED until code-writer is in infra_deploy gate.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description=(
+                "implement the Bicep deployment pipeline for the staging slot"
+            ),
+            domain="infra_deploy",
+            posture="build",
+            gold_agent="code-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_infra_deploy_build_routable_catalog_path,
+            {1: label},
+        )
+        assert results[0].decision == "delegate", (
+            f"infra_deploy/build must produce decision='delegate'. "
+            f"Got decision={results[0].decision!r}. "
+            f"Fix: add 'code-writer' to DOMAIN_AGENT_MAP['infra_deploy'] in "
+            f"src/claude_wayfinder/match/_cells.py."
+        )
+
+    def test_infra_deploy_build_agent_is_not_devops(
+        self,
+        fixture_infra_deploy_build_routable_catalog_path: Path,
+    ) -> None:
+        """Returned agent is NOT devops for infra_deploy/build after #364.
+
+        devops is advisory-only per charter; the implementer is code-writer.
+        Even when devops is present in the catalog and scores on keywords,
+        the result must be code-writer (posture-routed via the cell map).
+        RED until code-writer is in infra_deploy gate (currently routes to
+        devops or ops via the gated fallback path).
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description=(
+                "implement the Bicep deployment pipeline for the staging slot"
+            ),
+            domain="infra_deploy",
+            posture="build",
+            gold_agent="code-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_infra_deploy_build_routable_catalog_path,
+            {1: label},
+        )
+        assert results[0].agent != "devops", (
+            f"infra_deploy/build must NOT route to 'devops' (advisory-only). "
+            f"Got agent={results[0].agent!r}. "
+            f"The correct agent is 'code-writer' per issue #364."
+        )
+
+
+# ===========================================================================
+# Anchor 11 (PR #394 review): cell-winner-gated-out guard — docs_prose/assess
+# ===========================================================================
+#
+# HISTORY:  Before #364, Anchors 8 and 9 exercised the branch where the cell
+# winner (code-writer) was present in the catalog but NOT in the domain gate
+# (infra_deploy).  #364 added code-writer to the infra_deploy gate, so those
+# two anchors were updated to assert the new positive-route contract — leaving
+# the "cell winner in catalog, gated out of domain" branch UNTESTED.
+#
+# This anchor re-establishes that guard using a (domain, posture) pair that
+# is still gated out after #364:
+#
+#   domain="docs_prose", posture="assess"
+#   cell_map_lookup("docs_prose", "assess") → no direct key
+#     → falls back to ("any", "assess") → "code-reviewer"
+#   DOMAIN_AGENT_MAP["docs_prose"] = frozenset({"doc-writer"}) | ANY_DOMAIN_AGENTS
+#     = {"doc-writer","investigator","approach-critic","auditor",
+#        "researcher","ops","project-planner"}
+#   "code-reviewer" is NOT in that set → gated out.
+#
+# Catalog: code-reviewer (routable, keyword "review" → scores >0 on the task)
+#          + doc-writer (routable, keyword "document" → any-domain fallback)
+#
+# Expected behavior (cell-winner-gated-out branch):
+#   - preferred = "code-reviewer"
+#   - preferred in catalog_agent_names → True
+#   - preferred in gated_names → False  (core gate check fails)
+#   → posture_routed stays False
+#   → system falls back to decide(gated_agents)
+#   → result is NOT delegate@0.9 and agent is NOT "code-reviewer"
+#
+# Algorithm reference (scripts/corpus/eval/_systems.py ~lines 1044-1047):
+#   if (
+#       preferred
+#       and preferred in gated_names        ← THIS check fails here
+#       and preferred in catalog_agent_names
+#   ):
+#       posture_routed = True; ...
+#
+# A regression that deletes or weakens the `preferred in gated_names` check
+# would cause code-reviewer to be delegated@0.9 despite being gated out —
+# exactly what these assertions detect.
+
+_DOCS_PROSE_ASSESS_GATED_OUT_CATALOG: list[dict[str, Any]] = [
+    # code-reviewer: routable, scores >0 on "review" keyword.
+    # Cell (docs_prose, assess) resolves to "code-reviewer" via (any, assess).
+    # code-reviewer is NOT in the docs_prose gate — it must be gated out.
+    {
+        "name": "code-reviewer",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["code-reviewer"],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "review", "weight": 1.0},
+                {"term": "assess", "weight": 0.8},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    # doc-writer: in docs_prose gate, scores on "document" keyword.
+    # Present so the gated candidate list is non-empty after gate_agents(),
+    # giving decide() a concrete candidate.
+    {
+        "name": "doc-writer",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["doc-writer"],
+            "path_globs": ["**/*.md"],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "document", "weight": 1.0},
+                {"term": "docs", "weight": 0.8},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+]
+
+
+@pytest.fixture()
+def fixture_docs_prose_assess_gated_out_catalog_path(tmp_path: Path) -> Path:
+    """Write the catalog for the docs_prose/assess cell-winner-gated-out test.
+
+    Catalog contains code-reviewer (keyword: review/assess) and doc-writer
+    (keyword: document).  code-reviewer is the cell-map winner for
+    (docs_prose, assess) — resolved via (any, assess) — but is NOT in the
+    docs_prose gate.  doc-writer IS in the gate and provides a concrete
+    gated candidate so decide() has something to work with.
+    """
+    catalog = {"entries": _DOCS_PROSE_ASSESS_GATED_OUT_CATALOG}
+    path = tmp_path / "docs-prose-assess-gated-out.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+class TestCellWinnerGatedOutDocsProseAssess:
+    """Anchor 11: post-#364 guard for the cell-winner-gated-out branch.
+
+    Replaces the coverage the Anchor-8/9 inversion removed (PR #394 review).
+    The old Anchors 8 and 9 used infra_deploy/build to show code-writer was
+    gated out.  #364 fixed that — code-writer is now in the infra_deploy gate
+    — so Anchors 8/9 were rewritten to assert the positive route.  This
+    anchor restores the ``preferred in gated_names → False`` guard using a
+    pair that is STILL gated out: docs_prose/assess → code-reviewer.
+
+    Setup:
+      domain="docs_prose", posture="assess"
+      cell_map_lookup("docs_prose","assess") → "code-reviewer" (via any/assess)
+      DOMAIN_AGENT_MAP["docs_prose"] = frozenset({"doc-writer"}) | ANY_DOMAIN_AGENTS
+      "code-reviewer" NOT in that set → gated out
+      catalog: code-reviewer (review/assess keywords) + doc-writer (document keyword)
+      task_description contains "review" → code-reviewer scores >0 in the catalog
+
+    Expected: preferred in gated_names → False → posture_routed stays False
+              result is not delegate@0.9; agent is not "code-reviewer".
+    """
+
+    def test_posture_routed_is_false_when_cell_winner_gated_out(
+        self, fixture_docs_prose_assess_gated_out_catalog_path: Path
+    ) -> None:
+        """extras['posture_routed'] is False when cell winner is gated out.
+
+        domain=docs_prose, posture=assess → cell gives "code-reviewer".
+        code-reviewer is NOT in the docs_prose gate → preferred in
+        gated_names is False → posture_routed stays False.
+
+        Replaces the Anchor-8/9 pre-#364 guard for the same branch
+        (infra_deploy/build was the old example; see PR #394 review).
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="review and assess the documentation",
+            domain="docs_prose",
+            posture="assess",
+            gold_agent="doc-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_docs_prose_assess_gated_out_catalog_path,
+            {1: label},
+        )
+        assert len(results) == 1
+        assert results[0].extras.get("posture_routed") is False, (
+            f"docs_prose/assess cell winner (code-reviewer) is gated out — "
+            f"posture_routed must be False, "
+            f"got {results[0].extras.get('posture_routed')!r}"
+        )
+
+    def test_not_delegate_at_0_9_when_cell_winner_gated_out(
+        self, fixture_docs_prose_assess_gated_out_catalog_path: Path
+    ) -> None:
+        """Result is not a delegate at confidence 0.9 when cell winner gated out.
+
+        The posture-routed path (when it fires) sets decision='delegate'
+        and confidence=0.9.  When the gate check fails, that path is
+        skipped; the fallback decide() path produces a different confidence.
+        Asserts the system did NOT silently take the posture-routed path.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="review and assess the documentation",
+            domain="docs_prose",
+            posture="assess",
+            gold_agent="doc-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_docs_prose_assess_gated_out_catalog_path,
+            {1: label},
+        )
+        r = results[0]
+        # The posture-routed path produces (decision="delegate", confidence=0.9)
+        # simultaneously — the gated-out branch must not produce that pair.
+        is_posture_routed_result = (
+            r.decision == "delegate" and r.confidence == 0.9
+        )
+        assert not is_posture_routed_result, (
+            f"Cell winner gated out — result must not be delegate@0.9. "
+            f"Got decision={r.decision!r}, confidence={r.confidence}"
+        )
+
+    def test_agent_is_not_code_reviewer_when_gated_out(
+        self, fixture_docs_prose_assess_gated_out_catalog_path: Path
+    ) -> None:
+        """Returned agent is NOT code-reviewer when it is gated out of docs_prose.
+
+        code-reviewer is the cell-map preferred agent for (docs_prose, assess)
+        but is excluded by the docs_prose domain gate.  The fallback
+        decide() call must not return "code-reviewer" as the routed agent.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description="review and assess the documentation",
+            domain="docs_prose",
+            posture="assess",
+            gold_agent="doc-writer",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_docs_prose_assess_gated_out_catalog_path,
+            {1: label},
+        )
+        assert results[0].agent != "code-reviewer", (
+            f"code-reviewer is gated out of docs_prose — "
+            f"must not be returned as the routed agent, "
+            f"got agent={results[0].agent!r}"
         )
