@@ -160,6 +160,8 @@ Derive `gold_agent` in two sub-steps:
 spans multiple layers (`file_paths` across code + infra + data areas, or layer nouns name
 ≥ 2 distinct layers) → `investigator` (Spec E §9.1, §10 E7).
 
+**Branch-(b) diagnose gold-agent rule (#395).** For branch-(b) diagnose — read-only behaviour investigation with no pasted failure — the §10 E7 failure-span criterion does not apply (there is no failure to span); derive the gold agent from investigation **breadth** instead. Comprehending an external repo, an unfamiliar whole codebase, or a system's end-to-end behaviour is inherently cross-cutting → `investigator` (the default for branch b). A narrowly-scoped single-file / single-function behaviour question with no cross-layer reach → `debugger`. (Worked: 35229/35266/35297 are external-repo / whole-codebase comprehension → `investigator`; 34774 keeps `researcher` via the E11 directive-mention override regardless of posture.)
+
 ‡ `critique` split: code/architecture artifact present → `inquisitor`; idea only, no artifact
 → `approach-critic` (Spec E §9.1, §10.2 E9/E10 note).
 

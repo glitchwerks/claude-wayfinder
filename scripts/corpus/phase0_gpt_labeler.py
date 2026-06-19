@@ -84,11 +84,16 @@ POSTURE RULES (apply in order; first match wins):
    CRITICAL BOUNDARY: "operate" requires NO review/critique intent.
    A bare PR status/CI check = operate. "Review PR #N diff" or
    "critique the approach" = assess or critique, NOT operate.
-2. diagnose: machine-emitted failure output in prompt (stacktrace, test-runner
-   summary like "FAILED tests/...", compiler diagnostic, panic:) AND cause not
-   stated (no causal connective like "after/because/due to/caused by/since/
-   introduced by" in the same clause as the failure)
-   EXCEPTION: if cause IS stated in same clause as failure -> posture = build
+2. diagnose: EITHER (a) machine-emitted failure output in prompt (stacktrace,
+   test-runner summary like "FAILED tests/...", compiler diagnostic, panic:)
+   AND cause not stated (no causal connective like "after/because/due to/
+   caused by/since/introduced by" in the same clause as the failure);
+   OR (b) read-only investigation of how existing/external code or a system
+   BEHAVES -- comprehending an unfamiliar codebase, external-repo mechanics,
+   or platform behaviour -- with NO failure output pasted AND NO prior-art
+   markers.
+   EXCEPTION (branch a only): if cause IS stated in same clause as failure
+   -> posture = build
 3. assess: explicit review/critique intent on a PR diff, code review of a PR,
    or reading PR change-request feedback to evaluate it. Signals: tool_mentions
    includes get_pull_request* AND task asks to evaluate/review the content;
@@ -102,7 +107,10 @@ POSTURE RULES (apply in order; first match wins):
 6. plan: no artifact-bearing evidence AND scope-frame markers ("roadmap",
    "phases", "milestones", "scope", "requirements")
 7. research: no artifact-bearing evidence AND prior-art markers ("prior art",
-   "what exists", "alternatives", "has anyone", "what if we")
+   "what exists", "alternatives", "has anyone", "what if we"). Prior-art /
+   alternatives DISCOVERY only -- surveying what already exists out there.
+   Reading a SPECIFIC existing codebase's behaviour is diagnose (branch b),
+   not research.
 8. build: DEFAULT -- use when no other posture fires; or when target behavior
    is known and no failure evidence is present
 
