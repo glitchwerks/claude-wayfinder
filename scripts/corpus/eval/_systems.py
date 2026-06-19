@@ -43,6 +43,7 @@ import claude_wayfinder.match._decide as _decide_module
 from claude_wayfinder.match._catalog import load_catalog
 from claude_wayfinder.match._cells import (
     DOMAIN_AGENT_MAP,
+    SELF_HANDLE_SENTINEL,
     cell_map_lookup,
     gate_agents,
 )
@@ -400,7 +401,8 @@ def _candidate_agents_from_postures(
             agent = "investigator"
         else:
             agent = cell_map_lookup(domain, p)
-        if agent and agent not in seen:
+        # Sentinel is a routing instruction, not a real agent name; skip it.
+        if agent and agent != SELF_HANDLE_SENTINEL and agent not in seen:
             candidates.append(agent)
             seen.add(agent)
     return candidates
@@ -977,7 +979,12 @@ def run_encoder(
         # Route via domain + build default (posture not computed here)
         agent = cell_map_lookup(domain, "build")
 
-        if agent and agent in catalog_agent_names:
+        # Sentinel is a routing instruction; translate before catalog check.
+        if agent == SELF_HANDLE_SENTINEL:
+            decision = "self_handle"
+            agent = None
+            confidence = round(float(top1), 4)
+        elif agent and agent in catalog_agent_names:
             decision = "delegate"
             confidence = round(float(top1), 4)
         else:
@@ -1102,7 +1109,12 @@ def run_composed(
                 ):
                     braked = True
 
-        if agent and agent not in catalog_agent_names:
+        # Sentinel check must fire FIRST: the sentinel is not a routable agent
+        # and must never reach the "unknown agent → advisory" guard below.
+        if agent == SELF_HANDLE_SENTINEL:
+            decision = "self_handle"
+            agent = None
+        elif agent and agent not in catalog_agent_names:
             decision = "advisory"
         elif agent and confidence >= 0.85:
             decision = "delegate"
@@ -1222,32 +1234,43 @@ def run_supplied_compose(
 
         if oracle_posture:
             preferred = cell_map_lookup(domain_for_lookup, oracle_posture)
-            gated_names = {se.entry.name for se in gated_agents}
-            # Bug #366 guard: distinguish genuine gate survivors from the
-            # empty-gate ungated fallback.  gate_agents() falls back to the
-            # full ungated list when gating would produce an empty result.
-            # When that fallback fires, an out-of-domain preferred agent may
-            # appear in gated_names even though the domain gate excludes it.
-            # Fix (Option B): for concretely-gated domains, only consider an
-            # agent a genuine survivor when it is actually in the domain's
-            # allowed set — not merely present in the (possibly fallback) list.
-            domain_allowed = DOMAIN_AGENT_MAP.get(oracle_domain)
-            if domain_allowed is not None:
-                # Concrete gate: genuine survivors are scored AND in allowed.
-                genuine_gated_names = gated_names & domain_allowed
-            else:
-                # No gate (None key or unknown domain): all scored agents
-                # are genuine — no distinction needed.
-                genuine_gated_names = gated_names
-            if (
-                preferred
-                and preferred in genuine_gated_names
-                and preferred in catalog_agent_names
-            ):
-                agent_out = preferred
-                decision_out = "delegate"
+            # #397: sentinel short-circuits BEFORE the gate/catalog checks;
+            # it is a routing instruction, not a routable agent.  It must
+            # never reach genuine_gated_names or appear in extras["scores"].
+            if preferred == SELF_HANDLE_SENTINEL:
+                decision_out = "self_handle"
+                agent_out = None
                 confidence_out = 0.9
                 posture_routed = True
+            else:
+                gated_names = {se.entry.name for se in gated_agents}
+                # Bug #366 guard: distinguish genuine gate survivors from the
+                # empty-gate ungated fallback.  gate_agents() falls back to
+                # the full ungated list when gating would produce an empty
+                # result.  When that fallback fires, an out-of-domain
+                # preferred agent may appear in gated_names even though the
+                # domain gate excludes it.
+                # Fix (Option B): for concretely-gated domains, only consider
+                # an agent a genuine survivor when it is actually in the
+                # domain's allowed set — not merely present in the (possibly
+                # fallback) list.
+                domain_allowed = DOMAIN_AGENT_MAP.get(oracle_domain)
+                if domain_allowed is not None:
+                    # Concrete gate: genuine survivors are scored AND allowed.
+                    genuine_gated_names = gated_names & domain_allowed
+                else:
+                    # No gate (None key or unknown domain): all scored agents
+                    # are genuine — no distinction needed.
+                    genuine_gated_names = gated_names
+                if (
+                    preferred
+                    and preferred in genuine_gated_names
+                    and preferred in catalog_agent_names
+                ):
+                    agent_out = preferred
+                    decision_out = "delegate"
+                    confidence_out = 0.9
+                    posture_routed = True
 
         if not posture_routed:
             decision_dict = decide(gated_agents, scored_skills, features, catalog)

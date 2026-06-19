@@ -2526,3 +2526,554 @@ class TestCellWinnerGatedOutDocsProseAssess:
             f"must not be returned as the routed agent, "
             f"got agent={results[0].agent!r}"
         )
+
+
+# ===========================================================================
+# Issue #397: Abstain sentinel — (project_meta, build) → self_handle
+# ===========================================================================
+#
+# These tests are RED until:
+#   1. SELF_HANDLE_SENTINEL is added to _cells.py
+#   2. ("project_meta","build") maps to SELF_HANDLE_SENTINEL in _CELL_MAP
+#   3. run_supplied_compose translates the sentinel to
+#      decision="self_handle", agent=None (NOT a delegate to a real agent)
+#
+# Before the change, ("project_meta","build") falls back to
+# ("any","build") → "code-writer", so run_supplied_compose delegates to
+# code-writer (which IS in the catalog below).
+#
+# Expected failure modes BEFORE implementation:
+#   test_project_meta_build_decision_is_self_handle
+#     → AssertionError: decision='delegate', agent='code-writer' (fallback)
+#   test_project_meta_build_agent_is_none
+#     → AssertionError: agent='code-writer'
+#   test_project_meta_build_sentinel_not_in_scores
+#     → passes before implementation (no sentinel in scores), but
+#       may fail if sentinel bleeds into scores dict after implementation
+#   test_project_meta_build_sentinel_not_routed_as_agent
+#     → AssertionError: agent='code-writer' before; must be None after
+#   test_seven_gold_self_handle_ids_all_produce_self_handle
+#     → AssertionError: most corpus IDs produce decision='delegate'
+#       (routed to code-writer via any-build fallback) before the fix
+#   test_34712_is_not_among_seven_self_handle_ids (guard, always passes)
+#
+# RED/GREEN boundary: all tests in TestSelfHandleSentinelCompose must be
+# RED before implementation and GREEN after correct implementation.
+
+# Minimal catalog for project_meta/build sentinel tests.
+# Contains code-writer (to prove it does NOT get routed to after the
+# sentinel fires), ops (any-domain fallback), and project-planner
+# (in the project_meta gate).  The sentinel mechanism must suppress
+# delegation to any of them.
+_PROJECT_META_BUILD_CATALOG_ENTRIES: list[dict[str, Any]] = [
+    {
+        "name": "code-writer",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["code-writer"],
+            "path_globs": ["**/*.py", "**/*.md"],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "edit", "weight": 1.0},
+                {"term": "rename", "weight": 0.9},
+                {"term": "update", "weight": 0.8},
+                {"term": "remove", "weight": 0.8},
+                {"term": "add", "weight": 0.7},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    {
+        "name": "project-planner",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": ["project-planner"],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "plan", "weight": 1.0},
+                {"term": "milestone", "weight": 0.8},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+    {
+        "name": "ops",
+        "kind": "agent",
+        "source": "owned",
+        "routable": True,
+        "applicable_agents": [],
+        "applicable_skills": [],
+        "triggers": {
+            "command_prefixes": ["gh", "git"],
+            "agent_mentions": ["ops"],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [
+                {"term": "run", "weight": 0.5},
+            ],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+    },
+]
+
+
+@pytest.fixture()
+def fixture_project_meta_build_catalog_path(tmp_path: Path) -> Path:
+    """Write a catalog for project_meta/build sentinel tests.
+
+    Includes code-writer (keyword: edit/rename/update), project-planner,
+    and ops.  Before #397 code-writer would be posture-routed (via the
+    any-build fallback); after #397 the sentinel fires and the result
+    must be self_handle / agent=None.
+    """
+    catalog = {"entries": _PROJECT_META_BUILD_CATALOG_ENTRIES}
+    path = tmp_path / "project-meta-build-catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+class TestSelfHandleSentinelCompose:
+    """Issue #397: run_supplied_compose translates sentinel → self_handle.
+
+    All tests in this class must be RED before _cells.py and _systems.py
+    are updated, and GREEN after correct implementation.
+    """
+
+    def test_project_meta_build_decision_is_self_handle(
+        self, fixture_project_meta_build_catalog_path: Path
+    ) -> None:
+        """decision == 'self_handle' for domain=project_meta, posture=build.
+
+        Before #397: cell_map_lookup("project_meta","build") falls back
+        to ("any","build") → "code-writer".  run_supplied_compose delegates
+        to code-writer (decision='delegate').
+
+        After #397: sentinel fires → decision='self_handle'.
+
+        RED: AssertionError — decision='delegate' before implementation.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            task_description=(
+                "Rename the Claude Code skill session-variance to "
+                "session-analysis in the claude-prospector repo."
+            ),
+            domain="project_meta",
+            posture="build",
+            gold_agent="self_handle",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_project_meta_build_catalog_path,
+            {1: label},
+        )
+        assert len(results) == 1
+        assert results[0].decision == "self_handle", (
+            f"domain=project_meta / posture=build must produce "
+            f"decision='self_handle' after #397; "
+            f"got decision={results[0].decision!r}. "
+            f"Before #397 the fallback routes to 'code-writer' (delegate)."
+        )
+
+    def test_project_meta_build_agent_is_none(
+        self, fixture_project_meta_build_catalog_path: Path
+    ) -> None:
+        """agent is None and decision is 'self_handle' for project_meta/build.
+
+        The sentinel represents 'router abstains, handles itself' — there
+        is no real agent to delegate to.
+
+        Uses corpus 33622's exact prompt (harness rename) — it triggers
+        code-writer's 'rename' keyword (score > 0), so before #397 the
+        posture-routed path fires and delegates to code-writer.  After #397
+        the sentinel fires first and agent must be None.
+
+        RED: AssertionError — decision='delegate', agent='code-writer'
+        before implementation (rename keyword triggers code-writer).
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            # "rename" hits code-writer's keyword → score > 0 → posture-routed
+            # before #397; sentinel must suppress delegation after #397.
+            task_description=(
+                "Rename the Claude Code skill session-variance to "
+                "session-analysis in the claude-prospector repo. "
+                "Harness edit: rename skills/session-variance/ directory "
+                "to skills/session-analysis/, update the name: field in "
+                "SKILL.md frontmatter, update references in README.md."
+            ),
+            domain="project_meta",
+            posture="build",
+            gold_agent="self_handle",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_project_meta_build_catalog_path,
+            {1: label},
+        )
+        # Both assertions together pin the complete self_handle contract:
+        # the decision string AND the agent being absent.
+        assert results[0].decision == "self_handle", (
+            f"domain=project_meta / posture=build must produce "
+            f"decision='self_handle' after #397; "
+            f"got decision={results[0].decision!r}. "
+            f"Before #397 the 'rename' keyword triggers code-writer scoring "
+            f"> 0 and the posture-routed path delegates to it."
+        )
+        assert results[0].agent is None, (
+            f"domain=project_meta / posture=build must produce agent=None "
+            f"after #397; got agent={results[0].agent!r}. "
+            f"The sentinel means 'router handles itself', not a real agent."
+        )
+
+    def test_project_meta_build_sentinel_not_in_scores(
+        self, fixture_project_meta_build_catalog_path: Path
+    ) -> None:
+        """SELF_HANDLE_SENTINEL must not appear as a key in extras['scores'].
+
+        The sentinel is an internal routing instruction, not a routable
+        agent name.  It must never propagate into the scores dict that
+        callers inspect.
+
+        Uses a task with 'update' keyword so code-writer scores > 0
+        (posture-routed to code-writer before #397).
+
+        RED: decision='delegate', agent='code-writer' before #397;
+        after #397 must be self_handle and sentinel absent from scores.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            # "update" + "add" hits code-writer keywords → posture-routed
+            # before #397; sentinel fires and scores dict must not carry
+            # the sentinel string after correct implementation.
+            task_description=(
+                "Edit skills/python/SKILL.md to add a warning about "
+                "ruff format --check masking content issues on Windows. "
+                "Update the footguns section with this new entry."
+            ),
+            domain="project_meta",
+            posture="build",
+            gold_agent="self_handle",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_project_meta_build_catalog_path,
+            {1: label},
+        )
+        # After #397 the decision must be self_handle (not delegate).
+        assert results[0].decision == "self_handle", (
+            f"domain=project_meta / posture=build must produce "
+            f"decision='self_handle' after #397; "
+            f"got decision={results[0].decision!r}."
+        )
+        scores = results[0].extras.get("scores", {})
+        assert "__self_handle__" not in scores, (
+            f"SELF_HANDLE_SENTINEL '__self_handle__' must not appear in "
+            f"extras['scores']; found it with value "
+            f"{scores.get('__self_handle__')!r}. "
+            f"The sentinel is a routing instruction, not a routable agent."
+        )
+
+    def test_project_meta_build_sentinel_not_routed_as_agent(
+        self, fixture_project_meta_build_catalog_path: Path
+    ) -> None:
+        """The sentinel string '__self_handle__' is never the agent field.
+
+        Regardless of decision, the agent field must be None (not the
+        sentinel string itself — that would mean the sentinel was
+        mishandled as a real agent name).
+
+        Uses an 'edit'/'add' task so code-writer scores > 0 and the
+        posture-routed path fires before #397 (decision='delegate',
+        agent='code-writer').  After #397 the sentinel fires and
+        agent must be None (never the sentinel string itself).
+
+        RED: decision='delegate', agent='code-writer' before #397.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entry, label = _make_entry(
+            corpus_id=1,
+            # "edit" + "add" keywords → code-writer scores > 0
+            task_description=(
+                "Edit agents/debugger.md to add a Software Standards section "
+                "ending in @import of standards/software-standards.md, "
+                "mirroring the #918 change to code-writer and code-reviewer "
+                "agent definitions. Harness agent-file edit."
+            ),
+            domain="project_meta",
+            posture="build",
+            gold_agent="self_handle",
+        )
+        results = run_supplied_compose(
+            [entry],
+            fixture_project_meta_build_catalog_path,
+            {1: label},
+        )
+        # Pin: sentinel string itself must never be the agent.
+        assert results[0].agent != "__self_handle__", (
+            "The sentinel string '__self_handle__' must NEVER appear as the "
+            "agent field — it must be translated to agent=None."
+        )
+        # After #397 the whole result must be self_handle / None.
+        assert results[0].decision == "self_handle", (
+            f"domain=project_meta / posture=build must produce "
+            f"decision='self_handle' after #397; "
+            f"got decision={results[0].decision!r}."
+        )
+        assert results[0].agent is None, (
+            f"After #397 the agent field must be None for the sentinel cell; "
+            f"got agent={results[0].agent!r}."
+        )
+
+
+class TestSelfHandleSentinelGoldIds:
+    """Issue #397: the 7 gold self_handle corpus IDs resolve to self_handle.
+
+    Uses real label-blind prompts from
+    docs/research/label-blind-prompts.jsonl joined to gold labels from
+    docs/research/2026-06-12-gold-labels-redacted.jsonl.
+
+    Seven corpus IDs known to be (project_meta, build, gold_agent=self_handle):
+      33622, 33683, 34638, 34788, 34794, 34862, 35362
+
+    Corpus ID 34712 is ALSO (project_meta, build) but gold_agent=doc-writer
+    (a plan-doc edit — a known cell impurity, out of scope for #397).
+    Do NOT assert anything about 34712 routing to self_handle.
+
+    All tests in this class are RED until _cells.py + _systems.py are updated.
+    """
+
+    # These two paths are committed to the repo and always present.
+    _GOLD_LABELS_PATH: Path = Path(
+        "I:/ai/claude/claude-wayfinder/docs/research"
+        "/2026-06-12-gold-labels-redacted.jsonl"
+    )
+    _PROMPTS_PATH: Path = Path(
+        "I:/ai/claude/claude-wayfinder/docs/research"
+        "/label-blind-prompts.jsonl"
+    )
+
+    # The 7 corpus IDs that must resolve to self_handle after #397.
+    _SELF_HANDLE_IDS: frozenset[int] = frozenset({
+        33622, 33683, 34638, 34788, 34794, 34862, 35362,
+    })
+
+    # 34712 is (project_meta, build) but gold=doc-writer; never self_handle.
+    _RESIDUAL_ID: int = 34712
+
+    @staticmethod
+    def _load_seven_entries_and_labels() -> (
+        tuple[list[CorpusEntry], dict[int, GoldLabel]]
+    ):
+        """Load the 7 gold self_handle entries from committed research files.
+
+        Returns:
+            Tuple of (entries_list, labels_dict) for the 7 IDs only.
+            Labels use the real gold data (domain=project_meta,
+            posture=build, gold_agent=self_handle).
+        """
+        from scripts.corpus.eval._reader import load_labels
+
+        target_ids = frozenset({
+            33622, 33683, 34638, 34788, 34794, 34862, 35362,
+        })
+
+        # Load gold labels for the 7 target IDs
+        all_labels_path = Path(
+            "I:/ai/claude/claude-wayfinder/docs/research"
+            "/2026-06-12-gold-labels-redacted.jsonl"
+        )
+        all_labels = load_labels(all_labels_path)
+        labels = {
+            cid: lbl
+            for cid, lbl in all_labels.items()
+            if cid in target_ids
+        }
+
+        # Load prompts (label-blind) for the 7 target IDs
+        prompts_path = Path(
+            "I:/ai/claude/claude-wayfinder/docs/research"
+            "/label-blind-prompts.jsonl"
+        )
+        import json as _json
+        entries: list[CorpusEntry] = []
+        with open(prompts_path, encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                rec = _json.loads(line)
+                cid = int(rec["corpus_id"])
+                if cid not in target_ids:
+                    continue
+                entries.append(CorpusEntry(
+                    corpus_id=cid,
+                    task_description=str(
+                        rec.get("task_description", "")
+                    ),
+                    file_paths=list(rec.get("file_paths") or []),
+                    agent_mentions=list(
+                        rec.get("agent_mentions") or []
+                    ),
+                    tool_mentions=list(
+                        rec.get("tool_mentions") or []
+                    ),
+                    command_prefix=rec.get("command_prefix") or None,
+                    stratum={},
+                    raw=rec,
+                ))
+        return entries, labels
+
+    def test_seven_gold_self_handle_ids_all_produce_self_handle(
+        self, fixture_project_meta_build_catalog_path: Path
+    ) -> None:
+        """All 7 (project_meta, build, gold=self_handle) entries → self_handle.
+
+        Before #397: cell falls back to ("any","build") → "code-writer" and
+        run_supplied_compose delegates to code-writer.  Most/all entries will
+        have decision='delegate' and agent='code-writer' — so the assertion
+        decision=='self_handle' fails.
+
+        After #397: sentinel fires for all 7 → decision='self_handle',
+        agent=None for every entry.
+
+        RED: AssertionError (decision='delegate') before implementation.
+        """
+        from scripts.corpus.eval._systems import run_supplied_compose
+
+        entries, labels = self._load_seven_entries_and_labels()
+
+        # Verify we loaded all 7
+        loaded_ids = frozenset(e.corpus_id for e in entries)
+        assert loaded_ids == self._SELF_HANDLE_IDS, (
+            f"Expected to load entries for IDs {sorted(self._SELF_HANDLE_IDS)}, "
+            f"got {sorted(loaded_ids)}.  Check that label-blind-prompts.jsonl "
+            f"contains all 7 IDs."
+        )
+
+        results = run_supplied_compose(
+            entries,
+            fixture_project_meta_build_catalog_path,
+            labels,
+        )
+
+        failures: list[str] = []
+        for r in results:
+            if r.decision != "self_handle" or r.agent is not None:
+                failures.append(
+                    f"corpus_id={r.corpus_id}: "
+                    f"decision={r.decision!r}, agent={r.agent!r} "
+                    f"(expected decision='self_handle', agent=None)"
+                )
+        assert not failures, (
+            "After #397, all 7 self_handle gold IDs must produce "
+            "decision='self_handle' and agent=None.  Failures:\n"
+            + "\n".join(failures)
+        )
+
+    def test_34712_is_not_among_seven_self_handle_ids(self) -> None:
+        """corpus_id 34712 is excluded from the 7 self_handle IDs (guard).
+
+        34712 is (project_meta, build) but gold_agent='doc-writer' — a
+        plan-doc edit that is an out-of-scope cell impurity.  The sentinel
+        does NOT fix 34712; this test simply guards that our set of IDs
+        does not accidentally include it.
+
+        This test is always GREEN (it asserts a set membership invariant).
+        """
+        assert self._RESIDUAL_ID not in self._SELF_HANDLE_IDS, (
+            f"corpus_id {self._RESIDUAL_ID} must not be in the 7 "
+            f"self_handle IDs.  It is (project_meta, build) but "
+            f"gold_agent='doc-writer' (out-of-scope cell impurity)."
+        )
+
+
+# ===========================================================================
+# Issue #397: run_composed also abstains on (project_meta, build)
+# ===========================================================================
+#
+# run_composed uses _route_from_postures → cell_map_lookup.  After the
+# sentinel is added, _route_from_postures will receive "__self_handle__"
+# from cell_map_lookup when domain=project_meta and winning_posture=build.
+#
+# The implementation must translate the sentinel in _route_from_postures
+# (or in run_composed's decision gate) to self_handle / agent=None, just
+# as it does in run_supplied_compose.
+#
+# Testing this directly requires the DomainClassifier (model2vec dependency),
+# which is NOT available in the test environment.  Instead, we test the
+# _route_from_postures helper directly — it calls cell_map_lookup and
+# returns (agent, confidence).  After #397 it must return
+# (SELF_HANDLE_SENTINEL, ...) for (project_meta, build), and the sentinel
+# translation in run_composed must convert that to decision='self_handle'.
+#
+# We test the OBSERVABLE OUTPUT of _route_from_postures to verify the
+# sentinel propagates correctly out of the cell-map layer before it reaches
+# the decision gate.
+
+
+class TestRunComposedSentinelPropagation:
+    """Issue #397: sentinel propagates through _route_from_postures.
+
+    Tests the internal helper _route_from_postures to confirm it returns
+    the sentinel for (domain=project_meta, posture=build), so that the
+    run_composed decision gate can translate it to self_handle.
+
+    These tests are RED until SELF_HANDLE_SENTINEL is added to _cells.py.
+    """
+
+    def test_route_from_postures_returns_sentinel_for_project_meta_build(
+        self,
+    ) -> None:
+        """_route_from_postures returns SELF_HANDLE_SENTINEL for project_meta+build.
+
+        After #397, cell_map_lookup("project_meta","build") returns the
+        sentinel.  _route_from_postures uses cell_map_lookup internally,
+        so it must pass the sentinel through as the agent component of its
+        return tuple.
+
+        This is the sweep-coverage test for the extractor path: it confirms
+        the sentinel propagates through _route_from_postures so that every
+        call site that invokes cell_map_lookup (including run_composed) will
+        encounter it.
+
+        RED: AssertionError — returns 'code-writer' before #397 (via fallback).
+        """
+        from claude_wayfinder.match._cells import SELF_HANDLE_SENTINEL
+        from scripts.corpus.eval._systems import _route_from_postures
+
+        agent, _confidence = _route_from_postures(
+            postures=["build"],
+            area_span=1,
+            e8_fired=False,
+            e12_fired=False,
+            domain="project_meta",
+        )
+        assert agent == SELF_HANDLE_SENTINEL, (
+            f"_route_from_postures(postures=['build'], domain='project_meta') "
+            f"must return SELF_HANDLE_SENTINEL ('{SELF_HANDLE_SENTINEL}') as "
+            f"the agent after #397; got {agent!r}.  "
+            f"Before #397 cell_map_lookup falls back to ('any','build') → "
+            f"'code-writer', so this returns 'code-writer'."
+        )

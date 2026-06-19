@@ -10,6 +10,9 @@ Deferred-fix locks (see issue #364):
 - ("infra_deploy","research") resolves via ("any","research") to
   "researcher", not "investigator" — gold-correct is investigator
   but the fix is deferred to a future issue
+
+Issue #397: SELF_HANDLE_SENTINEL tests (added below) are deliberately
+RED until the sentinel is added to _cells.py.
 """
 
 from __future__ import annotations
@@ -287,3 +290,153 @@ class TestGateAgents:
         result = gate_agents(scored, "code")
         names = [se.entry.name for se in result]
         assert names == ["investigator", "code-writer", "researcher"]
+
+
+# ===========================================================================
+# Issue #397: SELF_HANDLE_SENTINEL — abstain sentinel for (project_meta, build)
+# ===========================================================================
+#
+# These tests are RED until the sentinel constant and cell-map entry are added
+# to _cells.py.  They will fail with ImportError (SELF_HANDLE_SENTINEL does
+# not exist) or AssertionError (cell_map_lookup returns "code-writer" via the
+# ("any","build") fallback, not the sentinel).
+#
+# Expected failure modes BEFORE implementation:
+#   test_sentinel_constant_is_importable        → ImportError
+#   test_sentinel_constant_value                → ImportError
+#   test_project_meta_build_returns_sentinel    → AssertionError
+#   test_cross_domain_code_build_unaffected     → ImportError (same module)
+#   test_cross_domain_any_build_unaffected      → ImportError (same module)
+#   test_cross_domain_docs_prose_build_unaffect → ImportError (same module)
+#   test_sentinel_not_a_real_agent_name         → ImportError
+
+
+class TestSelfHandleSentinel:
+    """Issue #397: SELF_HANDLE_SENTINEL constant and cell-map entry contract.
+
+    All tests in this class must remain RED until _cells.py is updated.
+    """
+
+    def test_sentinel_constant_is_importable(self) -> None:
+        """SELF_HANDLE_SENTINEL can be imported from _cells.
+
+        RED: ImportError until the constant is added to _cells.py.
+        """
+        from claude_wayfinder.match._cells import (  # noqa: F401
+            SELF_HANDLE_SENTINEL,
+        )
+
+    def test_sentinel_constant_value(self) -> None:
+        """SELF_HANDLE_SENTINEL == "__self_handle__" (exact string, exact name).
+
+        Both phases (test author + code implementer) agree on this exact
+        value so the compose path can check against it unambiguously.
+
+        RED: ImportError until constant is added; wrong value after incorrect
+        implementation.
+        """
+        from claude_wayfinder.match._cells import SELF_HANDLE_SENTINEL
+
+        assert SELF_HANDLE_SENTINEL == "__self_handle__", (
+            f"Sentinel must be '__self_handle__'; got {SELF_HANDLE_SENTINEL!r}"
+        )
+
+    def test_project_meta_build_returns_sentinel(self) -> None:
+        """cell_map_lookup('project_meta', 'build') == SELF_HANDLE_SENTINEL.
+
+        Before #397: this cell is absent from _CELL_MAP, so cell_map_lookup
+        falls back to ("any","build") → "code-writer".
+
+        After #397: the explicit ("project_meta","build") cell must exist and
+        return the sentinel, short-circuiting the fallback.
+
+        RED: returns "code-writer" (via fallback) until the cell is added.
+        """
+        from claude_wayfinder.match._cells import SELF_HANDLE_SENTINEL
+
+        result = cell_map_lookup("project_meta", "build")
+        assert result == SELF_HANDLE_SENTINEL, (
+            f"cell_map_lookup('project_meta','build') must return "
+            f"SELF_HANDLE_SENTINEL ('{SELF_HANDLE_SENTINEL}'); "
+            f"got {result!r}.  Before #397, the cell is absent so the fallback "
+            f"('any','build') returns 'code-writer'."
+        )
+
+
+class TestSelfHandleSentinelNoRegression:
+    """Issue #397: sentinel is confined to (project_meta, build) only.
+
+    These tests assert that unrelated cells are NOT broken by the change.
+    They will fail with ImportError before the sentinel is added (same
+    module import), but after implementation they must all be GREEN.
+    """
+
+    def test_code_build_still_returns_code_writer(self) -> None:
+        """('code','build') still → 'code-writer' after #397.
+
+        The sentinel must not bleed into other (domain, build) cells.
+        RED before implementation: ImportError from the SELF_HANDLE_SENTINEL
+        import in the same test class; GREEN after correct implementation.
+        """
+        from claude_wayfinder.match._cells import SELF_HANDLE_SENTINEL
+
+        result = cell_map_lookup("code", "build")
+        assert result == "code-writer", (
+            f"('code','build') must still return 'code-writer'; got {result!r}"
+        )
+        assert result != SELF_HANDLE_SENTINEL, (
+            "Sentinel must NOT bleed into ('code','build') cell."
+        )
+
+    def test_any_build_still_returns_code_writer(self) -> None:
+        """('any','build') still → 'code-writer' after #397.
+
+        The fallback cell is unchanged; only the project_meta-specific
+        cell is given the sentinel.
+        RED before implementation: ImportError.
+        """
+        from claude_wayfinder.match._cells import SELF_HANDLE_SENTINEL
+
+        result = cell_map_lookup("any", "build")
+        assert result == "code-writer", (
+            f"('any','build') fallback must still return 'code-writer'; "
+            f"got {result!r}"
+        )
+        assert result != SELF_HANDLE_SENTINEL, (
+            "Sentinel must NOT bleed into ('any','build') cell."
+        )
+
+    def test_docs_prose_build_still_returns_doc_writer(self) -> None:
+        """('docs_prose','build') still → 'doc-writer' after #397.
+
+        RED before implementation: ImportError.
+        """
+        from claude_wayfinder.match._cells import SELF_HANDLE_SENTINEL
+
+        result = cell_map_lookup("docs_prose", "build")
+        assert result == "doc-writer", (
+            f"('docs_prose','build') must still return 'doc-writer'; "
+            f"got {result!r}"
+        )
+        assert result != SELF_HANDLE_SENTINEL, (
+            "Sentinel must NOT bleed into ('docs_prose','build') cell."
+        )
+
+    def test_sentinel_is_not_a_valid_agent_name_in_any_domain(self) -> None:
+        """SELF_HANDLE_SENTINEL is not in DOMAIN_AGENT_MAP for any domain.
+
+        The sentinel is a routing instruction, not a real agent.  It must
+        never appear as a member of any domain's allowed-agent frozenset,
+        so the domain gate can never 'pass' it as if it were routable.
+
+        RED before implementation: ImportError.
+        """
+        from claude_wayfinder.match._cells import SELF_HANDLE_SENTINEL
+
+        for domain, agent_set in DOMAIN_AGENT_MAP.items():
+            if agent_set is not None:
+                assert SELF_HANDLE_SENTINEL not in agent_set, (
+                    f"SELF_HANDLE_SENTINEL must not appear in "
+                    f"DOMAIN_AGENT_MAP[{domain!r}] — it is a routing "
+                    f"instruction, not a real agent."
+                )
