@@ -11,12 +11,17 @@ referenced issues for tracking):
   ``"investigator"``.
 - ``("infra_deploy", "research")`` resolves via ``("any", "research")`` to
   ``"researcher"`` rather than the gold-correct ``"investigator"``.
+- ``("project_meta", "build")`` maps to ``SELF_HANDLE_SENTINEL`` (#397);
+  these harness self-edits are handled by the router directly and must
+  never be delegated to a sub-agent (project_meta × build carve-out).
 
 Public API
 ----------
 - ``ANY_DOMAIN_AGENTS`` -- frozenset of agents valid in every domain.
 - ``DOMAIN_AGENT_MAP``  -- maps a domain label (or ``None``) to its
   permitted agent set (or ``None`` for no gate).
+- ``SELF_HANDLE_SENTINEL`` -- routing instruction for cells the router
+  handles itself; callers must translate this to ``self_handle / agent=None``.
 - ``cell_map_lookup``   -- (domain, posture) → preferred agent name or None.
 - ``gate_agents``       -- filter a scored list to agents allowed in a domain.
 """
@@ -28,6 +33,12 @@ from claude_wayfinder.match._types import ScoredEntry
 # ---------------------------------------------------------------------------
 # Constants — verbatim from the validated probe
 # ---------------------------------------------------------------------------
+
+# Routing instruction: the router handles this cell itself.  Callers that
+# receive this value from cell_map_lookup must translate it to
+# decision="self_handle" / agent=None and must never emit it as an agent name.
+# Added in #397 to encode the project_meta × build harness carve-out.
+SELF_HANDLE_SENTINEL: str = "__self_handle__"
 
 ANY_DOMAIN_AGENTS: frozenset[str] = frozenset({
     "investigator",
@@ -56,6 +67,9 @@ DOMAIN_AGENT_MAP: dict[str | None, frozenset[str] | None] = {
 _CELL_MAP: dict[tuple[str, str], str] = {
     ("code", "build"):           "code-writer",
     ("docs_prose", "build"):     "doc-writer",
+    # #397: project_meta/build is a harness self-edit; sentinel encodes
+    # the router carve-out → self_handle (never delegate to a sub-agent).
+    ("project_meta", "build"):   SELF_HANDLE_SENTINEL,
     ("any", "build"):            "code-writer",
     ("code", "diagnose"):        "debugger",
     ("infra_deploy", "diagnose"): "investigator",

@@ -116,6 +116,27 @@ class MetricsResult:
 # ---------------------------------------------------------------------------
 
 
+def _prediction_matches_gold(result: SystemResult, gold_agent: str) -> bool:
+    """Return True when result's prediction matches gold.
+
+    Covers both the normal real-agent path and the self_handle abstain
+    normalization: ``decision == "self_handle"`` with
+    ``gold_agent == "self_handle"`` is a correct abstention.
+    ``decision == "self_handle_unaided"`` is NOT credited.
+
+    Args:
+        result: A SystemResult from any eval system.
+        gold_agent: The expected agent name from the GoldLabel.
+
+    Returns:
+        True when the result correctly predicts gold, including the
+        self_handle normalization.
+    """
+    if result.agent == gold_agent:
+        return True
+    return result.decision == "self_handle" and gold_agent == "self_handle"
+
+
 def _is_error(result: SystemResult, label: GoldLabel) -> bool:
     """Return True when a delegate decision has the wrong agent.
 
@@ -368,6 +389,11 @@ def metric_false_default_build(
     empty (no extractor fired → build is the unmarked default).
     The rate is: (wrong default-build cases) / (total default-build cases).
 
+    Wrong is determined using the self_handle normalization: a result with
+    ``decision == "self_handle"`` against ``gold_agent == "self_handle"``
+    is a correct abstention and does NOT count as wrong.  A self_handle
+    result against a real-agent gold still counts as wrong.
+
     Returns ``float('nan')`` when no default-build cases exist.
 
     Args:
@@ -403,9 +429,14 @@ def metric_false_default_build(
     if not labeled_default_build:
         return float("nan")
 
+    # A row is wrong only when it does NOT match gold.  The self_handle
+    # normalization (via _prediction_matches_gold) ensures that
+    # decision="self_handle" against gold="self_handle" is NOT counted as
+    # wrong — it is a correct abstention.  A self_handle row against a real-
+    # agent gold remains wrong, and real-agent comparisons are unchanged.
     wrong = sum(
         1 for r in labeled_default_build
-        if r.agent != labels[r.corpus_id].gold_agent
+        if not _prediction_matches_gold(r, labels[r.corpus_id].gold_agent)
     )
     return round(wrong / len(labeled_default_build), 4)
 
@@ -507,9 +538,19 @@ def metric_routing_correctness(
     """Compute routing correctness (RC) across all labeled results.
 
     RC is the fraction of labeled corpus entries where the system's
-    ``agent`` matches the gold ``gold_agent``, regardless of the
-    ``decision`` field value.  A non-delegate result with the correct
-    agent still counts toward RC (decision is irrelevant).
+    prediction matches gold.  A result counts as correct when EITHER:
+
+    - ``r.agent == gold_agent`` (existing path — real-agent match), OR
+    - ``r.decision == "self_handle"`` AND ``gold_agent == "self_handle"``
+      (self_handle normalization — abstain sentinel matches gold abstain).
+
+    The self_handle normalization credits deliberate abstentions when gold
+    also calls for abstention.  Note: ``decision == "self_handle_unaided"``
+    is NOT credited as matching ``gold_agent == "self_handle"`` — only an
+    explicit ``decision == "self_handle"`` receives this treatment.
+
+    A non-delegate result with a matching real agent still counts toward
+    RC (decision is irrelevant for the real-agent path).
 
     Returns ``float('nan')`` when no result has a matching label.
 
@@ -524,8 +565,10 @@ def metric_routing_correctness(
     labeled = [r for r in results if r.corpus_id in labels]
     if not labeled:
         return float("nan")
+
     correct = sum(
-        1 for r in labeled if r.agent == labels[r.corpus_id].gold_agent
+        1 for r in labeled
+        if _prediction_matches_gold(r, labels[r.corpus_id].gold_agent)
     )
     return round(correct / len(labeled), 4)
 

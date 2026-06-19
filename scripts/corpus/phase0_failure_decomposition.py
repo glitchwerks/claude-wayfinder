@@ -314,7 +314,13 @@ def build_joined_rows(
 def decompose_rc_misses(
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Decompose all RC misses (route_agent != gold_agent) into B vs C.
+    """Decompose all RC misses into B vs C, excluding correct self_handle abstentions.
+
+    A row is an RC miss when route_agent != gold_agent, EXCEPT when the
+    system correctly abstained (decision="self_handle" and gold_agent=
+    "self_handle"). That case is a true positive, not a miss — consistent
+    with metric_routing_correctness / _prediction_matches_gold in
+    scripts/corpus/eval/_metrics.py.
 
     B = cell-map/compose fault: label_match_both=True, still wrong.
     C = mislabel: label_match_both=False.
@@ -329,8 +335,16 @@ def decompose_rc_misses(
         Dict with keys: total_labeled, total_misses, B, C,
         C_domain_only, C_posture_only, C_both, miss_rows.
     """
+    # Exclude correct self_handle abstentions: a row where both the system
+    # decision and the gold label are "self_handle" is a true positive even
+    # though route_agent (None) != gold_agent ("self_handle") as strings.
     misses: list[dict[str, Any]] = [
-        r for r in rows if r["route_agent"] != r["gold_agent"]
+        r for r in rows
+        if r["route_agent"] != r["gold_agent"]
+        and not (
+            r["decision"] == "self_handle"
+            and r["gold_agent"] == "self_handle"
+        )
     ]
     b_rows = [r for r in misses if r["label_match_both"]]
     c_rows = [r for r in misses if not r["label_match_both"]]

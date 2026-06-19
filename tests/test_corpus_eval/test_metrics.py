@@ -18,6 +18,7 @@ from scripts.corpus.eval._metrics import (
     metric_error_correlation,
     metric_error_severity,
     metric_false_default_build,
+    metric_routing_correctness,
     metric_tier_c_decisiveness,
 )
 from scripts.corpus.eval._reader import GoldLabel
@@ -623,4 +624,329 @@ class TestMetricFalseDefaultBuildLabeledOnly:
         rate = metric_false_default_build(results, labels)
         assert math.isnan(rate), (
             f"All-unlabeled default-build must return nan; got {rate}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fix #397: self_handle normalization in metric_false_default_build
+# ---------------------------------------------------------------------------
+
+
+class TestFalseDefaultBuildSelfHandleNormalization:
+    """FDB must NOT count a self_handle abstention as wrong when gold matches.
+
+    The #397 abstain-sentinel emits decision="self_handle", agent=None for
+    harness-carve-out rows (extras["postures"] is empty, so they are
+    default-build candidates).  When gold_agent is also "self_handle" the
+    system correctly abstained — it did NOT wrongly default-build.
+
+    Bug: the current ``wrong`` sum uses ``r.agent != gold_agent``, which
+    evaluates to ``None != "self_handle"`` → True, so a correct abstention
+    is counted as a false default.
+
+    Contract (mirrors the fix already applied to metric_routing_correctness):
+      A row must NOT count as a wrong default when
+        r.decision == "self_handle" AND gold_agent == "self_handle".
+    """
+
+    def test_correct_self_handle_default_build_is_not_wrong(
+        self,
+    ) -> None:
+        """decision="self_handle", agent=None, gold="self_handle" → rate 0.0.
+
+        A single default-build row that correctly abstains must not be
+        counted as a false default, giving a rate of 0.0 not 1.0.
+        """
+        results = [
+            _make_result(
+                1,
+                decision="self_handle",
+                agent=None,
+                extras={"postures": []},
+            ),
+        ]
+        labels = {1: _make_label(1, gold_agent="self_handle")}
+        rate = metric_false_default_build(results, labels)
+        assert rate == 0.0, (
+            f"decision='self_handle' + gold='self_handle' on a default-build "
+            f"row must not count as wrong (rate must be 0.0); got {rate}"
+        )
+
+    def test_self_handle_default_build_is_wrong_when_gold_is_real_agent(
+        self,
+    ) -> None:
+        """decision="self_handle", agent=None, gold="code-writer" → rate 1.0.
+
+        The normalization is precise: self_handle is only excused when gold
+        is also self_handle.  When gold names a real agent, the abstention
+        IS a wrong default, and the rate must be 1.0.
+        """
+        results = [
+            _make_result(
+                1,
+                decision="self_handle",
+                agent=None,
+                extras={"postures": []},
+            ),
+        ]
+        labels = {1: _make_label(1, gold_agent="code-writer")}
+        rate = metric_false_default_build(results, labels)
+        assert rate == 1.0, (
+            f"decision='self_handle' against gold='code-writer' on a "
+            f"default-build row must still count as wrong (rate must be 1.0); "
+            f"got {rate}"
+        )
+
+    def test_correct_real_agent_default_build_is_not_wrong(
+        self,
+    ) -> None:
+        """agent="code-writer", gold="code-writer" → rate 0.0 (regression).
+
+        Existing behaviour for real-agent default-builds that are correct
+        must be preserved: when agent matches gold, the row is not wrong.
+        """
+        results = [
+            _make_result(
+                1,
+                decision="delegate",
+                agent="code-writer",
+                extras={"postures": []},
+            ),
+        ]
+        labels = {1: _make_label(1, gold_agent="code-writer")}
+        rate = metric_false_default_build(results, labels)
+        assert rate == 0.0, (
+            f"Correct real-agent default-build must yield rate 0.0; "
+            f"got {rate}"
+        )
+
+    def test_wrong_real_agent_default_build_is_counted(
+        self,
+    ) -> None:
+        """agent="code-writer", gold="doc-writer" → rate 1.0 (regression).
+
+        Existing behaviour for real-agent default-builds that are wrong must
+        be preserved: agent != gold counts as a false default.
+        """
+        results = [
+            _make_result(
+                1,
+                decision="delegate",
+                agent="code-writer",
+                extras={"postures": []},
+            ),
+        ]
+        labels = {1: _make_label(1, gold_agent="doc-writer")}
+        rate = metric_false_default_build(results, labels)
+        assert rate == 1.0, (
+            f"Wrong real-agent default-build must yield rate 1.0; "
+            f"got {rate}"
+        )
+
+    def test_mixed_batch_self_handle_drops_from_numerator_only(
+        self,
+    ) -> None:
+        """Mixed: 1 correct self_handle default-build + 1 wrong real-agent.
+
+        Row layout:
+          corpus_id=1: decision="self_handle", agent=None,
+                       gold="self_handle" → correct (not wrong)
+          corpus_id=2: decision="delegate",   agent="code-writer",
+                       gold="doc-writer"   → wrong
+
+        Expected: wrong=1, denominator=2 → rate = 0.5.
+
+        This proves the self_handle row drops OUT of the numerator (correct
+        abstention not counted as wrong) but stays IN the denominator
+        (it is still a labeled default-build case).
+        """
+        results = [
+            _make_result(
+                1,
+                decision="self_handle",
+                agent=None,
+                extras={"postures": []},
+            ),
+            _make_result(
+                2,
+                decision="delegate",
+                agent="code-writer",
+                extras={"postures": []},
+            ),
+        ]
+        labels = {
+            1: _make_label(1, gold_agent="self_handle"),
+            2: _make_label(2, gold_agent="doc-writer"),
+        }
+        rate = metric_false_default_build(results, labels)
+        assert rate == 0.5, (
+            f"Mixed batch (1 correct self_handle + 1 wrong real-agent) "
+            f"must yield rate 0.5 (1 wrong / 2 labeled); got {rate}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fix #397: self_handle normalization in metric_routing_correctness
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingCorrectnessAbstainSentinel:
+    """RC must count decision=="self_handle" + gold_agent=="self_handle" correct.
+
+    The #397 abstain-sentinel makes the eval systems emit
+    decision="self_handle" with agent=None for harness-carve-out rows.
+    Gold encodes those rows as gold_agent="self_handle" (a string).
+    Before the fix, None == "self_handle" is False, so every correct
+    abstention scored as a miss.  These tests pin the corrected contract:
+
+      RC is correct when EITHER:
+        - r.agent == gold_agent   (existing behaviour), OR
+        - r.decision == "self_handle" AND gold_agent == "self_handle"
+    """
+
+    def test_self_handle_decision_counts_as_correct_when_gold_matches(
+        self,
+    ) -> None:
+        """decision="self_handle", agent=None, gold="self_handle" → RC 1.0.
+
+        A single result with the self_handle sentinel against a gold label
+        that also names self_handle must score as a correct prediction.
+        """
+        results = [
+            _make_result(
+                1,
+                decision="self_handle",
+                agent=None,
+                confidence=1.0,
+            )
+        ]
+        labels = {
+            1: _make_label(1, gold_agent="self_handle"),
+        }
+        rc = metric_routing_correctness(results, labels)
+        assert rc == 1.0, (
+            f"decision='self_handle' + gold='self_handle' must score "
+            f"correct (RC=1.0); got {rc}"
+        )
+
+    def test_self_handle_decision_is_miss_when_gold_is_real_agent(
+        self,
+    ) -> None:
+        """decision="self_handle", agent=None, gold="code-writer" → RC 0.0.
+
+        A self_handle abstention does NOT match a gold row that names a
+        real agent — it is a miss.
+        """
+        results = [
+            _make_result(
+                1,
+                decision="self_handle",
+                agent=None,
+                confidence=1.0,
+            )
+        ]
+        labels = {
+            1: _make_label(1, gold_agent="code-writer"),
+        }
+        rc = metric_routing_correctness(results, labels)
+        assert rc == 0.0, (
+            f"decision='self_handle' against gold='code-writer' must be "
+            f"a miss (RC=0.0); got {rc}"
+        )
+
+    def test_real_agent_delegation_is_miss_when_gold_is_self_handle(
+        self,
+    ) -> None:
+        """decision="delegate", agent="code-writer", gold="self_handle" → 0.0.
+
+        A real-agent delegation does not satisfy a self_handle gold row.
+        Only an explicit self_handle decision receives the normalization.
+        """
+        results = [
+            _make_result(
+                1,
+                decision="delegate",
+                agent="code-writer",
+                confidence=0.9,
+            )
+        ]
+        labels = {
+            1: _make_label(1, gold_agent="self_handle"),
+        }
+        rc = metric_routing_correctness(results, labels)
+        assert rc == 0.0, (
+            f"delegate to real agent against gold='self_handle' must be "
+            f"a miss (RC=0.0); got {rc}"
+        )
+
+    def test_real_agent_match_still_correct_unaffected_by_normalization(
+        self,
+    ) -> None:
+        """Regression: existing real-agent == gold_agent path still works.
+
+        decision="delegate", agent="code-writer", gold="code-writer" must
+        score as correct — existing behaviour must not be disturbed by the
+        self_handle normalization.
+        """
+        results = [
+            _make_result(
+                1,
+                decision="delegate",
+                agent="code-writer",
+                confidence=0.9,
+            )
+        ]
+        labels = {
+            1: _make_label(1, gold_agent="code-writer"),
+        }
+        rc = metric_routing_correctness(results, labels)
+        assert rc == 1.0, (
+            f"Existing real-agent match must still score correct "
+            f"(RC=1.0); got {rc}"
+        )
+
+    def test_mixed_batch_counts_self_handle_in_numerator_and_denominator(
+        self,
+    ) -> None:
+        """Mixed batch: 1 correct self_handle + 1 correct real-agent + 1 miss.
+
+        Batch of three rows:
+          row 1: decision=self_handle, gold=self_handle → correct
+          row 2: decision=delegate,   agent=code-writer, gold=code-writer → correct
+          row 3: decision=delegate,   agent=ops,         gold=code-writer → miss
+
+        Expected RC = round(2/3, 4) = 0.6667.
+
+        This proves self_handle rows are counted in BOTH numerator (when
+        correct) and denominator (always).
+        """
+        results = [
+            _make_result(
+                1,
+                decision="self_handle",
+                agent=None,
+                confidence=1.0,
+            ),
+            _make_result(
+                2,
+                decision="delegate",
+                agent="code-writer",
+                confidence=0.9,
+            ),
+            _make_result(
+                3,
+                decision="delegate",
+                agent="ops",
+                confidence=0.9,
+            ),
+        ]
+        labels = {
+            1: _make_label(1, gold_agent="self_handle"),
+            2: _make_label(2, gold_agent="code-writer"),
+            3: _make_label(3, gold_agent="code-writer"),
+        }
+        rc = metric_routing_correctness(results, labels)
+        assert rc == round(2 / 3, 4), (
+            f"Mixed batch (1 self_handle correct, 1 real correct, 1 miss) "
+            f"must yield RC={round(2 / 3, 4)}; got {rc}"
         )
