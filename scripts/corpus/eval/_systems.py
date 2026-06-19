@@ -1114,6 +1114,7 @@ def run_composed(
         if agent == SELF_HANDLE_SENTINEL:
             decision = "self_handle"
             agent = None
+            braked = False  # a self_handle abstention is not a braked advisory outcome
         elif agent and agent not in catalog_agent_names:
             decision = "advisory"
         elif agent and confidence >= 0.85:
