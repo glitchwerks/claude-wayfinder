@@ -88,7 +88,7 @@
 {"corpus_id": 34760, "domain": "infra_deploy", "is_any": false, "posture": "build", "gold_agent": "code-writer", "confidence": "medium", "disputed": false}
 {"corpus_id": 34765, "domain": null, "is_any": true, "posture": "operate", "gold_agent": "ops", "confidence": "high", "disputed": false}
 {"corpus_id": 34768, "domain": "code", "is_any": false, "posture": "build", "gold_agent": "code-writer", "confidence": "high", "disputed": false}
-{"corpus_id": 34774, "domain": null, "is_any": true, "posture": "diagnose", "gold_agent": "researcher", "confidence": "high", "disputed": false}
+{"corpus_id": 34774, "domain": "code", "is_any": false, "posture": "diagnose", "gold_agent": "researcher", "confidence": "high", "disputed": false}
 {"corpus_id": 34779, "domain": null, "is_any": true, "posture": "operate", "gold_agent": "self_handle", "confidence": "high", "disputed": false}
 {"corpus_id": 34784, "domain": null, "is_any": true, "posture": "operate", "gold_agent": "ops", "confidence": "high", "disputed": false}
 {"corpus_id": 34788, "domain": "project_meta", "is_any": false, "posture": "build", "gold_agent": "self_handle", "confidence": "high", "disputed": false}
