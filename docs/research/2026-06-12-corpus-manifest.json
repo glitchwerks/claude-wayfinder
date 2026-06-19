@@ -121,6 +121,7 @@
     ]
   },
   "gold_labels": {
+    "adjudication_note": "BUILD SNAPSHOT (2026-06-12) — intentionally frozen and NOT regenerated on gold adjudication (frozen-snapshot model, decided in #402). redacted_artifact_sha256 and distributions.* record the gold as-built on 2026-06-12. The committed redacted gold (docs/research/2026-06-12-gold-labels-redacted.jsonl) has since been adjudicated in place (#364/#394, #398/#399, and any later gold-ownership edits) and is the authoritative live source of truth for current gold; recompute current counts/sha from that file directly. Do not treat this snapshot's sha/distributions as the current gold.",
     "labeled": 168,
     "disputed_retained": 1,
     "disputed_rate": 0.006,
