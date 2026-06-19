@@ -254,17 +254,19 @@ These examples use **invented prompts**. No raw corpus prompt text appears in th
 
 ### Ex 6 — Genuinely disputed (two defensible readings)
 
-> "What if we stored the catalog on disk between sessions instead of rebuilding it on every call? Is that a reasonable approach?"
+> "Are there existing libraries for persisting a build-on-startup catalog across sessions, and is rolling our own a reasonable approach?"
 > `file_paths: []`
 
-- **Reading A:** E9 fires (no artifacts); E10 proposal frame + implicit prior-art question →
-  `research × *any*` → `researcher`.
-- **Reading B:** E9 fires; E10 bare proposal + "reasonable approach" soundness question →
+- **Reading A:** E9 fires (no artifacts); explicit prior-art question ("are there existing
+  libraries…") → `research × *any*` → `researcher`. Genuine prior-art/alternatives discovery —
+  "what already exists out there" — per the §3 Step 1 narrowed `research` definition.
+- **Reading B:** E9 fires; "is rolling our own a reasonable approach?" soundness question →
   `critique × *any* × no-artifact` → `approach-critic`.
-- **Both readings are defensible.** The routing table's delineation: "what prior art exists?" →
-  `researcher`; "is this idea sound?" → `approach-critic`. The prompt combines both intents
-  without a decisive signal.
-- **Label:** `disputed: true`, `dispute_reason: "researcher (prior-art reading: 'what already exists?') vs approach-critic (soundness reading: 'is this idea reasonable?'); routing table delineation does not resolve a prompt that mixes both intents"`.
+- **Both readings are defensible.** The prompt explicitly asks BOTH "what already exists?"
+  (researcher) AND "is our approach sound?" (approach-critic); the routing-table delineation
+  ("what prior art exists?" → `researcher`; "is this idea sound?" → `approach-critic`) does not
+  resolve a prompt that genuinely carries both intents.
+- **Label:** `disputed: true`, `dispute_reason: "researcher (explicit prior-art: 'are there existing libraries?') vs approach-critic (soundness: 'is rolling our own reasonable?'); the prompt genuinely mixes prior-art discovery and design-soundness intents"`.
 - **Confidence:** `"low"`.
 
 ### Ex 7 — Explicit agent mention (directive vs descriptive)
@@ -368,8 +370,8 @@ Condensed from Spec E §9.1 grid and `general-purpose.md § Mandatory Code Routi
 |---|---|---|---|
 | `code-writer` | code | build | target behavior known; default-build |
 | `doc-writer` | docs_prose | build | prose artifact target |
-| `debugger` | code | diagnose | failure + cause unknown + code-bounded (single layer) |
-| `investigator` | *any* / cross | diagnose | failure + cause unknown + spans layers |
+| `debugger` | code | diagnose | (a) failure + cause unknown + code-bounded (single layer); or (b) narrow single-area code-behaviour investigation, no failure |
+| `investigator` | *any* / cross | diagnose | (a) failure + cause unknown + spans layers; or (b) external-repo / whole-codebase / cross-layer behaviour investigation, no failure |
 | `code-reviewer` | code | assess | PR / diff present (non-harsh review) |
 | `inquisitor` | code | assess / critique | harsh review or adversarial code critique |
 | `project-reviewer` | project_meta | assess | spec / plan document present |
