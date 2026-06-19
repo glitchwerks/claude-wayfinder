@@ -151,7 +151,7 @@
 {"corpus_id": 35384, "domain": "project_meta", "is_any": false, "posture": "plan", "gold_agent": "project-planner", "confidence": "high", "disputed": false}
 {"corpus_id": 35405, "domain": "project_meta", "is_any": false, "posture": "plan", "gold_agent": "project-planner", "confidence": "low", "disputed": true}
 {"corpus_id": 35411, "domain": "project_meta", "is_any": false, "posture": "operate", "gold_agent": "self_handle", "confidence": "high", "disputed": false}
-{"corpus_id": 35414, "domain": "code", "is_any": false, "posture": "diagnose", "gold_agent": "debugger", "confidence": "medium", "disputed": true}
+{"corpus_id": 35414, "domain": "code", "is_any": false, "posture": "diagnose", "gold_agent": "investigator", "confidence": "medium", "disputed": true}
 {"corpus_id": 35416, "domain": "code", "is_any": false, "posture": "build", "gold_agent": "code-writer", "confidence": "high", "disputed": false}
 {"corpus_id": 35425, "domain": "docs_prose", "is_any": false, "posture": "build", "gold_agent": "doc-writer", "confidence": "high", "disputed": false}
 {"corpus_id": 35688, "domain": "code", "is_any": false, "posture": "build", "gold_agent": "code-writer", "confidence": "medium", "disputed": false}
