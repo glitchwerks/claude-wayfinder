@@ -31,5 +31,8 @@ Thumbs.db
 # Git worktrees
 .worktrees/
 
+# Scratch files
+.tmp/
+
 # Local Claude Code config (per-consumer, not project state)
 .claude/
