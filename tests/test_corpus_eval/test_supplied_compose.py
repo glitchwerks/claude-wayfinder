@@ -26,6 +26,14 @@ from scripts.corpus.eval._reader import CorpusEntry, GoldLabel
 from scripts.corpus.eval._systems import SystemResult
 
 # ---------------------------------------------------------------------------
+# Repo-relative paths for committed research artefacts.
+# Derived from __file__ so the paths are cwd-independent and resolve on any
+# OS, including Linux CI runners that have no I:/ drive.
+# ---------------------------------------------------------------------------
+_REPO_ROOT: Path = Path(__file__).resolve().parents[2]
+_RESEARCH_DIR: Path = _REPO_ROOT / "docs" / "research"
+
+# ---------------------------------------------------------------------------
 # Shared catalog fixture with agents that match the spec's deterministic
 # anchors.  Two routable agents:
 #   code-writer — keyword "implement" triggers on "implement the feature"
@@ -2865,13 +2873,11 @@ class TestSelfHandleSentinelGoldIds:
     """
 
     # These two paths are committed to the repo and always present.
-    _GOLD_LABELS_PATH: Path = Path(
-        "I:/ai/claude/claude-wayfinder/docs/research"
-        "/2026-06-12-gold-labels-redacted.jsonl"
+    _GOLD_LABELS_PATH: Path = (
+        _RESEARCH_DIR / "2026-06-12-gold-labels-redacted.jsonl"
     )
-    _PROMPTS_PATH: Path = Path(
-        "I:/ai/claude/claude-wayfinder/docs/research"
-        "/label-blind-prompts.jsonl"
+    _PROMPTS_PATH: Path = (
+        _RESEARCH_DIR / "label-blind-prompts.jsonl"
     )
 
     # The 7 corpus IDs that must resolve to self_handle after #397.
@@ -2900,9 +2906,8 @@ class TestSelfHandleSentinelGoldIds:
         })
 
         # Load gold labels for the 7 target IDs
-        all_labels_path = Path(
-            "I:/ai/claude/claude-wayfinder/docs/research"
-            "/2026-06-12-gold-labels-redacted.jsonl"
+        all_labels_path = (
+            _RESEARCH_DIR / "2026-06-12-gold-labels-redacted.jsonl"
         )
         all_labels = load_labels(all_labels_path)
         labels = {
@@ -2912,9 +2917,8 @@ class TestSelfHandleSentinelGoldIds:
         }
 
         # Load prompts (label-blind) for the 7 target IDs
-        prompts_path = Path(
-            "I:/ai/claude/claude-wayfinder/docs/research"
-            "/label-blind-prompts.jsonl"
+        prompts_path = (
+            _RESEARCH_DIR / "label-blind-prompts.jsonl"
         )
         import json as _json
         entries: list[CorpusEntry] = []
