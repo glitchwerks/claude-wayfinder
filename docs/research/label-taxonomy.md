@@ -98,11 +98,11 @@ Apply steps in order; the first match wins.
 | Posture | When to use | Key signals |
 |---------|-------------|-------------|
 | `operate` | Execute or query an external system (VCS, CI, cloud) | Non-null `command_prefix`; OR VCS-command shape in prompt ("fetch PR #N", "check CI status", "list issues"); OR `tool_mentions` includes `get_pull_request*`, `list_issues`, etc. |
-| `diagnose` | Investigate a failure whose cause is unknown | Machine-emitted failure output pasted in prompt: stacktrace (`Traceback`, `panic:`, `FAILED tests/…::…`, compiler error block); cause **not stated** in the prompt. If "after X" / "because Y" / "due to Z" explains the cause in the same sentence as the failure, flip to `build` instead. |
+| `diagnose` | **(a)** Investigate a failure whose cause is unknown, OR **(b)** read-only investigation of how existing/external code or a system *behaves* — no failure pasted, no prior-art markers | **(a)** Machine-emitted failure output pasted in prompt: stacktrace (`Traceback`, `panic:`, `FAILED tests/…::…`, compiler error block); cause **not stated** in the prompt. If "after X" / "because Y" / "due to Z" explains the cause in the same sentence as the failure, flip to `build` instead. **(b)** Task is to comprehend an unfamiliar codebase, external-repo mechanics, or platform behaviour — no failure output pasted, no prior-art / alternatives markers (e.g. "trace how this hook system fires", "how does this library handle X"). |
 | `assess` | Review or evaluate an existing artifact | PR URL or `PR #N` present; diff hunk pasted; or `tool_mentions` includes `get_pull_request*`; or the task explicitly asks for a review/evaluation of existing code. |
 | `verify` | Check conformance between two distinct artifacts | Two or more named artifacts/sources AND a relational conformance marker ("consistent with", "matches", "conforms to", "drifted from", "should equal"). |
 | `plan` | Scope or phase new work — no existing artifact to build on | No file-path artifacts present AND scope-frame markers: "roadmap", "phases", "milestones", "scope", "plan the…", "produce a spec". |
-| `research` | Discover prior art or alternatives — no failure, no artifact | No file-path artifacts AND prior-art markers: "what exists", "alternatives to", "prior art", "has anyone built", "what are the options". |
+| `research` | Discover prior art or alternatives — no failure, no artifact | No file-path artifacts AND prior-art markers: "what exists", "alternatives to", "prior art", "has anyone built", "what are the options". `research` is prior-art/alternatives *discovery* — surveying what already exists out there. If the task reads or understands a *specific* existing codebase's behaviour rather than surveying alternatives, it is `diagnose` (branch b), not `research`. |
 | `critique` | Adversarially challenge an idea or architecture | Challenge-frame markers: "what's wrong with", "find flaws in", "argue against", "devil's advocate"; OR harsh-review framing ("give a harsh review", "tear this apart"). |
 | `build` | **Default** — construct or modify an artifact when no other posture fires | The task has a clear target artifact (file, module, feature) and the intent is to create/modify it. No failure, no PR-review, no planning scope, no prior-art search, no conformance check. |
 
@@ -187,6 +187,8 @@ Two artifacts + "consistent with" → `verify`.
 
 - **PR present + harsh-review framing:** "give PR #N a harsh review" → `critique`
   (adversarial), not `assess` (neutral review).  "Review PR #N for correctness" → `assess`.
+
+- **Read-only investigation of existing/external code with no failure:** understanding how an unfamiliar or external codebase *behaves* (e.g. "trace how repo X's hook system fires", "how does this library handle Y") is `diagnose` (branch b), even though no stacktrace is pasted — provided there are no prior-art/alternatives markers. If the task instead asks "what alternatives exist" / "what's already out there", it is `research`.
 
 ---
 
