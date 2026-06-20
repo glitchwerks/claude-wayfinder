@@ -106,6 +106,10 @@ lexically. They describe the **task**, not a target agent: the matcher maps
 domain/posture to agents from each agent's own frontmatter, so the caller never
 names an agent here.
 
+**Caller: classify each task into these four labels and include them in the
+context JSON you compose** — apply the rubric below and obey the `confidence`
+fail-safe (never label `high` on a guess). Label only what the task _is_.
+
 All four are **optional and additive** — the matcher ignores absent or unknown
 fields, so emitting them never changes current behavior. While the rollout flag
 is off they feed shadow-mode telemetry only (the v3 route is computed and logged
@@ -152,10 +156,9 @@ omit `confidence` (⇒ treated as `low`) rather than inventing a level.
 ### `area_span` — default 1
 
 Number of distinct layers/areas the task genuinely spans (e.g. code + infra +
-data = 3). Defaults to `1`. Emit `≥ 2` **only** for genuinely multi-layer work —
-it drives the `diagnose + area_span ≥ 2 → investigator` route. A single-file bug
-is `1`; an outage spanning service + database + config is `≥ 2`. Values are
-coerced to `int`; anything missing, non-numeric, or `< 1` becomes `1`.
+data = 3). Defaults to `1`. Emit `≥ 2` **only** for genuinely multi-layer work — a
+single-file bug is `1`; an outage spanning service + database + config is `≥ 2`.
+Values are coerced to `int`; anything missing, non-numeric, or `< 1` becomes `1`.
 
 ## Output schema (both modes)
 
@@ -164,11 +167,11 @@ Real-catalog mode returns the matcher's decision JSON verbatim on stdout:
 ```json
 {
   "decision":     "delegate",
-  "agent":        "code-writer",
+  "agent":        "Explore",
   "skills":       ["python"],
   "confidence":   0.92,
   "rationale":    "matched keywords: implement.",
-  "alternatives": [{"agent": "devops", "score": 0.4}]
+  "alternatives": [{"agent": "Plan", "score": 0.4}]
 }
 ```
 
