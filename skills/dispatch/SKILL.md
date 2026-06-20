@@ -102,9 +102,9 @@ ID). The per-file-per-session design is load-bearing.
 Four optional **caller-supplied labels** the matcher consumes for two-axis
 (domain × posture) routing. The matcher runs no encoder — it routes on exactly
 what the caller labels — so these are the only signals it cannot derive
-lexically. They describe the **task**, not a target agent: the matcher maps
-domain/posture to agents from each agent's own frontmatter, so the caller never
-names an agent here.
+lexically. They describe the **task**, not a target agent: the matcher resolves
+domain/posture to an agent internally (via its own routing policy), so the caller
+never names an agent here.
 
 **Caller: classify each task into these four labels and include them in the
 context JSON you compose** — apply the rubric below and obey the `confidence`
@@ -148,10 +148,15 @@ routes only after the flag flip.
 
 ### `confidence` — fail-safe; never label `high` on a guess
 
-How sure the caller is of the `domain` + `posture` pair. The matcher hard-routes
-**only on `high`**; `medium` / `low` / absent fall through to the lexical scorer.
-A wrong `high` is the one label that can mis-steer a live route, so when unsure,
-omit `confidence` (⇒ treated as `low`) rather than inventing a level.
+How sure the caller is of the `domain` + `posture` pair. The fail-safe governs
+**delegate** posture-routes: the matcher hard-routes to a preferred agent **only
+on `high`**; `medium` / `low` / absent fall through to the lexical scorer. A wrong
+`high` is the one label that can mis-steer a live delegate, so when unsure, omit
+`confidence` (⇒ treated as `low`) rather than inventing a level.
+
+**Exception:** a harness self-edit (`domain: project_meta`, `posture: build`)
+abstains to the router (`self_handle`) **regardless of confidence** — that
+abstention is not a delegate, so the `high`-gate does not apply.
 
 ### `area_span` — default 1
 
