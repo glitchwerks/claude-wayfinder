@@ -61,12 +61,18 @@ stdin. `task_description` is the only required field:
   "agent_mentions": ["..."],
   "tool_mentions": ["..."],
   "command_prefix": "...",
-  "session_id": "..."
+  "session_id": "...",
+  "domain": "code",
+  "posture": "build",
+  "confidence": "high",
+  "area_span": 1
 }
 ```
 
 All fields except `task_description` are optional; omit or pass `null`
-for fields that are not applicable.
+for fields that are not applicable. The four two-axis labels (`domain`,
+`posture`, `confidence`, `area_span`) are documented under **Two-axis
+labels** below.
 
 `session_id` (optional string, added in fix #294, auto-populated in
 #296) — the Claude Code session identifier for the calling session.
@@ -91,6 +97,74 @@ simplify this to a single shared file — a shared file is broken under
 concurrent sessions (each SessionStart overwrites the prior session's
 ID). The per-file-per-session design is load-bearing.
 
+## Two-axis labels (Matcher v3)
+
+Four optional **caller-supplied labels** the matcher consumes for two-axis
+(domain × posture) routing. The matcher runs no encoder — it routes on exactly
+what the caller labels — so these are the only signals it cannot derive
+lexically. They describe the **task**, not a target agent: the matcher resolves
+domain/posture to an agent internally (via its own routing policy), so the caller
+never names an agent here.
+
+**Caller: classify each task into these four labels and include them in the
+context JSON you compose** — apply the rubric below and obey the `confidence`
+fail-safe (never label `high` on a guess). Label only what the task _is_.
+
+All four are **optional and additive** — the matcher ignores absent or unknown
+fields, so emitting them never changes current behavior. While the rollout flag
+is off they feed shadow-mode telemetry only (the v3 route is computed and logged
+beside the live lexical decision); `high`-confidence labels begin steering live
+routes only after the flag flip.
+
+| Field | Type | Default when absent |
+| --- | --- | --- |
+| `domain` | enum / `null` | `is_any` (no domain gate) |
+| `posture` | enum / `null` | no posture route |
+| `confidence` | `high` \| `medium` \| `low` / `null` | **`low`** (fail-safe) |
+| `area_span` | integer ≥ 1 | `1` |
+
+### `domain` — what kind of artifact/area the task touches
+
+| Value | Task is about |
+| --- | --- |
+| `code` | source code: features, fixes, refactors, tests (`.py` / `.ts` / …) |
+| `docs_prose` | documentation, READMEs, ADRs, plans, specs, changelogs |
+| `project_meta` | harness self-edits — `agents/**`, `skills/**/SKILL.md`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, project governance |
+| `infra_deploy` | infrastructure, deployment, IaC (bicep/terraform), CI/CD, topology |
+| `is_any` / `null` | cross-cutting, or no single domain dominates (no domain gate) |
+
+### `posture` — what action the task performs
+
+| Value | Intent |
+| --- | --- |
+| `build` | create / implement / add new behavior |
+| `diagnose` | find the root cause of a failure / bug |
+| `assess` | review / evaluate existing code quality |
+| `critique` | adversarial critique (architecture or idea soundness) |
+| `verify` | conformance / consistency check vs. a stated source of truth |
+| `plan` | scope / design / requirements |
+| `research` | prior-art discovery before planning |
+| `operate` | read-only operations (e.g. status / read queries) |
+
+### `confidence` — fail-safe; never label `high` on a guess
+
+How sure the caller is of the `domain` + `posture` pair. The fail-safe governs
+**delegate** posture-routes: the matcher hard-routes to a preferred agent **only
+on `high`**; `medium` / `low` / absent fall through to the lexical scorer. A wrong
+`high` is the one label that can mis-steer a live delegate, so when unsure, omit
+`confidence` (⇒ treated as `low`) rather than inventing a level.
+
+**Exception:** a harness self-edit (`domain: project_meta`, `posture: build`)
+abstains to the router (`self_handle`) **regardless of confidence** — that
+abstention is not a delegate, so the `high`-gate does not apply.
+
+### `area_span` — default 1
+
+Number of distinct layers/areas the task genuinely spans (e.g. code + infra +
+data = 3). Defaults to `1`. Emit `≥ 2` **only** for genuinely multi-layer work — a
+single-file bug is `1`; an outage spanning service + database + config is `≥ 2`.
+Values are coerced to `int`; anything missing, non-numeric, or `< 1` becomes `1`.
+
 ## Output schema (both modes)
 
 Real-catalog mode returns the matcher's decision JSON verbatim on stdout:
@@ -98,11 +172,11 @@ Real-catalog mode returns the matcher's decision JSON verbatim on stdout:
 ```json
 {
   "decision":     "delegate",
-  "agent":        "code-writer",
+  "agent":        "Explore",
   "skills":       ["python"],
   "confidence":   0.92,
   "rationale":    "matched keywords: implement.",
-  "alternatives": [{"agent": "devops", "score": 0.4}]
+  "alternatives": [{"agent": "Plan", "score": 0.4}]
 }
 ```
 
