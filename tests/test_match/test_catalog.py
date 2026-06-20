@@ -581,3 +581,127 @@ class TestWriteLogEntryOverrideId:
         )
         entry = json.loads(log_path.read_text(encoding="utf-8").strip())
         assert entry["override_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# M15-3 (#420) — _write_log_entry shadow_data extension
+# ---------------------------------------------------------------------------
+
+
+class TestWriteLogEntryShadowData:
+    """_write_log_entry accepts an optional shadow_data kwarg (M15-3, #420).
+
+    Three tests:
+    1. Default-None pin — omitting shadow_data produces a byte-identical
+       entry with exactly the current key set and no "shadow" key.
+    2. Nested attach — shadow_data is stored under entry["shadow"], not
+       merged flat into the entry.
+    3. Collision isolation — shadow_data keys that collide with top-level
+       entry keys (e.g. "output") are isolated under "shadow" and do not
+       overwrite the real top-level value.
+
+    Tests 2 and 3 are RED until the code-writer adds the shadow_data param.
+    Test 1 is a GREEN pin; it confirms the default path is byte-unchanged.
+    """
+
+    #: Minimal fixed key set expected in every log entry.
+    _EXPECTED_KEYS = {
+        "type",
+        "ts",
+        "session_id",
+        "input",
+        "output",
+        "catalog_hash",
+        "matcher_version",
+        "override_id",
+    }
+
+    def test_default_none_produces_no_shadow_key(self, tmp_path: Path) -> None:
+        """Omitting shadow_data leaves the entry key set unchanged (pin).
+
+        Calls _write_log_entry without shadow_data and asserts:
+        - The returned entry has exactly the 8 expected keys.
+        - No "shadow" key is present.
+
+        This test is GREEN on write — it confirms the default-None path
+        is byte-identical to the pre-M15-3 shape.
+        """
+        from claude_wayfinder.match._catalog import _write_log_entry
+
+        log_path = tmp_path / "log.jsonl"
+        _write_log_entry(
+            {"task_description": "do something"},
+            {"decision": "delegate"},
+            "sha256:abc",
+            log_path,
+        )
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+        assert set(entry.keys()) == self._EXPECTED_KEYS, (
+            f"Unexpected keys in entry: {set(entry.keys()) - self._EXPECTED_KEYS!r}"
+        )
+        assert "shadow" not in entry, (
+            "entry must not have a 'shadow' key when shadow_data is None"
+        )
+
+    def test_shadow_data_nested_under_shadow_key(self, tmp_path: Path) -> None:
+        """shadow_data is stored as entry["shadow"], not flat-merged (red).
+
+        Calls _write_log_entry with shadow_data={"k": "v", "n": 1} and asserts:
+        - entry["shadow"] == {"k": "v", "n": 1}
+        - "k" and "n" are NOT present at the top level of the entry.
+
+        RED until code-writer adds shadow_data param (TypeError on call).
+        """
+        from claude_wayfinder.match._catalog import _write_log_entry
+
+        log_path = tmp_path / "log.jsonl"
+        shadow = {"k": "v", "n": 1}
+        _write_log_entry(
+            {"task_description": "do something"},
+            {"decision": "delegate"},
+            "sha256:abc",
+            log_path,
+            shadow_data=shadow,
+        )
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+        assert entry["shadow"] == shadow, (
+            f"entry['shadow'] should be {shadow!r}, got {entry.get('shadow')!r}"
+        )
+        assert "k" not in entry, (
+            "shadow key 'k' must not leak to the top-level entry"
+        )
+        assert "n" not in entry, (
+            "shadow key 'n' must not leak to the top-level entry"
+        )
+
+    def test_shadow_data_collision_key_isolated(self, tmp_path: Path) -> None:
+        """shadow_data collision with top-level key is isolated (red).
+
+        Calls _write_log_entry with shadow_data={"output": "SHADOW"} and asserts:
+        - Top-level entry["output"] is the real output dict, unchanged.
+        - entry["shadow"]["output"] == "SHADOW".
+
+        Proves nesting prevents the flat-merge collision that entry.update()
+        would cause (spec §F.1 / plan §2).
+
+        RED until code-writer adds shadow_data param (TypeError on call).
+        """
+        from claude_wayfinder.match._catalog import _write_log_entry
+
+        real_output = {"decision": "delegate"}
+        log_path = tmp_path / "log.jsonl"
+        _write_log_entry(
+            {"task_description": "do something"},
+            real_output,
+            "sha256:abc",
+            log_path,
+            shadow_data={"output": "SHADOW"},
+        )
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+        assert entry["output"] == real_output, (
+            f"Top-level output was overwritten; got {entry['output']!r}"
+        )
+        assert entry["shadow"]["output"] == "SHADOW", (
+            f"entry['shadow']['output'] should be 'SHADOW', "
+            f"got {entry.get('shadow', {}).get('output')!r}"
+        )
