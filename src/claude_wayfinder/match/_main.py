@@ -23,6 +23,7 @@ from claude_wayfinder.match._catalog import (
     _write_log_entry,
     load_catalog,
 )
+from claude_wayfinder.match._compose import compose_route, parse_labels
 from claude_wayfinder.match._decide import decide
 from claude_wayfinder.match._match import build_features, score_entries
 from claude_wayfinder.match._overrides import (
@@ -31,6 +32,56 @@ from claude_wayfinder.match._overrides import (
     load_overrides,
     resolve_override,
 )
+from claude_wayfinder.match._types import Labels
+
+
+def _build_shadow_record(
+    labels: Labels,
+    live_result: dict[str, Any],
+    shadow: dict[str, Any],
+    diag: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the §F.1 shadow record from routing outputs and diagnostics.
+
+    Combines live decision fields, Compose shadow decision fields, label
+    context, and per-step §F.1 intermediate state into a single flat
+    record suitable for storage under the ``"shadow"`` key of a log entry.
+
+    Args:
+        labels: Parsed routing labels from the dispatch context.
+        live_result: The live ``decide()`` result dict (stdout decision).
+        shadow: The ``compose_route()`` result dict.
+        diag: The populated §F.1 diagnostics dict from ``compose_route``.
+
+    Returns:
+        Flat dict matching the §F.1 shadow record schema.
+    """
+    return {
+        # Label context
+        "domain": labels.domain,
+        "posture": labels.posture,
+        "confidence": labels.confidence,
+        "area_span": labels.area_span,
+        # Live (decide) decision mirror
+        "live_decision": live_result.get("decision"),
+        "live_agent": live_result.get("agent"),
+        "live_confidence": live_result.get("confidence"),
+        "live_disposition_source": live_result.get("disposition_source"),
+        # Shadow (compose_route) decision
+        "shadow_decision": shadow.get("decision"),
+        "shadow_agent": shadow.get("agent"),
+        "shadow_confidence": shadow.get("confidence"),
+        "shadow_disposition_source": shadow.get("disposition_source"),
+        # §F.1 intermediate state from diagnostics
+        "gated_agent_names": diag.get("gated_agent_names"),
+        "posture_preferred": diag.get("posture_preferred"),
+        "posture_routed": diag.get("posture_routed"),
+        "branch": diag.get("branch"),
+        "lexical_agreement": diag.get("lexical_agreement"),
+        "posture_veto_reason": diag.get("posture_veto_reason"),
+        # Agreement flag
+        "agreement": live_result.get("agent") == shadow.get("agent"),
+    }
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -205,8 +256,40 @@ def main(argv: list[str] | None = None) -> None:
     # --- Compose decision ---
     result = decide(scored_agents, scored_skills, features, entries)
 
+    # --- Shadow compute (non-fatal: any failure must not alter stdout) ---
+    shadow_record: dict[str, Any] | None = None
+    try:
+        catalog_agent_names: frozenset[str] = frozenset(
+            se.entry.name for se in scored_agents
+        )
+        labels: Labels = parse_labels(context)
+        diag: dict[str, Any] = {}
+        shadow = compose_route(
+            labels,
+            scored_agents,
+            scored_skills,
+            features,
+            entries,
+            catalog_agent_names,
+            diagnostics=diag,
+        )
+        shadow_record = _build_shadow_record(labels, result, shadow, diag)
+    except Exception as exc:   # shadow must never break the live dispatch
+        print(
+            f"[dispatch] shadow compute failed: {exc}",
+            file=sys.stderr,
+        )
+        shadow_record = None
+
     # --- Log decision (non-fatal: log failure never blocks stdout output) ---
-    _write_log_entry(context, result, catalog_hash, _resolve_log_path(), override_id=None)
+    _write_log_entry(
+        context,
+        result,
+        catalog_hash,
+        _resolve_log_path(),
+        override_id=None,
+        shadow_data=shadow_record,
+    )
 
     # --- Emit JSON (enriched with catalog_hash / matcher_version) ---
     # These fields are added AFTER the log write so the log entry shape

@@ -183,6 +183,7 @@ def compose_route(
     features: Features,
     catalog: list[CatalogEntry],
     catalog_agent_names: frozenset[str],
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compose a routing decision from two-axis labels + lexical scores.
 
@@ -228,6 +229,13 @@ def compose_route(
         catalog: Full catalog entry list (passed to ``decide()``).
         catalog_agent_names: Frozenset of routable agent names from the
             catalog.
+        diagnostics: Optional out-param dict (M15-5, §F.1).  When not
+            ``None``, populated in-place with per-step routing state:
+            ``gated_agent_names``, ``posture_preferred``,
+            ``posture_routed``, ``branch``, ``lexical_agreement``,
+            ``posture_veto_reason``.  Does not affect return value or
+            decision logic.  Default ``None`` leaves existing callers
+            and frozen tests unaffected.
 
     Returns:
         Decision dict with at minimum the keys ``decision`` (str),
@@ -257,6 +265,11 @@ def compose_route(
     decision_out: str = "advisory"
     confidence_out: float = 0.5
 
+    # §F.1 diagnostic locals — populated only when diagnostics is not None.
+    _branch: str = "fallback"
+    _lexical_agreement: bool | None = None
+    _posture_veto_reason: str | None = None
+
     if labels.posture:
         # ------------------------------------------------------------------
         # BRANCH 1: broad-diagnose → investigator (#396/#411)
@@ -276,7 +289,15 @@ def compose_route(
                 decision_out = "delegate"
                 confidence_out = 0.9
                 posture_routed = True
+                _branch = "branch1_investigator"
             # else: investigator absent or confidence not high → decide()
+            elif diagnostics is not None:
+                # §F.1 Branch-1 veto diagnostics (Codex P2 / #429):
+                # confidence_not_high takes precedence when both gates fail.
+                if not confidence_is_high(labels):
+                    _posture_veto_reason = "confidence_not_high"
+                else:
+                    _posture_veto_reason = "investigator_not_in_catalog"
 
         # ------------------------------------------------------------------
         # BRANCH 2: sentinel → self_handle (#397)
@@ -288,6 +309,7 @@ def compose_route(
             agent_out = None
             confidence_out = 0.9
             posture_routed = True
+            _branch = "branch2_sentinel"
 
         # ------------------------------------------------------------------
         # BRANCH 3: generic preferred → delegate@0.9 (§B.3)
@@ -318,12 +340,52 @@ def compose_route(
                 decision_out = "delegate"
                 confidence_out = 0.9
                 posture_routed = True
+                _branch = "branch3_generic"
+                _lexical_agreement = True   # §B.1 passed — record it
+            elif diagnostics is not None and preferred:
+                # Branch-3 did not fire — diagnose the blocking condition.
+                # Evaluate each gate in order to surface the first veto.
+                _branch = "fallback"
+                if preferred not in genuine_gated_names:
+                    _posture_veto_reason = "not_in_genuine_gated"
+                elif preferred not in catalog_agent_names:
+                    _posture_veto_reason = "not_in_catalog"
+                elif not confidence_is_high(labels):
+                    _posture_veto_reason = "confidence_not_high"
+                else:
+                    # Must be _is_lexically_plausible that failed.
+                    _posture_veto_reason = "not_lexically_plausible"
+                # Evaluate lexical_agreement explicitly for the diagnostic.
+                _lexical_agreement = _is_lexically_plausible(
+                    preferred, gated
+                )
 
     # --- Fallback: decide() on the gated list ---
     if not posture_routed:
         d = dict(decide(gated, scored_skills, features, catalog))
         d.setdefault("disposition_source", "scored")
+        # Populate diagnostics before returning (fallback path).
+        if diagnostics is not None:
+            diagnostics["gated_agent_names"] = sorted(
+                se.entry.name for se in gated
+            )
+            diagnostics["posture_preferred"] = preferred
+            diagnostics["posture_routed"] = False
+            diagnostics["branch"] = _branch
+            diagnostics["lexical_agreement"] = _lexical_agreement
+            diagnostics["posture_veto_reason"] = _posture_veto_reason
         return d
+
+    # Populate diagnostics for posture-routed paths.
+    if diagnostics is not None:
+        diagnostics["gated_agent_names"] = sorted(
+            se.entry.name for se in gated
+        )
+        diagnostics["posture_preferred"] = preferred
+        diagnostics["posture_routed"] = True
+        diagnostics["branch"] = _branch
+        diagnostics["lexical_agreement"] = _lexical_agreement
+        diagnostics["posture_veto_reason"] = _posture_veto_reason
 
     return {
         "decision": decision_out,

@@ -26,9 +26,16 @@ Test inventory
                                   2026-06-20): Branch 1 + 2 must match
                                   oracle; Branch 3 veto-blocks are the
                                   one accepted divergence.
-8. ``TestLiveStdoutUnchanged``  — ``_main.py`` stdout not modified because
-                                  ``_compose.py`` is not wired into
-                                  ``_main.py`` in this phase.
+8. (removed) ``TestLiveStdoutUnchanged`` — obsolete M15-2 guard; wiring
+                                  landed in M15-5; invariant now covered
+                                  behaviourally by
+                                  ``test_shadow_mode.py::TestShadowLiveUnchanged``
+                                  and the golden parity tests.
+9. ``TestFallbackPayloadFidelity`` — compose_route fallback equals decide().
+10. ``TestComposeDiagnosticsParam`` — NEW (M15-5): optional ``diagnostics``
+                                  out-param of ``compose_route`` populates
+                                  per-step §F.1 state without changing
+                                  return value or decision logic.
 """
 
 from __future__ import annotations
@@ -1396,43 +1403,16 @@ class TestComposeVsOracleEquivalence:
 
 
 # ---------------------------------------------------------------------------
-# 8. TestLiveStdoutUnchanged — _main.py not modified in this phase
+# 8. TestLiveStdoutUnchanged — REMOVED in M15-5
+#
+# The ``test_compose_module_not_imported_by_main`` assertion was an M15-2
+# guard that asserted ``_compose`` was absent from ``_main.py`` source.
+# M15-5 is precisely the phase that wires compose_route / parse_labels into
+# _main.py, so the invariant is now intentionally false.  Behavioural
+# coverage is provided by:
+#   - test_shadow_mode.py::TestShadowLiveUnchanged (stdout unchanged)
+#   - test_scoring_kernel_parity.py golden parity tests
 # ---------------------------------------------------------------------------
-
-
-class TestLiveStdoutUnchanged:
-    """``_main.py`` live stdout is unchanged because _compose.py is not wired.
-
-    Covers: contract item 8 — since _main.py is NOT modified in M15-2
-    (Compose is computed-not-emitted; emission/flag is M15-7), the existing
-    golden tests in ``test_scoring_kernel_parity.py::TestGoldenEquivalence``
-    serve as the unchanged-behavior guarantee.
-
-    This class documents and asserts the module-not-wired invariant.
-    """
-
-    def test_compose_module_not_imported_by_main(self) -> None:
-        """``_main.py`` does not import ``_compose`` (not wired in M15-2).
-
-        This structural test ensures we have not accidentally wired
-        compose_route into the live dispatch path, which could change
-        stdout and break the existing golden tests.
-
-        Reads ``_main.py`` source and asserts ``_compose`` is absent.
-        """
-        main_path = (
-            Path(__file__).resolve().parents[2]
-            / "src"
-            / "claude_wayfinder"
-            / "match"
-            / "_main.py"
-        )
-        source = main_path.read_text(encoding="utf-8")
-        assert "_compose" not in source, (
-            "_main.py must not import _compose in M15-2 "
-            "(wiring is deferred to M15-7). "
-            "If you wired it, the live stdout golden tests must also pass."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -1717,4 +1697,579 @@ class TestFallbackPayloadFidelity:
         assert actual["decision"] == "mixed_content", (
             f"compose_route fallback must propagate mixed_content decision, "
             f"got {actual['decision']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 10. TestComposeDiagnosticsParam — M15-5: optional diagnostics out-param
+# ---------------------------------------------------------------------------
+
+
+class TestComposeDiagnosticsParam:
+    """``compose_route`` optional ``diagnostics`` out-param (M15-5, #422).
+
+    The new trailing param ``diagnostics: dict | None = None`` captures
+    per-step §F.1 routing state without changing the return value or
+    decision logic.
+
+    Test inventory:
+        A1 — ``diagnostics=None`` (default): return value identical to
+             a call without the param (pin, expected GREEN immediately).
+        A2 — Branch-3 delegate: ``diag={}`` populated with posture_routed,
+             branch, posture_preferred, lexical_agreement, gated_agent_names,
+             posture_veto_reason (expected RED: param does not exist yet).
+        A3 — Fallback with veto fail: populated with branch="fallback",
+             lexical_agreement=False, posture_veto_reason set (expected RED).
+        A4 — Branch-2 sentinel: branch="branch2_sentinel",
+             posture_routed=True, lexical_agreement=None (expected RED).
+    """
+
+    # ------------------------------------------------------------------
+    # Shared fixture: Branch-3 setup — (code, build) → code-writer
+    # (reused from TestBranch3Generic.code_build_setup)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_branch3_setup() -> dict:
+        """Build inputs for Branch-3 (code, build) → code-writer.
+
+        Returns:
+            Dict with labels, scored_agents, catalog,
+            catalog_agent_names, features.
+        """
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        def _entry(name: str) -> CatalogEntry:
+            tr = _parse_triggers(
+                {
+                    "command_prefixes": [],
+                    "agent_mentions": [],
+                    "path_globs": [],
+                    "path_globs_excluded": [],
+                    "keywords": [],
+                    "tool_mentions": [],
+                    "excludes": [],
+                }
+            )
+            return CatalogEntry(
+                name=name,
+                kind="agent",
+                source="owned",
+                routable=True,
+                triggers=tr,
+                applicable_skills=(),
+                applicable_agents=(),
+            )
+
+        catalog = [
+            _entry("code-writer"),
+            _entry("debugger"),
+            _entry("code-reviewer"),
+        ]
+        catalog_agent_names = frozenset(
+            {"code-writer", "debugger", "code-reviewer"}
+        )
+        # code-writer plausible in top-3 for domain=code
+        scored_agents = _make_gated(
+            [
+                ("code-writer", 0.9),
+                ("debugger", 0.7),
+                ("code-reviewer", 0.5),
+            ]
+        )
+        features = build_features(
+            {
+                "task_description": "implement the login feature",
+                "file_paths": ["src/auth.py"],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            }
+        )
+        return {
+            "catalog": catalog,
+            "catalog_agent_names": catalog_agent_names,
+            "scored_agents": scored_agents,
+            "features": features,
+        }
+
+    # ------------------------------------------------------------------
+    # Shared fixture: Branch-2 sentinel setup — (project_meta, build)
+    # (reused from TestBranch2Sentinel.sentinel_setup)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_branch2_setup() -> dict:
+        """Build inputs for Branch-2 sentinel (project_meta, build).
+
+        Returns:
+            Dict with labels, scored_agents, catalog,
+            catalog_agent_names, features.
+        """
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        def _entry(name: str) -> CatalogEntry:
+            tr = _parse_triggers(
+                {
+                    "command_prefixes": [],
+                    "agent_mentions": [],
+                    "path_globs": [],
+                    "path_globs_excluded": [],
+                    "keywords": [],
+                    "tool_mentions": [],
+                    "excludes": [],
+                }
+            )
+            return CatalogEntry(
+                name=name,
+                kind="agent",
+                source="owned",
+                routable=True,
+                triggers=tr,
+                applicable_skills=(),
+                applicable_agents=(),
+            )
+
+        catalog = [
+            _entry("project-planner"),
+            _entry("project-reviewer"),
+        ]
+        catalog_agent_names = frozenset(
+            {"project-planner", "project-reviewer"}
+        )
+        scored_agents = _make_gated(
+            [("project-planner", 0.9), ("project-reviewer", 0.7)]
+        )
+        features = build_features(
+            {
+                "task_description": "update CLAUDE.md",
+                "file_paths": ["CLAUDE.md"],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            }
+        )
+        return {
+            "catalog": catalog,
+            "catalog_agent_names": catalog_agent_names,
+            "scored_agents": scored_agents,
+            "features": features,
+        }
+
+    # ------------------------------------------------------------------
+    # A1 — diagnostics=None (default) ⇒ return value identical (PIN / GREEN)
+    # ------------------------------------------------------------------
+
+    def test_diagnostics_none_default_return_identical(self) -> None:
+        """diagnostics=None leaves return value byte-identical to no-param call.
+
+        This is the backward-compatibility pin: existing callers that do
+        not pass ``diagnostics`` must see zero behavioral change.
+
+        Phase 1 (pre-implementation): verifies the current return shape
+        of the no-param call so we have a baseline.  Once ``diagnostics``
+        is added, the same call with ``diagnostics=None`` must produce
+        an identical result — asserted here when the param is available.
+        """
+        import inspect
+
+        setup = self._make_branch3_setup()
+        labels = Labels(
+            domain="code",
+            posture="build",
+            confidence="high",
+            area_span=1,
+        )
+        # Call without the new param (existing callers — always valid).
+        result_no_param = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+        )
+        # Baseline shape assertions that must hold before and after
+        # the diagnostics param is added.
+        assert result_no_param["decision"] == "delegate"
+        assert result_no_param["agent"] == "code-writer"
+        assert result_no_param["disposition_source"] == "posture_routed"
+
+        # When the ``diagnostics`` param exists, assert that passing
+        # ``diagnostics=None`` produces the same return value.
+        sig = inspect.signature(compose_route)
+        if "diagnostics" in sig.parameters:
+            result_with_none = compose_route(
+                labels=labels,
+                scored_agents=setup["scored_agents"],
+                scored_skills=[],
+                features=setup["features"],
+                catalog=setup["catalog"],
+                catalog_agent_names=setup["catalog_agent_names"],
+                diagnostics=None,
+            )
+            assert result_no_param == result_with_none, (
+                "diagnostics=None must not alter the return value: "
+                f"no-param={result_no_param!r}, "
+                f"diagnostics=None={result_with_none!r}"
+            )
+
+    # ------------------------------------------------------------------
+    # A2 — Branch-3 delegate: diag={} populated (expected RED)
+    # ------------------------------------------------------------------
+
+    def test_branch3_diagnostics_populated(self) -> None:
+        """Branch-3 delegate path populates all §F.1 diagnostics keys.
+
+        With domain=code, posture=build, confidence=high and code-writer
+        in top-3 of gated: the Branch-3 posture route fires.  Passing
+        ``diagnostics={}`` must populate:
+          - posture_routed=True
+          - branch="branch3_generic"
+          - posture_preferred="code-writer"
+          - lexical_agreement=True
+          - gated_agent_names non-empty (contains "code-writer")
+          - posture_veto_reason=None
+
+        Expected to FAIL until ``diagnostics`` param is implemented
+        (TypeError: unexpected keyword argument).
+        """
+        setup = self._make_branch3_setup()
+        labels = Labels(
+            domain="code",
+            posture="build",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert diag.get("posture_routed") is True, (
+            f"Expected posture_routed=True, got {diag.get('posture_routed')!r}"
+        )
+        assert diag.get("branch") == "branch3_generic", (
+            f"Expected branch='branch3_generic', got {diag.get('branch')!r}"
+        )
+        assert diag.get("posture_preferred") == "code-writer", (
+            "Expected posture_preferred='code-writer', "
+            f"got {diag.get('posture_preferred')!r}"
+        )
+        assert diag.get("lexical_agreement") is True, (
+            "Expected lexical_agreement=True, "
+            f"got {diag.get('lexical_agreement')!r}"
+        )
+        gated_names = diag.get("gated_agent_names")
+        assert gated_names, (
+            f"Expected non-empty gated_agent_names, got {gated_names!r}"
+        )
+        assert "code-writer" in gated_names, (
+            f"Expected 'code-writer' in gated_agent_names, got {gated_names!r}"
+        )
+        assert diag.get("posture_veto_reason") is None, (
+            "Expected posture_veto_reason=None when branch fires, "
+            f"got {diag.get('posture_veto_reason')!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # A3 — Fallback with veto fail: diag={} populates veto reason (RED)
+    # ------------------------------------------------------------------
+
+    def test_fallback_veto_diagnostics_populated(self) -> None:
+        """Fallback (veto blocks Branch-3) populates §F.1 veto diagnostics.
+
+        code-writer is preferred by (code, build) but is ranked 4th
+        below the plausibility floor — the §B.1 veto blocks it and the
+        Branch-3 route falls through to decide().  Passing
+        ``diagnostics={}`` must populate:
+          - posture_routed=False
+          - branch="fallback"
+          - lexical_agreement=False
+          - posture_veto_reason="not_lexically_plausible"
+            (or the correct reason for the constructed input)
+
+        Expected to FAIL until ``diagnostics`` param is implemented.
+        """
+        floor = _DELEGATE_THRESHOLD - 0.15
+        # code-writer at rank 4, below floor — veto fires
+        scored_agents_veto = _make_gated(
+            [
+                ("debugger", 0.9),
+                ("code-reviewer", 0.85),
+                ("investigator", 0.8),
+                ("code-writer", floor - 0.05),
+            ]
+        )
+        setup = self._make_branch3_setup()
+        labels = Labels(
+            domain="code",
+            posture="build",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        compose_route(
+            labels=labels,
+            scored_agents=scored_agents_veto,
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert diag.get("posture_routed") is False, (
+            "Expected posture_routed=False on veto fallback, "
+            f"got {diag.get('posture_routed')!r}"
+        )
+        assert diag.get("branch") == "fallback", (
+            f"Expected branch='fallback', got {diag.get('branch')!r}"
+        )
+        assert diag.get("lexical_agreement") is False, (
+            "Expected lexical_agreement=False when veto blocks, "
+            f"got {diag.get('lexical_agreement')!r}"
+        )
+        veto_reason = diag.get("posture_veto_reason")
+        assert veto_reason is not None, (
+            "Expected posture_veto_reason to be set when veto blocks, "
+            f"got {veto_reason!r}"
+        )
+        # The contract names "not_lexically_plausible" as the expected
+        # reason when _is_lexically_plausible returns False.
+        assert veto_reason == "not_lexically_plausible", (
+            f"Expected posture_veto_reason='not_lexically_plausible', "
+            f"got {veto_reason!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # A4 — Branch-2 sentinel: diag={} populated (expected RED)
+    # ------------------------------------------------------------------
+
+    def test_branch2_sentinel_diagnostics_populated(self) -> None:
+        """Branch-2 sentinel populates §F.1 diagnostics with branch sentinel.
+
+        (project_meta, build) → sentinel → self_handle.  Passing
+        ``diagnostics={}`` must populate:
+          - branch="branch2_sentinel"
+          - posture_routed=True
+          - lexical_agreement=None  (not evaluated on Branch 2)
+
+        Expected to FAIL until ``diagnostics`` param is implemented.
+        """
+        setup = self._make_branch2_setup()
+        labels = Labels(
+            domain="project_meta",
+            posture="build",
+            confidence=None,
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        # Sanity-check the route fired correctly before asserting diag.
+        assert result["decision"] == "self_handle", (
+            f"Expected self_handle from Branch-2, got {result['decision']!r}"
+        )
+        assert diag.get("branch") == "branch2_sentinel", (
+            "Expected branch='branch2_sentinel', "
+            f"got {diag.get('branch')!r}"
+        )
+        assert diag.get("posture_routed") is True, (
+            "Expected posture_routed=True for Branch-2, "
+            f"got {diag.get('posture_routed')!r}"
+        )
+        # lexical_agreement is None when not evaluated (Branches 1/2)
+        assert "lexical_agreement" in diag, (
+            "Expected lexical_agreement key to be present in diag"
+        )
+        assert diag["lexical_agreement"] is None, (
+            "Expected lexical_agreement=None on Branch-2 (not evaluated), "
+            f"got {diag['lexical_agreement']!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # A5 — Branch-1 confidence-not-high veto: posture_veto_reason set
+    #      (ADDENDUM — Codex PR #429 P2; expected RED)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_branch1_setup() -> dict:
+        """Build inputs for a Branch-1 broad-diagnose scenario.
+
+        Investigator is present in catalog and gated list; area_span=2.
+        Confidence is left unset so the caller can inject the scenario.
+
+        Returns:
+            Dict with scored_agents, catalog, catalog_agent_names, features.
+        """
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        def _entry(name: str) -> CatalogEntry:
+            tr = _parse_triggers(
+                {
+                    "command_prefixes": [],
+                    "agent_mentions": [],
+                    "path_globs": [],
+                    "path_globs_excluded": [],
+                    "keywords": [],
+                    "tool_mentions": [],
+                    "excludes": [],
+                }
+            )
+            return CatalogEntry(
+                name=name,
+                kind="agent",
+                source="owned",
+                routable=True,
+                triggers=tr,
+                applicable_skills=(),
+                applicable_agents=(),
+            )
+
+        catalog = [
+            _entry("investigator"),
+            _entry("code-writer"),
+            _entry("debugger"),
+        ]
+        catalog_agent_names = frozenset(
+            {"investigator", "code-writer", "debugger"}
+        )
+        # investigator in top-3 so it is lexically plausible
+        scored_agents = _make_gated(
+            [
+                ("investigator", 0.9),
+                ("code-writer", 0.7),
+                ("debugger", 0.5),
+            ]
+        )
+        features = build_features(
+            {
+                "task_description": "investigate the bug across modules",
+                "file_paths": ["src/a.py", "src/b.py"],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            }
+        )
+        return {
+            "catalog": catalog,
+            "catalog_agent_names": catalog_agent_names,
+            "scored_agents": scored_agents,
+            "features": features,
+        }
+
+    def test_branch1_veto_confidence_not_high_sets_veto_reason(
+        self,
+    ) -> None:
+        """Branch-1 gated off by low confidence records veto reason.
+
+        Conditions:
+          - posture="diagnose", area_span=2 (Branch-1 preconditions met)
+          - investigator IS present in catalog_agent_names (single cause)
+          - confidence="low" (the sole failing gate)
+
+        The current code records posture_veto_reason=None for this case,
+        hiding the broad-diagnose fail-safe reason in shadow logs (Codex
+        P2 finding on PR #429).
+
+        Expected outcome after the fix:
+          - diag["branch"] == "fallback"
+          - diag["posture_routed"] is False
+          - diag["posture_veto_reason"] == "confidence_not_high"
+
+        This test will FAIL until the code-writer implements the fix
+        (current code leaves posture_veto_reason=None).
+        """
+        setup = self._make_branch1_setup()
+        labels = Labels(
+            domain="code",
+            posture="diagnose",
+            confidence="low",  # single failing gate; investigator present
+            area_span=2,
+        )
+        diag: dict = {}
+        compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert diag.get("branch") == "fallback", (
+            f"Expected branch='fallback', got {diag.get('branch')!r}"
+        )
+        assert diag.get("posture_routed") is False, (
+            "Expected posture_routed=False when Branch-1 gated off, "
+            f"got {diag.get('posture_routed')!r}"
+        )
+        assert diag.get("posture_veto_reason") == "confidence_not_high", (
+            "Expected posture_veto_reason='confidence_not_high' when "
+            "confidence is low and investigator is in catalog, "
+            f"got {diag.get('posture_veto_reason')!r}"
+        )
+
+    def test_branch1_veto_investigator_absent_from_catalog_sets_veto_reason(
+        self,
+    ) -> None:
+        """Branch-1 gated off by absent investigator records veto reason.
+
+        Conditions:
+          - posture="diagnose", area_span=2 (Branch-1 preconditions met)
+          - confidence="high" (confidence gate passes)
+          - investigator is NOT in catalog_agent_names (single failing gate)
+
+        Expected outcome after the fix:
+          - diag["branch"] == "fallback"
+          - diag["posture_routed"] is False
+          - diag["posture_veto_reason"] == "investigator_not_in_catalog"
+
+        This test will FAIL until the code-writer implements the fix
+        (current code leaves posture_veto_reason=None).
+        """
+        setup = self._make_branch1_setup()
+        # Swap catalog_agent_names to exclude investigator — single cause.
+        no_investigator: frozenset[str] = frozenset(
+            {"code-writer", "debugger"}
+        )
+        labels = Labels(
+            domain="code",
+            posture="diagnose",
+            confidence="high",  # confidence gate passes; catalog is the blocker
+            area_span=2,
+        )
+        diag: dict = {}
+        compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=no_investigator,
+            diagnostics=diag,
+        )
+        assert diag.get("branch") == "fallback", (
+            f"Expected branch='fallback', got {diag.get('branch')!r}"
+        )
+        assert diag.get("posture_routed") is False, (
+            "Expected posture_routed=False when Branch-1 gated off, "
+            f"got {diag.get('posture_routed')!r}"
+        )
+        assert diag.get("posture_veto_reason") == "investigator_not_in_catalog", (
+            "Expected posture_veto_reason='investigator_not_in_catalog' when "
+            "confidence is high but investigator is absent from catalog, "
+            f"got {diag.get('posture_veto_reason')!r}"
         )
