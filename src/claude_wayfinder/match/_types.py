@@ -327,3 +327,36 @@ class OverrideMatch:
 
     rule: OverrideRule
     matched_predicates: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Labels:
+    """Caller-supplied two-axis routing labels (domain × posture).
+
+    Added in M15-2 (#419) as the shippable label carrier for
+    ``compose_route``.  Separate from ``Features`` per design decision
+    D-LBL1: labels are caller-supplied structured annotations, not
+    lexically-extracted signals.
+
+    Attributes:
+        domain: Domain label (e.g. ``"code"``, ``"infra_deploy"``,
+            ``"docs_prose"``, ``"project_meta"``, ``"is_any"``), or
+            ``None`` when unknown.
+        posture: Posture label (e.g. ``"build"``, ``"diagnose"``,
+            ``"assess"``, ``"critique"``, ``"verify"``, ``"plan"``,
+            ``"research"``, ``"operate"``), or ``None`` when unknown.
+        confidence: Caller-asserted labeling confidence — one of
+            ``"high"``, ``"medium"``, ``"low"``, or ``None``.  Absent
+            / ``None`` is treated as LOW by ``compose_route`` (§D.1
+            fail-safe): the posture route is blocked until the caller
+            asserts ``"high"``.
+        area_span: Number of distinct technical layers the task spans.
+            Defaults to ``1``; values ``< 1`` are coerced to ``1`` by
+            ``parse_labels``.  A value ``>= 2`` triggers the
+            broad-diagnose → investigator branch (Branch 1, #396/#411).
+    """
+
+    domain: str | None = None
+    posture: str | None = None
+    confidence: str | None = None
+    area_span: int = 1

@@ -1,0 +1,337 @@
+"""Shippable single-context compose_route for two-axis routing (M15-2, #419).
+
+Lifts the per-entry routing logic of the offline oracle
+``scripts/corpus/eval/_systems.run_supplied_compose`` (lines 1216–1311)
+into a standalone, unit-testable function with two live-only additions:
+
+1. The §D.1 **confidence-high gate**: posture routing only fires when the
+   caller explicitly asserts ``confidence="high"``; absent or non-high
+   confidence falls through to ``decide()``.
+2. The §B.1 **plausibility veto** (``_is_lexically_plausible``): applied
+   in Branch 3 only — blocks a cell-preferred agent from routing when
+   lexical scores indicate it is implausible.  NOT applied to Branch 1
+   (investigator is a structural route, rarely lexically top-k even when
+   correct) or Branch 2 (sentinel abstention, never delegation).
+
+Branch 2 (sentinel → ``self_handle``) is intentionally NOT gated by
+confidence or the veto — it encodes the ``project_meta × build``
+router carve-out, which must hold regardless of caller confidence.
+
+Public API
+----------
+- ``parse_labels`` — build a ``Labels`` from a context dict.
+- ``confidence_is_high`` — predicate on ``Labels.confidence``.
+- ``_is_lexically_plausible`` — §B.1 plausibility veto helper.
+- ``compose_route`` — the main routing function.
+
+Hard prohibitions (from the contract)
+--------------------------------------
+- Do NOT import or call ``_route_from_postures``,
+  ``_run_all_extractors``, ``_postures_from_extractor_results``, or
+  ``POSTURE_PRIORITY`` (the killed-#357 extractor route).
+- Do NOT import ``_DELEGATE_THRESHOLD`` as a literal — always import
+  it from ``._decide``.
+- Do NOT modify ``_CELL_MAP`` or ``DOMAIN_AGENT_MAP`` in ``_cells.py``.
+- Do NOT wire this module into ``_main.py`` in M15-2 (wiring is M15-7).
+"""
+
+from __future__ import annotations
+
+from typing import Any, Mapping
+
+from claude_wayfinder.match._cells import (
+    DOMAIN_AGENT_MAP,
+    SELF_HANDLE_SENTINEL,
+    cell_map_lookup,
+    gate_agents,
+)
+from claude_wayfinder.match._decide import (
+    _DELEGATE_THRESHOLD,
+    decide,
+)
+from claude_wayfinder.match._types import (
+    CatalogEntry,
+    Features,
+    Labels,
+    ScoredEntry,
+)
+
+# ---------------------------------------------------------------------------
+# Label helpers
+# ---------------------------------------------------------------------------
+
+
+def parse_labels(context: Mapping[str, Any]) -> Labels:
+    """Build a ``Labels`` instance from a raw context mapping.
+
+    Reads ``domain``, ``posture``, ``confidence``, and ``area_span``
+    from *context*.  Empty strings are normalised to ``None`` for the
+    string fields.  ``area_span`` is coerced to ``int``; any value
+    that is missing, non-numeric, or ``< 1`` is silently replaced
+    with ``1`` (never raises).
+
+    Args:
+        context: Arbitrary mapping (e.g. the JSON context dict).
+            Missing keys default gracefully; no ``KeyError`` is raised.
+
+    Returns:
+        A frozen :class:`Labels` instance.
+    """
+    def _str_or_none(key: str) -> str | None:
+        val = context.get(key)
+        if val is None:
+            return None
+        s = str(val)
+        return s if s else None
+
+    raw_span = context.get("area_span")
+    area_span: int = 1
+    if raw_span is not None:
+        try:
+            coerced = int(raw_span)
+            area_span = coerced if coerced >= 1 else 1
+        except (ValueError, TypeError):
+            area_span = 1
+
+    return Labels(
+        domain=_str_or_none("domain"),
+        posture=_str_or_none("posture"),
+        confidence=_str_or_none("confidence"),
+        area_span=area_span,
+    )
+
+
+def confidence_is_high(labels: Labels) -> bool:
+    """Return ``True`` iff ``labels.confidence`` is exactly ``"high"``.
+
+    Implements the §D.1 fail-safe: absent, ``None``, ``"medium"``, and
+    ``"low"`` all resolve to ``False``; only ``"high"`` resolves to
+    ``True``.
+
+    Args:
+        labels: The routing label set.
+
+    Returns:
+        ``True`` when ``labels.confidence == "high"``, else ``False``.
+    """
+    return labels.confidence == "high"
+
+
+# ---------------------------------------------------------------------------
+# Plausibility veto
+# ---------------------------------------------------------------------------
+
+
+def _is_lexically_plausible(
+    preferred: str | None,
+    gated: list[ScoredEntry],
+) -> bool:
+    """§B.1 matcher-side plausibility veto.
+
+    Blocks a posture-preferred agent from routing when the lexical
+    scores indicate it is implausible in the current context.  Returns
+    ``True`` (plausible, allow routing) under either condition:
+
+    1. *preferred* appears in the **top-3** entries of *gated* (by
+       score; *gated* is assumed score-sorted descending).
+    2. *preferred* has a score ``>= _DELEGATE_THRESHOLD - 0.15``
+       anywhere in *gated* (regardless of rank).
+
+    This is a **veto, not a selector** — it only ever BLOCKS a posture
+    route into the lexical fallback; it does not select a winner.
+
+    Args:
+        preferred: Name of the posture-preferred agent, or ``None``.
+        gated: Score-sorted (descending) list of gated
+            :class:`ScoredEntry` objects.
+
+    Returns:
+        ``True`` when *preferred* is lexically plausible, ``False``
+        otherwise (including when *preferred* is ``None`` or absent
+        from *gated*).
+    """
+    if preferred is None:
+        return False
+
+    # Build name→score lookup for the full gated list.
+    score_by_name: dict[str, float] = {
+        se.entry.name: se.score for se in gated
+    }
+
+    if preferred not in score_by_name:
+        return False
+
+    # Condition 1: preferred in top-3 by rank.
+    top3_names = {se.entry.name for se in gated[:3]}
+    if preferred in top3_names:
+        return True
+
+    # Condition 2: preferred's score meets the floor threshold.
+    floor = _DELEGATE_THRESHOLD - 0.15
+    return score_by_name[preferred] >= floor
+
+
+# ---------------------------------------------------------------------------
+# compose_route
+# ---------------------------------------------------------------------------
+
+
+def compose_route(
+    labels: Labels,
+    scored_agents: list[ScoredEntry],
+    scored_skills: list[ScoredEntry],
+    features: Features,
+    catalog: list[CatalogEntry],
+    catalog_agent_names: frozenset[str],
+) -> dict[str, Any]:
+    """Compose a routing decision from two-axis labels + lexical scores.
+
+    Ports the per-entry algorithm from
+    ``scripts/corpus/eval/_systems.run_supplied_compose`` (lines
+    1216–1311) into a single-context function, adding the §D.1
+    confidence-high gate and §B.1 plausibility veto.
+
+    Algorithm (three-branch surface)
+    ---------------------------------
+    **Branch 1** — broad-diagnose → investigator (#396/#411):
+        Fires when ``posture="diagnose"``, ``area_span >= 2``,
+        ``confidence_is_high``, and investigator is in
+        *catalog_agent_names*.  The §B.1 plausibility veto is NOT
+        applied — investigator is a structural route (area_span-driven),
+        rarely lexically top-k even for correct broad-diagnose inputs.
+        Veto-ing it would suppress correct routes and diverge from the
+        validated oracle.  (Revised 2026-06-20.)
+
+    **Branch 2** — sentinel → self_handle (#397):
+        Fires when ``cell_map_lookup`` returns ``SELF_HANDLE_SENTINEL``
+        (currently ``project_meta × build``).  NOT gated by confidence
+        or the veto — this is an abstention to the router, not a
+        sub-agent delegation.
+
+    **Branch 3** — generic preferred → delegate@0.9 (§B.3):
+        Fires when a preferred agent is returned by ``cell_map_lookup``,
+        that agent is in ``genuine_gated_names`` (the D-KC-GUARD1
+        intersection that prevents empty-gate false positives from
+        routing out-of-domain agents), is in *catalog_agent_names*,
+        ``confidence_is_high`` passes, and ``_is_lexically_plausible``
+        passes.
+
+    **Fallback** — ``decide()`` on the gated list: fires when no branch
+        routes.
+
+    Args:
+        labels: Two-axis routing labels (domain, posture, confidence,
+            area_span).
+        scored_agents: Lexically scored agents (score-sorted descending).
+        scored_skills: Lexically scored skills (score-sorted descending).
+        features: Extracted feature set for the current context.
+        catalog: Full catalog entry list (passed to ``decide()``).
+        catalog_agent_names: Frozenset of routable agent names from the
+            catalog.
+
+    Returns:
+        Decision dict with at minimum the keys ``decision`` (str),
+        ``agent`` (str | None), ``confidence`` (float), and
+        ``disposition_source`` (``"posture_routed"`` | forwarded from
+        ``decide()``).
+    """
+    # --- Pre-compute gated list and preferred agent ---
+    gated = gate_agents(scored_agents, labels.domain)
+
+    # is_any / None → look up under "any"; concrete domain → look up verbatim.
+    domain_for_lookup: str = (
+        "any"
+        if labels.domain in (None, "is_any")
+        else labels.domain
+    )
+
+    preferred: str | None = (
+        cell_map_lookup(domain_for_lookup, labels.posture)
+        if labels.posture
+        else None
+    )
+
+    # --- Routing state ---
+    posture_routed: bool = False
+    agent_out: str | None = None
+    decision_out: str = "advisory"
+    confidence_out: float = 0.5
+
+    if labels.posture:
+        # ------------------------------------------------------------------
+        # BRANCH 1: broad-diagnose → investigator (#396/#411)
+        # Structural route — §B.1 plausibility veto does NOT apply here.
+        # Investigator is rarely lexically top-k even for correct
+        # broad-diagnose inputs, so veto-ing it would suppress correct
+        # routes and diverge from the validated oracle.  Gate ONLY on
+        # the §D.1 confidence fail-safe and the routability guard.
+        # (Revised 2026-06-20 per contract §D-KC-GUARD1 / Branch-gating.)
+        # ------------------------------------------------------------------
+        if labels.posture == "diagnose" and labels.area_span >= 2:
+            if (
+                "investigator" in catalog_agent_names
+                and confidence_is_high(labels)            # §D.1 live gate
+            ):
+                agent_out = "investigator"
+                decision_out = "delegate"
+                confidence_out = 0.9
+                posture_routed = True
+            # else: investigator absent or confidence not high → decide()
+
+        # ------------------------------------------------------------------
+        # BRANCH 2: sentinel → self_handle (#397)
+        # NOT gated by confidence or plausibility veto — this is an
+        # abstention to the router, not a sub-agent delegation.
+        # ------------------------------------------------------------------
+        elif preferred == SELF_HANDLE_SENTINEL:
+            decision_out = "self_handle"
+            agent_out = None
+            confidence_out = 0.9
+            posture_routed = True
+
+        # ------------------------------------------------------------------
+        # BRANCH 3: generic preferred → delegate@0.9 (§B.3)
+        # ------------------------------------------------------------------
+        else:
+            gated_names: frozenset[str] = frozenset(
+                se.entry.name for se in gated
+            )
+            # D-KC-GUARD1 (#366): prevent empty-gate fallback from
+            # routing an out-of-domain preferred agent.  For concretely-
+            # gated domains (non-None DOMAIN_AGENT_MAP entry), only agents
+            # that are BOTH scored AND in the domain's allowed set are
+            # considered genuine survivors.
+            domain_allowed = DOMAIN_AGENT_MAP.get(labels.domain)
+            genuine_gated_names: frozenset[str] = (
+                gated_names & domain_allowed
+                if domain_allowed is not None
+                else gated_names
+            )
+            if (
+                preferred
+                and preferred in genuine_gated_names
+                and preferred in catalog_agent_names
+                and confidence_is_high(labels)           # §D.1 live gate
+                and _is_lexically_plausible(preferred, gated)  # §B.1 veto
+            ):
+                agent_out = preferred
+                decision_out = "delegate"
+                confidence_out = 0.9
+                posture_routed = True
+
+    # --- Fallback: decide() on the gated list ---
+    if not posture_routed:
+        d = decide(gated, scored_skills, features, catalog)
+        agent_out = d.get("agent")
+        decision_out = str(d.get("decision", ""))
+        confidence_out = float(d.get("confidence", 0.0))
+        disposition_source: str = str(d.get("disposition_source", "scored"))
+    else:
+        disposition_source = "posture_routed"
+
+    return {
+        "decision": decision_out,
+        "agent": agent_out,
+        "confidence": confidence_out,
+        "disposition_source": disposition_source,
+    }
