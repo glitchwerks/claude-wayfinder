@@ -325,6 +325,7 @@ def _write_log_entry(
     catalog_hash: str,
     log_path: Path | None,
     override_id: str | None = None,
+    shadow_data: dict[str, Any] | None = None,
 ) -> None:
     """Append one decision record to the dispatch log file.
 
@@ -348,6 +349,12 @@ def _write_log_entry(
         override_id: The matched override rule's ``id`` when the
             decision was produced by an override, or ``None`` for
             scored decisions.
+        shadow_data: Optional dict of shadow-run metadata to attach
+            under the ``"shadow"`` key.  Stored nested — never
+            flat-merged — to prevent key collisions with top-level
+            fields such as ``output`` or ``catalog_hash`` (spec §F.1).
+            When ``None`` (default), no ``"shadow"`` key is written and
+            the entry is byte-identical to the pre-M15-3 shape.
     """
     if log_path is None:
         return
@@ -367,6 +374,8 @@ def _write_log_entry(
         "matcher_version": _get_matcher_version(),
         "override_id": override_id,
     }
+    if shadow_data is not None:
+        entry["shadow"] = shadow_data
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as fh:
