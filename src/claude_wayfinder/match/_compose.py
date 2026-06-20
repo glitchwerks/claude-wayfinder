@@ -321,17 +321,13 @@ def compose_route(
 
     # --- Fallback: decide() on the gated list ---
     if not posture_routed:
-        d = decide(gated, scored_skills, features, catalog)
-        agent_out = d.get("agent")
-        decision_out = str(d.get("decision", ""))
-        confidence_out = float(d.get("confidence", 0.0))
-        disposition_source: str = str(d.get("disposition_source", "scored"))
-    else:
-        disposition_source = "posture_routed"
+        d = dict(decide(gated, scored_skills, features, catalog))
+        d.setdefault("disposition_source", "scored")
+        return d
 
     return {
         "decision": decision_out,
         "agent": agent_out,
         "confidence": confidence_out,
-        "disposition_source": disposition_source,
+        "disposition_source": "posture_routed",
     }

@@ -1301,7 +1301,7 @@ class TestComposeVsOracleEquivalence:
             )
 
             c_decision = compose_result["decision"]
-            c_agent = compose_result["agent"]
+            c_agent = compose_result.get("agent")
             c_posture_routed = (
                 compose_result.get("disposition_source") == "posture_routed"
             )
@@ -1432,4 +1432,289 @@ class TestLiveStdoutUnchanged:
             "_main.py must not import _compose in M15-2 "
             "(wiring is deferred to M15-7). "
             "If you wired it, the live stdout golden tests must also pass."
+        )
+
+
+# ---------------------------------------------------------------------------
+# 9. TestFallbackPayloadFidelity — compose_route fallback equals decide()
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackPayloadFidelity:
+    """Fallback path returns the FULL decide() payload, not a 4-field subset.
+
+    Covers: contract item 9 (Codex P2, 2026-06-20) — on any fall-through
+    context (posture absent, confidence not-high, or Branch-3 veto),
+    ``compose_route`` must return a dict that is key-for-key identical to
+    ``decide(gated, scored_skills, features, catalog)``, modulo
+    ``disposition_source`` (which ``compose_route`` may add if absent).
+
+    Two sub-cases:
+      (a) Generic scalar fallback — a context where posture is None so no
+          posture branch fires; validates that ``rationale``, ``alternatives``,
+          and ``skills`` all survive.
+      (b) ``mixed_content`` fallback — a context where the gated lexical
+          scorer would produce ``mixed_content`` (two agents tied at 1.0 on
+          disjoint path lanes); validates that ``lanes`` survives.
+    """
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _entry_with_globs(name: str, globs: list[str]) -> "CatalogEntry":
+        """Build a CatalogEntry with path_globs and no other triggers.
+
+        Args:
+            name: Agent name.
+            globs: Path glob patterns to include.
+
+        Returns:
+            A routable :class:`CatalogEntry` for the given agent.
+        """
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        triggers = _parse_triggers(
+            {
+                "command_prefixes": [],
+                "agent_mentions": [],
+                "path_globs": globs,
+                "path_globs_excluded": [],
+                "keywords": [],
+                "tool_mentions": [],
+                "excludes": [],
+            }
+        )
+        return CatalogEntry(
+            name=name,
+            kind="agent",
+            source="owned",
+            routable=True,
+            triggers=triggers,
+            applicable_skills=(),
+            applicable_agents=(),
+        )
+
+    # ------------------------------------------------------------------
+    # (a) Generic scalar fallback — posture absent → no posture branch
+    # ------------------------------------------------------------------
+
+    def test_fallback_payload_equals_decide_output_on_posture_absent_context(
+        self,
+    ) -> None:
+        """On posture=None, compose_route fallback is byte-identical to decide().
+
+        Validates that ``rationale``, ``alternatives``, and ``skills`` (when
+        present in decide()'s output) all appear in compose_route's output
+        with equal values.  Also asserts compose_route did NOT inject
+        ``agent=None`` where decide() omitted ``agent``.
+
+        The current cherry-pick bug returns only
+        {decision, agent, confidence, disposition_source}, dropping the
+        ``rationale`` and ``alternatives`` keys — so this test will FAIL
+        against the unfixed implementation.
+        """
+        from claude_wayfinder.match._decide import decide
+
+        # Build a minimal catalog + context that produces a non-trivial
+        # decide() result (delegate with rationale/alternatives).
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        def _entry(name: str) -> CatalogEntry:
+            tr = _parse_triggers(
+                {
+                    "command_prefixes": [],
+                    "agent_mentions": [],
+                    "path_globs": [],
+                    "path_globs_excluded": [],
+                    "keywords": [{"term": name, "weight": 1.0}],
+                    "tool_mentions": [],
+                    "excludes": [],
+                }
+            )
+            return CatalogEntry(
+                name=name,
+                kind="agent",
+                source="owned",
+                routable=True,
+                triggers=tr,
+                applicable_skills=(),
+                applicable_agents=(),
+            )
+
+        catalog = [
+            _entry("code-writer"),
+            _entry("debugger"),
+            _entry("code-reviewer"),
+        ]
+        catalog_agent_names = frozenset(
+            {"code-writer", "debugger", "code-reviewer"}
+        )
+        # Task description includes "code-writer" as a keyword trigger so
+        # that agent wins clearly and decide() returns a richer payload.
+        features = build_features(
+            {
+                "task_description": "code-writer implement the feature",
+                "file_paths": ["src/main.py"],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            }
+        )
+        scored_agents, scored_skills = score_entries(catalog, features)
+
+        # posture=None means no posture branch fires → forced fallback.
+        labels = Labels(
+            domain="code",
+            posture=None,
+            confidence="high",
+            area_span=1,
+        )
+
+        from claude_wayfinder.match._cells import gate_agents
+
+        gated = gate_agents(scored_agents, labels.domain)
+        expected = decide(gated, scored_skills, features, catalog)
+        actual = compose_route(
+            labels=labels,
+            scored_agents=scored_agents,
+            scored_skills=scored_skills,
+            features=features,
+            catalog=catalog,
+            catalog_agent_names=catalog_agent_names,
+        )
+
+        # Every key that decide() returned must survive into compose_route.
+        # ``disposition_source`` is the only key compose_route may add or
+        # override — exclude it from the strict check.
+        keys_to_check = set(expected.keys()) - {"disposition_source"}
+        missing_keys = keys_to_check - set(actual.keys())
+        assert not missing_keys, (
+            f"compose_route fallback dropped keys that decide() returned: "
+            f"{sorted(missing_keys)}.  "
+            f"decide() keys={sorted(expected.keys())}, "
+            f"compose_route keys={sorted(actual.keys())}"
+        )
+        for key in keys_to_check:
+            assert actual[key] == expected[key], (
+                f"compose_route[{key!r}] != decide()[{key!r}]: "
+                f"{actual[key]!r} vs {expected[key]!r}"
+            )
+
+        # compose_route must NOT inject ``agent=None`` where decide() omitted
+        # ``agent`` (e.g. self_handle, needs_more_detail, advisory outcomes).
+        if "agent" not in expected:
+            assert "agent" not in actual or actual["agent"] is not None, (
+                "compose_route injected agent=None but decide() omitted "
+                "the 'agent' key entirely — the fallback must be "
+                "byte-identical, not a cherry-pick with injected fields."
+            )
+
+        # disposition_source must be present in compose_route output
+        # (added by setdefault if decide() omitted it).
+        assert "disposition_source" in actual, (
+            "compose_route fallback must include disposition_source"
+        )
+
+    # ------------------------------------------------------------------
+    # (b) mixed_content fallback — lanes field must survive
+    # ------------------------------------------------------------------
+
+    def test_fallback_mixed_content_lanes_field_survives(self) -> None:
+        """On a mixed_content fallback, compose_route preserves the lanes key.
+
+        Constructs a context where decide() yields mixed_content (two agents
+        tied at score 1.0 on path-disjoint lanes) and posture=None forces the
+        compose_route fallback path.  Asserts that ``lanes`` is present in
+        compose_route's output and equals decide()'s lanes.
+
+        Three globs per agent at weight 0.4 each → 0.4 * 3 = 1.2 → clamped
+        to 1.0, satisfying the mixed_content detection threshold (see
+        test_mixed_content.py for the identical scoring setup).
+
+        This test will FAIL against the unfixed cherry-pick fallback because
+        the current fallback returns only 4 fields and ``lanes`` is absent.
+        """
+        from claude_wayfinder.match._cells import gate_agents
+        from claude_wayfinder.match._decide import decide
+
+        # Three disjoint .py globs for code-writer; three .md globs for
+        # doc-writer — mirrors the setup in test_mixed_content.py exactly.
+        cw_globs = ["src/*.py", "src/tests/*.py", "lib/*.py"]
+        dw_globs = ["docs/*.md", "wiki/*.md", "CHANGELOG.md"]
+        cw_paths = ["src/main.py", "src/tests/test_main.py", "lib/utils.py"]
+        dw_paths = ["docs/api.md", "wiki/Home.md", "CHANGELOG.md"]
+
+        cw_entry = self._entry_with_globs("code-writer", cw_globs)
+        dw_entry = self._entry_with_globs("doc-writer", dw_globs)
+        catalog = [cw_entry, dw_entry]
+        catalog_agent_names = frozenset({"code-writer", "doc-writer"})
+
+        features = build_features(
+            {
+                "task_description": "update the project files",
+                "file_paths": cw_paths + dw_paths,
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            }
+        )
+        scored_agents, scored_skills = score_entries(catalog, features)
+
+        # posture=None forces fallback to decide(); no posture branch fires.
+        labels = Labels(
+            domain=None,
+            posture=None,
+            confidence="high",
+            area_span=1,
+        )
+
+        gated = gate_agents(scored_agents, labels.domain)
+        expected = decide(gated, scored_skills, features, catalog)
+
+        # Guard: if decide() doesn't produce mixed_content here, the test
+        # input is wrong (scoring setup did not reach the threshold) — note
+        # this as a limitation rather than masking a real failure.
+        if expected.get("decision") != "mixed_content":
+            import pytest as _pytest
+
+            _pytest.skip(
+                f"decide() did not yield mixed_content for this input "
+                f"(got {expected.get('decision')!r}); "
+                f"scored_agents scores: "
+                f"{[(se.entry.name, se.score) for se in scored_agents]}. "
+                f"Mixed_content setup may need more path-glob matches."
+            )
+
+        actual = compose_route(
+            labels=labels,
+            scored_agents=scored_agents,
+            scored_skills=scored_skills,
+            features=features,
+            catalog=catalog,
+            catalog_agent_names=catalog_agent_names,
+        )
+
+        # All keys that decide() returned must survive, especially ``lanes``.
+        keys_to_check = set(expected.keys()) - {"disposition_source"}
+        missing_keys = keys_to_check - set(actual.keys())
+        assert not missing_keys, (
+            f"compose_route fallback dropped keys from mixed_content "
+            f"decide() output: {sorted(missing_keys)}.  "
+            f"Expected keys: {sorted(expected.keys())}, "
+            f"Actual keys: {sorted(actual.keys())}"
+        )
+
+        assert "lanes" in actual, (
+            "compose_route fallback must preserve the 'lanes' key "
+            "from a mixed_content decide() result"
+        )
+        assert actual["lanes"] == expected["lanes"], (
+            f"compose_route[lanes] != decide()[lanes]: "
+            f"{actual['lanes']!r} vs {expected['lanes']!r}"
+        )
+        assert actual["decision"] == "mixed_content", (
+            f"compose_route fallback must propagate mixed_content decision, "
+            f"got {actual['decision']!r}"
         )
