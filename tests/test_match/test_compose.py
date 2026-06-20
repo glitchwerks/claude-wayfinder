@@ -2098,3 +2098,178 @@ class TestComposeDiagnosticsParam:
             "Expected lexical_agreement=None on Branch-2 (not evaluated), "
             f"got {diag['lexical_agreement']!r}"
         )
+
+    # ------------------------------------------------------------------
+    # A5 — Branch-1 confidence-not-high veto: posture_veto_reason set
+    #      (ADDENDUM — Codex PR #429 P2; expected RED)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_branch1_setup() -> dict:
+        """Build inputs for a Branch-1 broad-diagnose scenario.
+
+        Investigator is present in catalog and gated list; area_span=2.
+        Confidence is left unset so the caller can inject the scenario.
+
+        Returns:
+            Dict with scored_agents, catalog, catalog_agent_names, features.
+        """
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        def _entry(name: str) -> CatalogEntry:
+            tr = _parse_triggers(
+                {
+                    "command_prefixes": [],
+                    "agent_mentions": [],
+                    "path_globs": [],
+                    "path_globs_excluded": [],
+                    "keywords": [],
+                    "tool_mentions": [],
+                    "excludes": [],
+                }
+            )
+            return CatalogEntry(
+                name=name,
+                kind="agent",
+                source="owned",
+                routable=True,
+                triggers=tr,
+                applicable_skills=(),
+                applicable_agents=(),
+            )
+
+        catalog = [
+            _entry("investigator"),
+            _entry("code-writer"),
+            _entry("debugger"),
+        ]
+        catalog_agent_names = frozenset(
+            {"investigator", "code-writer", "debugger"}
+        )
+        # investigator in top-3 so it is lexically plausible
+        scored_agents = _make_gated(
+            [
+                ("investigator", 0.9),
+                ("code-writer", 0.7),
+                ("debugger", 0.5),
+            ]
+        )
+        features = build_features(
+            {
+                "task_description": "investigate the bug across modules",
+                "file_paths": ["src/a.py", "src/b.py"],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            }
+        )
+        return {
+            "catalog": catalog,
+            "catalog_agent_names": catalog_agent_names,
+            "scored_agents": scored_agents,
+            "features": features,
+        }
+
+    def test_branch1_veto_confidence_not_high_sets_veto_reason(
+        self,
+    ) -> None:
+        """Branch-1 gated off by low confidence records veto reason.
+
+        Conditions:
+          - posture="diagnose", area_span=2 (Branch-1 preconditions met)
+          - investigator IS present in catalog_agent_names (single cause)
+          - confidence="low" (the sole failing gate)
+
+        The current code records posture_veto_reason=None for this case,
+        hiding the broad-diagnose fail-safe reason in shadow logs (Codex
+        P2 finding on PR #429).
+
+        Expected outcome after the fix:
+          - diag["branch"] == "fallback"
+          - diag["posture_routed"] is False
+          - diag["posture_veto_reason"] == "confidence_not_high"
+
+        This test will FAIL until the code-writer implements the fix
+        (current code leaves posture_veto_reason=None).
+        """
+        setup = self._make_branch1_setup()
+        labels = Labels(
+            domain="code",
+            posture="diagnose",
+            confidence="low",  # single failing gate; investigator present
+            area_span=2,
+        )
+        diag: dict = {}
+        compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert diag.get("branch") == "fallback", (
+            f"Expected branch='fallback', got {diag.get('branch')!r}"
+        )
+        assert diag.get("posture_routed") is False, (
+            "Expected posture_routed=False when Branch-1 gated off, "
+            f"got {diag.get('posture_routed')!r}"
+        )
+        assert diag.get("posture_veto_reason") == "confidence_not_high", (
+            "Expected posture_veto_reason='confidence_not_high' when "
+            "confidence is low and investigator is in catalog, "
+            f"got {diag.get('posture_veto_reason')!r}"
+        )
+
+    def test_branch1_veto_investigator_absent_from_catalog_sets_veto_reason(
+        self,
+    ) -> None:
+        """Branch-1 gated off by absent investigator records veto reason.
+
+        Conditions:
+          - posture="diagnose", area_span=2 (Branch-1 preconditions met)
+          - confidence="high" (confidence gate passes)
+          - investigator is NOT in catalog_agent_names (single failing gate)
+
+        Expected outcome after the fix:
+          - diag["branch"] == "fallback"
+          - diag["posture_routed"] is False
+          - diag["posture_veto_reason"] == "investigator_not_in_catalog"
+
+        This test will FAIL until the code-writer implements the fix
+        (current code leaves posture_veto_reason=None).
+        """
+        setup = self._make_branch1_setup()
+        # Swap catalog_agent_names to exclude investigator — single cause.
+        no_investigator: frozenset[str] = frozenset(
+            {"code-writer", "debugger"}
+        )
+        labels = Labels(
+            domain="code",
+            posture="diagnose",
+            confidence="high",  # confidence gate passes; catalog is the blocker
+            area_span=2,
+        )
+        diag: dict = {}
+        compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=no_investigator,
+            diagnostics=diag,
+        )
+        assert diag.get("branch") == "fallback", (
+            f"Expected branch='fallback', got {diag.get('branch')!r}"
+        )
+        assert diag.get("posture_routed") is False, (
+            "Expected posture_routed=False when Branch-1 gated off, "
+            f"got {diag.get('posture_routed')!r}"
+        )
+        assert diag.get("posture_veto_reason") == "investigator_not_in_catalog", (
+            "Expected posture_veto_reason='investigator_not_in_catalog' when "
+            "confidence is high but investigator is absent from catalog, "
+            f"got {diag.get('posture_veto_reason')!r}"
+        )

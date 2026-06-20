@@ -291,6 +291,13 @@ def compose_route(
                 posture_routed = True
                 _branch = "branch1_investigator"
             # else: investigator absent or confidence not high → decide()
+            elif diagnostics is not None:
+                # §F.1 Branch-1 veto diagnostics (Codex P2 / #429):
+                # confidence_not_high takes precedence when both gates fail.
+                if not confidence_is_high(labels):
+                    _posture_veto_reason = "confidence_not_high"
+                else:
+                    _posture_veto_reason = "investigator_not_in_catalog"
 
         # ------------------------------------------------------------------
         # BRANCH 2: sentinel → self_handle (#397)
