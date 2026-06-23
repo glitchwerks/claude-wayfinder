@@ -80,7 +80,17 @@ def load_organic_decisions(path: Path) -> list[dict[str, Any]]:
 
     "Organic" is defined as::
 
-        type == "matcher_decision"  AND  session_id is a non-empty string
+        type == "matcher_decision"
+        AND session_id is a non-empty string
+        AND attribution_source != "python_matcher"
+
+    The ``attribution_source == "python_matcher"`` exclusion (#440) prevents
+    double-counting: both the JS hook and the Python writer produce
+    ``matcher_decision`` entries.  Only the hook entry (carrying
+    ``attribution_source="post_tool_use_hook"``, or no ``attribution_source``
+    at all for pre-#440 historical entries) counts as the canonical organic
+    record.  Entries that predate the ``attribution_source`` field (i.e. no
+    such key present) are treated as organic for backward-compatibility.
 
     Entries with an empty or absent ``session_id`` are fixture-contaminated
     (pre-v1.1.1 attribution fix) and are excluded.  Non-``matcher_decision``
@@ -117,6 +127,64 @@ def load_organic_decisions(path: Path) -> list[dict[str, Any]]:
                 continue
             session_id = obj.get("session_id", "")
             if not session_id:
+                continue
+            # Exclude Python-side twin entries (#440): entries written by
+            # _write_log_entry carry attribution_source="python_matcher".
+            # Entries with no attribution_source field predate #440 and are
+            # treated as organic (backward-compat with historical hook entries).
+            if obj.get("attribution_source") == "python_matcher":
+                continue
+            results.append(obj)
+
+    return results
+
+
+def load_shadow_decisions(path: Path) -> list[dict[str, Any]]:
+    """Load a dispatch-log JSONL file and return shadow matcher_decision entries.
+
+    A "shadow" entry qualifies when all of::
+
+        type == "matcher_decision"
+        AND session_id is a non-empty string
+        AND "shadow" key is present with a truthy value
+
+    Entries without a ``"shadow"`` key, with an empty/missing ``session_id``,
+    or with a non-``matcher_decision`` type are excluded.  Missing files
+    return ``[]``.  Malformed or non-dict JSON lines are silently skipped.
+
+    This mirrors ``load_organic_decisions`` structure with a different
+    predicate — the shadow sub-record added by ``_write_log_entry`` when
+    ``shadow_data`` is supplied (#423 clean shadow set).
+
+    Args:
+        path: Path to the JSONL dispatch-log file.
+
+    Returns:
+        List of parsed JSON dicts, one per shadow ``matcher_decision`` entry,
+        in file order.  Each dict is the full original record — no fields are
+        stripped.
+    """
+    if not path.exists():
+        return []
+
+    results: list[dict[str, Any]] = []
+    with open(path, encoding="utf-8") as fh:
+        for raw_line in fh:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("type") != _MATCHER_DECISION_TYPE:
+                continue
+            session_id = obj.get("session_id", "")
+            if not session_id:
+                continue
+            if not obj.get("shadow"):
                 continue
             results.append(obj)
 
