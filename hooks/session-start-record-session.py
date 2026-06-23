@@ -32,84 +32,24 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Iterator
 
+# Ensure the hooks directory is on sys.path so sibling modules
+# (_session_pidfile) can be imported both at runtime (spawned as
+# ``python hooks/session-start-record-session.py``) and from tests
+# (which load this file via importlib.util.spec_from_file_location).
+_HOOKS_DIR = str(Path(__file__).parent)
+if _HOOKS_DIR not in sys.path:
+    sys.path.insert(0, _HOOKS_DIR)
 
-def _get_home() -> Path:
-    """Return the user home directory from env, or Path.home().
-
-    Returns:
-        The resolved home directory as a Path.
-    """
-    home_str = os.environ.get("HOME") or os.environ.get("USERPROFILE")
-    return Path(home_str) if home_str else Path.home()
-
-
-def _iter_ancestors() -> Iterator[tuple[int, str, int]]:
-    """Yield ``(pid, name, create_time_int)`` for each ancestor, nearest-first.
-
-    Walks the process tree from the immediate parent upward.  Each tuple
-    contains:
-
-    * ``pid``             – integer process identifier
-    * ``name``            – basename of the executable (e.g. ``"node.exe"``)
-    * ``create_time_int`` – ``int(create_time)`` for that process
-
-    Stops when no further parent is accessible (e.g. PID 0 or 1 on
-    POSIX, or when psutil raises NoSuchProcess / AccessDenied).
-
-    Yields:
-        Tuples of (pid, name, create_time_int) from nearest to farthest.
-    """
-    import psutil  # noqa: PLC0415
-
-    try:
-        proc = psutil.Process().parent()
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return
-
-    while proc is not None:
-        try:
-            yield (proc.pid, proc.name(), int(proc.create_time()))
-            proc = proc.parent()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            break
-
-
-def _select_target_pid(
-    ancestors: Iterator[tuple[int, str, int]],
-) -> tuple[int, int] | None:
-    """Walk *ancestors* and return (pid, create_time_int) to key the pidfile.
-
-    Selects the **nearest** ancestor whose name (lowercased basename,
-    stripped of ``.exe``) equals ``"claude"``.  If no CC-named ancestor
-    is found but at least two ancestors are visible, falls back to the
-    immediate parent (first yielded entry).  Returns ``None`` when the
-    chain is empty or contains only a single non-CC entry (too shallow
-    to reliably attribute a CC session).
-
-    Args:
-        ancestors: Iterator of (pid, name, create_time_int) tuples,
-            nearest-first.
-
-    Returns:
-        A ``(pid, create_time_int)`` pair, or ``None`` when no usable
-        ancestor is found.
-    """
-    entries: list[tuple[int, int]] = []
-    for pid, name, create_time_int in ancestors:
-        # Case-insensitive basename match: accept "claude" or "claude.exe".
-        bare = name.lower()
-        if bare.endswith(".exe"):
-            bare = bare[:-4]
-        if bare == "claude":
-            return (pid, create_time_int)
-        entries.append((pid, create_time_int))
-    # Fallback: use immediate parent only when the chain has depth >= 2
-    # (i.e. we can see at least the parent and one more ancestor above it).
-    if len(entries) >= 2:
-        return entries[0]
-    return None
+# Import shared helpers from the sibling module.  The bare names
+# (_get_home, _iter_ancestors, _select_target_pid) are bound into
+# this module's namespace so that test monkeypatching of
+# ``<module>._iter_ancestors`` intercepts calls in main() correctly.
+from _session_pidfile import (  # noqa: E402
+    _get_home,
+    _iter_ancestors,
+    _select_target_pid,
+)
 
 
 def main() -> None:
