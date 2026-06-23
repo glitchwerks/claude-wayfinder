@@ -4,12 +4,17 @@ Claude Code calls this hook at the start of every CC session, passing a
 JSON payload on stdin that includes ``session_id``.  This hook captures
 the ``session_id`` and writes it to:
 
-    ~/.claude/state/wayfinder-sessions/<ppid>-<create_time_int>.txt
+    ~/.claude/state/wayfinder-sessions/<pid>-<create_time_int>.txt
 
-where ``<ppid>`` is the CC process's PID (this hook's parent PID) and
-``<create_time_int>`` is the integer seconds of that process's start
-time (from psutil).  Using both PID and create_time in the filename
-makes the key unique across PID reuse (OS recycled PID guard).
+where ``<pid>`` is the PID of the **nearest ancestor** whose process
+name matches the Claude Code binary (``claude`` / ``claude.exe``,
+case-insensitive basename match), and ``<create_time_int>`` is the
+integer seconds of that process's start time (from psutil).  Using both
+PID and create_time in the filename makes the key unique across PID
+reuse (OS-recycled PID guard).
+
+If no CC-named ancestor is found in the chain, the immediate parent PID
+is used as a fallback so that today's behaviour is preserved.
 
 The matcher (``_catalog.py``) walks its ancestor chain to find this file
 and attribute log entries to the correct concurrent CC session.
@@ -28,11 +33,23 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Ensure the hooks directory is on sys.path so sibling modules
+# (_session_pidfile) can be imported both at runtime (spawned as
+# ``python hooks/session-start-record-session.py``) and from tests
+# (which load this file via importlib.util.spec_from_file_location).
+_HOOKS_DIR = str(Path(__file__).parent)
+if _HOOKS_DIR not in sys.path:
+    sys.path.insert(0, _HOOKS_DIR)
 
-def _get_home() -> Path:
-    """Return the user home directory from env, or Path.home()."""
-    home_str = os.environ.get("HOME") or os.environ.get("USERPROFILE")
-    return Path(home_str) if home_str else Path.home()
+# Import shared helpers from the sibling module.  The bare names
+# (_get_home, _iter_ancestors, _select_target_pid) are bound into
+# this module's namespace so that test monkeypatching of
+# ``<module>._iter_ancestors`` intercepts calls in main() correctly.
+from _session_pidfile import (  # noqa: E402
+    _get_home,
+    _iter_ancestors,
+    _select_target_pid,
+)
 
 
 def main() -> None:
@@ -42,26 +59,21 @@ def main() -> None:
         payload = json.loads(raw) if raw.strip() else {}
         session_id: str = str(payload.get("session_id") or "")
 
-        ppid: int = os.getppid()
+        target_pair = _select_target_pid(_iter_ancestors())
+        if target_pair is None:
+            # No ancestors at all — nothing to key on; exit cleanly.
+            sys.exit(0)
 
-        import psutil  # noqa: PLC0415
-
-        try:
-            create_time_int: int = int(psutil.Process(ppid).create_time())
-        except Exception:
-            # If we cannot get create_time, use 0 as a safe fallback.
-            # The matcher will still match on PID; the guard is weakened
-            # but we do not block the session.
-            create_time_int = 0
+        target_pid, create_time_int = target_pair
 
         state_dir: Path = _get_home() / ".claude" / "state" / "wayfinder-sessions"
         state_dir.mkdir(parents=True, exist_ok=True)
 
-        target: Path = state_dir / f"{ppid}-{create_time_int}.txt"
+        target: Path = state_dir / f"{target_pid}-{create_time_int}.txt"
 
         # Atomic write: write to a temp file in the same directory, then rename.
         fd, tmp_path = tempfile.mkstemp(
-            dir=state_dir, prefix=f"{ppid}-", suffix=".tmp"
+            dir=state_dir, prefix=f"{target_pid}-", suffix=".tmp"
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -78,8 +90,7 @@ def main() -> None:
     except Exception as exc:
         # Log to stderr for diagnostics but never block the session.
         sys.stderr.write(f"[session-start-record-session] error: {exc}\n")
-
-    sys.exit(0)
+        sys.exit(0)
 
 
 if __name__ == "__main__":
