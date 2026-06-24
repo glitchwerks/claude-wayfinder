@@ -71,6 +71,7 @@ def _md(
         "type": "matcher_decision",
         "ts": "2026-06-01T10:00:00.000000Z",
         "session_id": session_id,
+        "attribution_source": "post_tool_use_hook",
         "input": inp,
         "output": out,
         "catalog_hash": "sha256:abc123",
@@ -216,9 +217,9 @@ def test_td_length_bands(tmp_path: Path) -> None:
     from scripts.corpus.profiler import field_profile
 
     entries = [
-        _md(session_id="s1", task_description=""),          # EMPTY
-        _md(session_id="s2", task_description="fix bug"),   # short <50
-        _md(session_id="s3", task_description="x" * 50),   # medium 50-199
+        _md(session_id="s1", task_description=""),  # EMPTY
+        _md(session_id="s2", task_description="fix bug"),  # short <50
+        _md(session_id="s3", task_description="x" * 50),  # medium 50-199
         _md(session_id="s4", task_description="x" * 200),  # long 200-499
         _md(session_id="s5", task_description="x" * 500),  # very_long 500+
     ]
@@ -227,10 +228,10 @@ def test_td_length_bands(tmp_path: Path) -> None:
 
     bands = profile["td_length_bands"]
     assert bands["empty"] == 1
-    assert bands["short"] == 1     # 1–49
-    assert bands["medium"] == 1    # 50–199
-    assert bands["long"] == 1      # 200–499
-    assert bands["very_long"] == 1 # 500+
+    assert bands["short"] == 1  # 1–49
+    assert bands["medium"] == 1  # 50–199
+    assert bands["long"] == 1  # 200–499
+    assert bands["very_long"] == 1  # 500+
 
 
 # ---------------------------------------------------------------------------
@@ -368,10 +369,7 @@ def test_flagged_near_empty_populated_rate(tmp_path: Path) -> None:
     flagged_entry = next(
         f for f in profile["flagged_fields"] if f["field"] == "input.command_prefix"
     )
-    assert (
-        "near-empty" in flagged_entry["reason"].lower()
-        or "100%" in flagged_entry["reason"]
-    )
+    assert "near-empty" in flagged_entry["reason"].lower() or "100%" in flagged_entry["reason"]
 
 
 def test_presence_and_populated_rates_both_in_output(tmp_path: Path) -> None:
@@ -389,7 +387,7 @@ def test_presence_and_populated_rates_both_in_output(tmp_path: Path) -> None:
     # Must have both key-presence count AND nonempty_count
     assert "count" in lanes_info, "count (presence) must be in field info"
     assert "nonempty_count" in lanes_info, "nonempty_count must be in field info"
-    assert lanes_info["count"] == 2        # both entries have the key
+    assert lanes_info["count"] == 2  # both entries have the key
     assert lanes_info["nonempty_count"] == 1  # only one is non-empty
 
 
@@ -401,10 +399,7 @@ def test_flagged_fields_flag_uses_populated_rate_not_presence(tmp_path: Path) ->
     """
     from scripts.corpus.profiler import field_profile
 
-    entries = [
-        _md(session_id=f"s{i}", extra_output={"unassigned_paths": {}})
-        for i in range(10)
-    ]
+    entries = [_md(session_id=f"s{i}", extra_output={"unassigned_paths": {}}) for i in range(10)]
     log = _write_jsonl(tmp_path, entries)
     profile = field_profile(log)
 
@@ -458,3 +453,92 @@ def test_profile_has_required_keys(tmp_path: Path) -> None:
     ]
     for key in required_keys:
         assert key in profile, f"Missing key: {key!r}"
+
+
+# ---------------------------------------------------------------------------
+# Attribution-source organic filter (#440 remediation)
+# ---------------------------------------------------------------------------
+#
+# After Phase 2, field_profile routes its organic predicate through
+# is_organic_entry, which requires attribution_source='post_tool_use_hook'.
+#
+# Four-entry fixture:
+#   entry A — hook (attribution_source='post_tool_use_hook')  → organic
+#   entry B — python_matcher twin                             → non-organic
+#   entry C — no attribution_source key                       → non-organic
+#   entry D — hook + empty session_id                         → non-organic
+#
+# All tests below are RED until Phase 2 updates field_profile's predicate.
+
+
+def _md_with_attribution(
+    session_id: str = "real-session",
+    attribution_source: str | None = "post_tool_use_hook",
+    task_description: str = "fix the login bug",
+) -> dict[str, Any]:
+    """Build a minimal matcher_decision entry, optionally with attribution."""
+    entry: dict[str, Any] = {
+        "type": "matcher_decision",
+        "ts": "2026-06-01T10:00:00.000000Z",
+        "session_id": session_id,
+        "input": {"task_description": task_description},
+        "output": {
+            "decision": "delegate",
+            "agent": "code-writer",
+            "confidence": 1.0,
+            "rationale": "matched keywords",
+            "alternatives": [],
+        },
+        "catalog_hash": "sha256:abc123",
+        "matcher_version": "abc1234",
+    }
+    if attribution_source is not None:
+        entry["attribution_source"] = attribution_source
+    return entry
+
+
+def test_field_profile_attribution_organic_count_one(tmp_path: Path) -> None:
+    """field_profile counts only the hook entry as organic (4-entry mix).
+
+    With the #440 attribution filter applied, only the
+    post_tool_use_hook entry qualifies as organic.  python_matcher
+    twins and no-attribution entries are non-organic regardless of
+    session_id.
+
+    Input (all have non-empty session_id except entry D):
+      A — attribution_source='post_tool_use_hook'  → organic
+      B — attribution_source='python_matcher'      → non-organic
+      C — no attribution_source key                → non-organic
+      D — hook + empty session_id                  → non-organic
+
+    RED: current profiler uses bool(session_id) not is_organic_entry,
+    so A, B, C all count as organic today (3 instead of 1).
+    """
+    from scripts.corpus.profiler import field_profile
+
+    entries = [
+        _md_with_attribution(
+            session_id="s-hook",
+            attribution_source="post_tool_use_hook",
+        ),
+        _md_with_attribution(
+            session_id="s-python",
+            attribution_source="python_matcher",
+        ),
+        _md_with_attribution(
+            session_id="s-no-attr",
+            attribution_source=None,
+        ),
+        _md_with_attribution(
+            session_id="",
+            attribution_source="post_tool_use_hook",
+        ),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    profile = field_profile(log)
+
+    assert profile["total_matcher_decision"] == 4
+    assert profile["organic_count"] == 1, (
+        "Only the post_tool_use_hook entry with non-empty session_id "
+        "is organic; python_matcher and no-attribution entries are not"
+    )

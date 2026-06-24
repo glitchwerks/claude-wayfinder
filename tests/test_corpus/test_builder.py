@@ -37,8 +37,30 @@ def _md(
     confidence: float = 1.0,
     include_file_paths: bool = False,
     ts: str = "2026-06-01T10:00:00.000000Z",
+    attribution_source: str = "post_tool_use_hook",
 ) -> dict[str, Any]:
-    """Build a synthetic matcher_decision entry."""
+    """Build a synthetic matcher_decision entry representing an organic event.
+
+    All fields default to values that produce an entry eligible for corpus
+    inclusion.  Pass ``attribution_source=""`` or any non-hook value to build
+    a non-organic variant.
+
+    Args:
+        session_id: Source session identifier.  Empty string marks a fixture
+            entry (excluded from the organic set).
+        task_description: The task routed through the matcher.
+        decision: Matcher output decision (e.g. ``"delegate"``).
+        agent: Target agent name returned by the matcher.
+        confidence: Confidence score in [0.0, 1.0].
+        include_file_paths: When True, adds ``file_paths`` to the input dict.
+        ts: ISO-8601 timestamp string.
+        attribution_source: Hook stamp that marks organic production entries.
+            Defaults to ``"post_tool_use_hook"`` so callers get an organic
+            entry without having to spell out the constant.
+
+    Returns:
+        A dict shaped like a ``matcher_decision`` log entry.
+    """
     inp: dict[str, Any] = {"task_description": task_description}
     if include_file_paths:
         inp["file_paths"] = ["src/main.py"]
@@ -57,6 +79,7 @@ def _md(
         },
         "catalog_hash": "sha256:abc123",
         "matcher_version": "abc1234",
+        "attribution_source": attribution_source,
     }
 
 
@@ -81,8 +104,8 @@ def test_build_corpus_excludes_fixture_entries(tmp_path: Path) -> None:
     log = _write_jsonl(
         tmp_path,
         [
-            _md(session_id=""),         # fixture → excluded
-            _md(session_id="real"),      # organic → included
+            _md(session_id=""),  # fixture → excluded
+            _md(session_id="real"),  # organic → included
         ],
     )
     result = build_corpus(log, output_dir=None)
@@ -97,7 +120,7 @@ def test_build_corpus_excludes_empty_task_description(tmp_path: Path) -> None:
     log = _write_jsonl(
         tmp_path,
         [
-            _md(session_id="s1", task_description=""),         # empty → excluded
+            _md(session_id="s1", task_description=""),  # empty → excluded
             _md(session_id="s2", task_description="fix bug"),  # included
         ],
     )
@@ -291,8 +314,7 @@ def test_per_cell_cap_applied(tmp_path: Path) -> None:
 
     # 10 entries in the same cell, floor = 3
     entries = [
-        _md(session_id=f"s{i}", decision="delegate", task_description="fix bug")
-        for i in range(10)
+        _md(session_id=f"s{i}", decision="delegate", task_description="fix bug") for i in range(10)
     ]
     log = _write_jsonl(tmp_path, entries)
     result = build_corpus(log, output_dir=None, sample_floor=3)
@@ -472,10 +494,10 @@ def test_corpus_id_is_raw_line_number_not_eligible_rank(tmp_path: Path) -> None:
     from scripts.corpus.builder import build_corpus
 
     entries = [
-        _md(session_id=""),                          # line 1: fixture, excluded
-        _md(session_id="s1", task_description=""),   # line 2: organic, empty td, excluded
-        _md(session_id="s2"),                         # line 3: organic eligible → corpus_id=3
-        _md(session_id="s3"),                         # line 4: organic eligible → corpus_id=4
+        _md(session_id=""),  # line 1: fixture, excluded
+        _md(session_id="s1", task_description=""),  # line 2: organic, empty td, excluded
+        _md(session_id="s2"),  # line 3: organic eligible → corpus_id=3
+        _md(session_id="s3"),  # line 4: organic eligible → corpus_id=4
     ]
     log = _write_jsonl(tmp_path, entries)
     result = build_corpus(log, output_dir=None)
@@ -505,10 +527,10 @@ def test_corpus_id_skips_non_matcher_decision_rows(tmp_path: Path) -> None:
         "session_id": "s0",
     }
     entries: list[Any] = [
-        other_type,                   # line 1: not matcher_decision
-        _md(session_id="s1"),          # line 2: organic eligible → corpus_id=2
-        _md(session_id=""),            # line 3: fixture, excluded
-        _md(session_id="s2"),          # line 4: organic eligible → corpus_id=4
+        other_type,  # line 1: not matcher_decision
+        _md(session_id="s1"),  # line 2: organic eligible → corpus_id=2
+        _md(session_id=""),  # line 3: fixture, excluded
+        _md(session_id="s2"),  # line 4: organic eligible → corpus_id=4
     ]
     log = _write_jsonl(tmp_path, entries)
     result = build_corpus(log, output_dir=None)
@@ -626,9 +648,7 @@ def test_home_relative_non_home_path_redacted() -> None:
     result = _home_relative(non_home)
 
     # Must not start with ~/
-    assert not result.startswith("~/"), (
-        f"Non-home path should not get ~/ prefix, got: {result!r}"
-    )
+    assert not result.startswith("~/"), f"Non-home path should not get ~/ prefix, got: {result!r}"
     # All machine-specific directory parts stripped; only sentinel prefix + basename kept
     assert result == "<external>/file.jsonl", (
         f"Non-home absolute path should be redacted to '<external>/<basename>', got: {result!r}"

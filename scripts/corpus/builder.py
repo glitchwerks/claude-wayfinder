@@ -44,6 +44,8 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from claude_wayfinder.log_filter import is_organic_entry
+
 # Import profiler for length-band classification
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from profiler import td_length_band  # noqa: E402
@@ -299,12 +301,16 @@ def _load_organic_entries(log_path: Path) -> list[tuple[int, dict[str, Any]]]:
     corpus_id you can recover the original log row with
     ``sed -n '<N>p' dispatch-log.jsonl``.
 
+    Organic entries are determined by :func:`~claude_wayfinder.log_filter.\
+is_organic_entry` — only ``attribution_source="post_tool_use_hook"`` entries
+    with a non-empty ``session_id`` qualify (#440 attribution filter).
+    ``python_matcher`` twins and no-attribution entries are excluded.
+
     Args:
         log_path: Path to the dispatch-log JSONL file.
 
     Returns:
-        List of ``(line_no, entry_dict)`` tuples in file order, organic only
-        (type == matcher_decision AND non-empty session_id).
+        List of ``(line_no, entry_dict)`` tuples in file order, organic only.
         ``line_no`` is 1-based and counts ALL lines in the file, not just
         matcher_decision lines.
     """
@@ -320,11 +326,8 @@ def _load_organic_entries(log_path: Path) -> list[tuple[int, dict[str, Any]]]:
                 obj: Any = json.loads(stripped)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(obj, dict):
-                continue
-            if obj.get("type") != "matcher_decision":
-                continue
-            if not obj.get("session_id", ""):
+            # Delegate organic predicate to the single source of truth (#440).
+            if not is_organic_entry(obj):
                 continue
             results.append((line_no, obj))
     return results
