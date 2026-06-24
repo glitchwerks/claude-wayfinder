@@ -337,6 +337,12 @@ def _write_log_entry(
     ``DISPATCH_LOG_PATH`` env var was set), the function returns
     immediately without writing or emitting any message.
 
+    Every entry carries ``attribution_source="python_matcher"`` (#440
+    Option A) so log consumers can distinguish it from the JS hook's
+    ``post_tool_use_hook`` entries.  The ``load_organic_decisions``
+    filter in ``log_filter.py`` excludes ``python_matcher`` entries to
+    prevent double-counting when both writers are active.
+
     Args:
         input_dict: The parsed dispatch context (stdin JSON).  When
             this dict includes a ``session_id`` key, that value is used
@@ -354,7 +360,7 @@ def _write_log_entry(
             flat-merged — to prevent key collisions with top-level
             fields such as ``output`` or ``catalog_hash`` (spec §F.1).
             When ``None`` (default), no ``"shadow"`` key is written and
-            the entry is byte-identical to the pre-M15-3 shape.
+            When ``None`` (default), no ``"shadow"`` key is written.
     """
     if log_path is None:
         return
@@ -373,6 +379,7 @@ def _write_log_entry(
         "catalog_hash": catalog_hash,
         "matcher_version": _get_matcher_version(),
         "override_id": override_id,
+        "attribution_source": "python_matcher",
     }
     if shadow_data is not None:
         entry["shadow"] = shadow_data

@@ -56,16 +56,18 @@
 // The hook extracts the echo'd JSON to recover the dispatch input context
 // for the log entry, giving a fully-attributed record.
 //
-// ## De-duplication design (issue #299 requirement)
+// ## De-duplication design (issue #299 / #440)
 //
 // The Python matcher's _write_log_entry also appends a matcher_decision
-// entry (with session_id="") when DISPATCH_LOG_PATH is set. This hook
-// writes a second entry with session_id populated and:
+// entry when DISPATCH_LOG_PATH is set. This hook writes a second entry
+// with session_id populated and:
 //   attribution_source: "post_tool_use_hook"
-// The Python entry has no attribution_source field. Log consumers and
-// corpus builders MUST prefer the hook-attributed entry (which has session_id)
-// and treat the Python entry as a fallback for sessions where the hook
-// did not fire.
+// The Python entry carries attribution_source: "python_matcher" (#440
+// Option A). Log consumers and corpus builders MUST still prefer the
+// hook-attributed entry as the canonical organic record. The
+// load_organic_decisions filter in log_filter.py now excludes
+// "python_matcher" entries to avoid double-counting — consumers should
+// use that filter rather than rolling their own attribution check.
 //
 // Rationale for keeping both writers: the hook fires AFTER the Python
 // subprocess completes; there is no mechanism in CC's hook model to suppress

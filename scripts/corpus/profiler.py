@@ -31,6 +31,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from claude_wayfinder.log_filter import is_organic_entry
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -159,8 +161,7 @@ def field_profile(path: Path) -> dict[str, Any]:
                 continue
 
             total_md += 1
-            session_id = obj.get("session_id", "")
-            is_organic = bool(session_id)
+            is_organic = is_organic_entry(obj)
 
             if is_organic:
                 organic_count += 1

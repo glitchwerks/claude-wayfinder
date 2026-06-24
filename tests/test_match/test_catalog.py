@@ -614,6 +614,7 @@ class TestWriteLogEntryShadowData:
         "catalog_hash",
         "matcher_version",
         "override_id",
+        "attribution_source",
     }
 
     def test_default_none_produces_no_shadow_key(self, tmp_path: Path) -> None:
@@ -705,3 +706,108 @@ class TestWriteLogEntryShadowData:
             f"entry['shadow']['output'] should be 'SHADOW', "
             f"got {entry.get('shadow', {}).get('output')!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #440 (Option A) — _write_log_entry writes attribution_source field
+# ---------------------------------------------------------------------------
+
+
+class TestWriteLogEntryAttributionSource:
+    """_write_log_entry unconditionally writes attribution_source='python_matcher'.
+
+    Contract A from issue #440:
+    - The field is present whether or not shadow_data is supplied.
+    - The value is exactly "python_matcher" (not "post_tool_use_hook" or
+      any other string).
+    - The field does not shadow or displace existing required keys.
+
+    All tests in this class are RED until Phase 2 adds the field.
+    """
+
+    def test_attribution_source_present_without_shadow_data(
+        self, tmp_path: Path
+    ) -> None:
+        """attribution_source='python_matcher' appears when shadow_data omitted.
+
+        Calls _write_log_entry without shadow_data and asserts that the
+        written entry contains the key "attribution_source" with value
+        "python_matcher".  RED: the field is not yet written by the
+        implementation.
+        """
+        from claude_wayfinder.match._catalog import _write_log_entry
+
+        log_path = tmp_path / "log.jsonl"
+        _write_log_entry(
+            {"task_description": "do something"},
+            {"decision": "delegate"},
+            "sha256:abc",
+            log_path,
+        )
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+        assert "attribution_source" in entry, (
+            "entry must contain 'attribution_source' key even without shadow_data"
+        )
+        assert entry["attribution_source"] == "python_matcher", (
+            f"expected 'python_matcher', got {entry.get('attribution_source')!r}"
+        )
+
+    def test_attribution_source_present_with_shadow_data(
+        self, tmp_path: Path
+    ) -> None:
+        """attribution_source='python_matcher' appears when shadow_data is supplied.
+
+        Confirms the field is unconditional — present in both the shadow
+        and non-shadow paths.  RED: the field is not yet written.
+        """
+        from claude_wayfinder.match._catalog import _write_log_entry
+
+        log_path = tmp_path / "log.jsonl"
+        _write_log_entry(
+            {"task_description": "do something"},
+            {"decision": "delegate"},
+            "sha256:abc",
+            log_path,
+            shadow_data={"score": 0.9},
+        )
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+        assert "attribution_source" in entry, (
+            "entry must contain 'attribution_source' key when shadow_data is given"
+        )
+        assert entry["attribution_source"] == "python_matcher", (
+            f"expected 'python_matcher', got {entry.get('attribution_source')!r}"
+        )
+
+    def test_attribution_source_does_not_displace_required_keys(
+        self, tmp_path: Path
+    ) -> None:
+        """Adding attribution_source does not remove any existing required key.
+
+        The full required key set (type, ts, session_id, input, output,
+        catalog_hash, matcher_version, override_id) must still be present
+        alongside the new attribution_source key.  RED: the field is not yet
+        written, so attribution_source will be absent.
+        """
+        from claude_wayfinder.match._catalog import _write_log_entry
+
+        log_path = tmp_path / "log.jsonl"
+        _write_log_entry(
+            {"task_description": "do something"},
+            {"decision": "delegate"},
+            "sha256:abc",
+            log_path,
+        )
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+        required = {
+            "type",
+            "ts",
+            "session_id",
+            "input",
+            "output",
+            "catalog_hash",
+            "matcher_version",
+            "override_id",
+            "attribution_source",
+        }
+        missing = required - set(entry.keys())
+        assert not missing, f"Entry is missing required keys: {missing!r}"

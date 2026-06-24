@@ -40,6 +40,12 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
+# Ensure src/ is on the path so the claude_wayfinder package resolves
+# even without an editable install (corpus.builder/profiler import it).
+_SRC_DIR = Path(__file__).resolve().parents[2] / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 from corpus.builder import build_corpus, build_manifest, write_corpus_artifact  # noqa: E402
 from corpus.profiler import NEAR_EMPTY_THRESHOLD, field_profile  # noqa: E402
 

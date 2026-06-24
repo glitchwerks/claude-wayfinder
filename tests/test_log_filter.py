@@ -33,14 +33,22 @@ import pytest
 _ORGANIC_SESSION = "abc-123-real-session"
 _FIXTURE_SESSION = ""  # empty → fixture-contaminated / pre-fix
 _OTHER_SESSION = "cached-session"
+_HOOK_ATTRIBUTION = "post_tool_use_hook"
+_PYTHON_ATTRIBUTION = "python_matcher"
 
 
 def _md(session_id: str = _ORGANIC_SESSION, **overrides: Any) -> dict[str, Any]:
-    """Build a minimal matcher_decision entry."""
+    """Build a minimal matcher_decision entry.
+
+    Defaults to hook attribution so callers that do not override
+    attribution_source receive a fully-organic entry.  Callers that
+    need a no-attribution row should pop the key after calling _md().
+    """
     entry: dict[str, Any] = {
         "type": "matcher_decision",
         "ts": "2026-05-29T12:00:00.000000Z",
         "session_id": session_id,
+        "attribution_source": _HOOK_ATTRIBUTION,
         "input": {"task_description": "fix the bug"},
         "output": {
             "decision": "delegate",
@@ -303,9 +311,7 @@ def test_blank_lines_in_file_are_skipped(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_default_log_path_uses_env_var(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_default_log_path_uses_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """DISPATCH_LOG env var overrides the default ~/.claude/state path."""
     from claude_wayfinder.log_filter import default_log_path
 
@@ -482,3 +488,384 @@ def test_dispatch_help_unaffected() -> None:
     )
 
     assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Helpers for issue #440 tests
+# ---------------------------------------------------------------------------
+
+
+def _hook_entry(session_id: str = _ORGANIC_SESSION, **overrides: Any) -> dict[str, Any]:
+    """Build a hook-style matcher_decision entry (no shadow key)."""
+    entry = _md(session_id=session_id, attribution_source=_HOOK_ATTRIBUTION)
+    entry.update(overrides)
+    return entry
+
+
+def _python_entry(
+    session_id: str = _ORGANIC_SESSION,
+    shadow: dict[str, Any] | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Build a python_matcher-style matcher_decision entry.
+
+    Optionally includes a nested 'shadow' key when shadow is provided.
+    """
+    entry = _md(session_id=session_id, attribution_source=_PYTHON_ATTRIBUTION)
+    if shadow is not None:
+        entry["shadow"] = shadow
+    entry.update(overrides)
+    return entry
+
+
+# ---------------------------------------------------------------------------
+# Contract B — load_organic_decisions excludes python_matcher entries
+# ---------------------------------------------------------------------------
+
+
+class TestLoadOrganicDecisionsExcludesPythonMatcher:
+    """load_organic_decisions must not return python_matcher entries.
+
+    The #440 double-count fix: both the hook and the Python writer produce
+    matcher_decision entries with non-empty session_ids.  Only the hook
+    entry (attribution_source='post_tool_use_hook') counts as organic.
+    The Python entry (attribution_source='python_matcher') must be excluded.
+
+    All tests in this class are RED until Phase 2 adds the exclusion.
+    """
+
+    def test_hook_entry_returned(self, tmp_path: Path) -> None:
+        """A post_tool_use_hook entry with non-empty session_id is returned.
+
+        This is the canonical organic entry after the #440 attribution split.
+        RED: load_organic_decisions does not yet filter on attribution_source.
+        """
+        from claude_wayfinder.log_filter import load_organic_decisions
+
+        log = _write_jsonl(tmp_path, [_hook_entry()])
+        results = load_organic_decisions(log)
+
+        assert len(results) == 1
+        assert results[0]["attribution_source"] == _HOOK_ATTRIBUTION
+
+    def test_python_matcher_entry_excluded(self, tmp_path: Path) -> None:
+        """A python_matcher entry is NOT returned by load_organic_decisions.
+
+        Even though it has a non-empty session_id, attribution_source=
+        'python_matcher' marks it as a Python-side twin — excluded to
+        prevent double-counting.  RED: filter not yet implemented.
+        """
+        from claude_wayfinder.log_filter import load_organic_decisions
+
+        log = _write_jsonl(
+            tmp_path,
+            [_python_entry(shadow={"score": 0.8})],
+        )
+        results = load_organic_decisions(log)
+
+        assert results == [], "python_matcher entry must be excluded from organic set"
+
+    def test_mixed_hook_and_python_only_hook_returned(self, tmp_path: Path) -> None:
+        """Mix of hook and python_matcher entries: only the hook entry returned.
+
+        Simulates the real-world log where one dispatch produces two
+        matcher_decision lines — one from the JS hook and one from Python.
+        Only the hook line should be counted as organic.  RED: not yet filtered.
+        """
+        from claude_wayfinder.log_filter import load_organic_decisions
+
+        log = _write_jsonl(
+            tmp_path,
+            [
+                _hook_entry(session_id="s1"),
+                _python_entry(session_id="s1", shadow={"score": 0.9}),
+            ],
+        )
+        results = load_organic_decisions(log)
+
+        assert len(results) == 1
+        assert results[0]["attribution_source"] == _HOOK_ATTRIBUTION
+
+    def test_no_attribution_source_field_excluded(self, tmp_path: Path) -> None:
+        """A matcher_decision with NO attribution_source key is excluded.
+
+        The JS hook stamps attribution_source='post_tool_use_hook'
+        unconditionally on every entry it writes.  Therefore an entry that
+        lacks the key entirely was NOT written by the hook — it is a
+        Python-side or pre-hook row and must not be counted as organic.
+
+        RED until Phase 2 implements the strict attribution_source check.
+        """
+        from claude_wayfinder.log_filter import load_organic_decisions
+
+        entry = _md(session_id=_ORGANIC_SESSION)
+        # Ensure no attribution_source key is present.
+        entry.pop("attribution_source", None)
+        log = _write_jsonl(tmp_path, [entry])
+        results = load_organic_decisions(log)
+
+        assert results == [], (
+            "Entry with no attribution_source must be excluded — "
+            "the hook stamps the field unconditionally so absence "
+            "means non-hook origin"
+        )
+
+    def test_existing_empty_session_exclusion_still_works(self, tmp_path: Path) -> None:
+        """Empty session_id is still excluded even when attribution_source present.
+
+        The session_id gate must remain in effect alongside the new
+        attribution_source gate.  Both conditions are required for organic.
+        """
+        from claude_wayfinder.log_filter import load_organic_decisions
+
+        log = _write_jsonl(
+            tmp_path,
+            [_hook_entry(session_id="")],
+        )
+        results = load_organic_decisions(log)
+
+        assert results == []
+
+    def test_non_matcher_decision_type_still_excluded(self, tmp_path: Path) -> None:
+        """Non-matcher_decision types are still excluded after #440 changes.
+
+        Regression guard: the attribution_source filter must not accidentally
+        expand which event types pass through.
+        """
+        from claude_wayfinder.log_filter import load_organic_decisions
+
+        log = _write_jsonl(tmp_path, [_other_event("agent_dispatch")])
+        results = load_organic_decisions(log)
+
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Contract C — load_shadow_decisions (new function, #423 clean shadow set)
+# ---------------------------------------------------------------------------
+#
+# Assumed signature:
+#   def load_shadow_decisions(path: Path) -> list[dict[str, Any]]:
+#
+# Returns matcher_decision entries that have:
+#   - type == "matcher_decision"
+#   - session_id is non-empty
+#   - "shadow" key is present and its value is truthy (non-empty dict / non-None)
+#
+# Excludes: empty/missing session_id; no "shadow" key; empty shadow value;
+#           non-matcher_decision types; malformed lines.
+# Missing file → [].
+
+
+class TestLoadShadowDecisions:
+    """load_shadow_decisions returns the clean #423 shadow set.
+
+    This function does not exist yet — all tests are RED with ImportError
+    or AttributeError until Phase 2 adds the implementation.
+    """
+
+    def test_python_matcher_with_shadow_and_session_id_returned(self, tmp_path: Path) -> None:
+        """A python_matcher entry with shadow and non-empty session_id is returned.
+
+        This is the canonical shadow entry produced by _write_log_entry.
+        RED: load_shadow_decisions does not exist yet.
+        """
+        from claude_wayfinder.log_filter import load_shadow_decisions
+
+        entry = _python_entry(
+            session_id=_ORGANIC_SESSION,
+            shadow={"score": 0.8, "decision": "delegate"},
+        )
+        log = _write_jsonl(tmp_path, [entry])
+        results = load_shadow_decisions(log)
+
+        assert len(results) == 1
+        assert results[0]["session_id"] == _ORGANIC_SESSION
+        assert results[0]["shadow"] == {"score": 0.8, "decision": "delegate"}
+
+    def test_hook_entry_without_shadow_excluded(self, tmp_path: Path) -> None:
+        """A hook entry with no 'shadow' key is NOT returned.
+
+        The hook writer does not produce shadow data — only Python-side
+        entries carry the shadow sub-record.  RED: function doesn't exist.
+        """
+        from claude_wayfinder.log_filter import load_shadow_decisions
+
+        log = _write_jsonl(tmp_path, [_hook_entry()])
+        results = load_shadow_decisions(log)
+
+        assert results == []
+
+    def test_shadow_entry_with_empty_session_id_excluded(self, tmp_path: Path) -> None:
+        """A shadow entry with empty session_id is excluded.
+
+        session_id must be non-empty — same gate as load_organic_decisions.
+        RED: function doesn't exist.
+        """
+        from claude_wayfinder.log_filter import load_shadow_decisions
+
+        log = _write_jsonl(
+            tmp_path,
+            [_python_entry(session_id="", shadow={"score": 0.5})],
+        )
+        results = load_shadow_decisions(log)
+
+        assert results == []
+
+    def test_missing_file_returns_empty_list(self, tmp_path: Path) -> None:
+        """load_shadow_decisions returns [] when the log file does not exist.
+
+        Mirrors the load_organic_decisions convention for missing files.
+        RED: function doesn't exist.
+        """
+        from claude_wayfinder.log_filter import load_shadow_decisions
+
+        log = tmp_path / "nonexistent.jsonl"
+        results = load_shadow_decisions(log)
+
+        assert results == []
+
+    def test_non_matcher_decision_type_excluded(self, tmp_path: Path) -> None:
+        """A non-matcher_decision type with a 'shadow' key is excluded.
+
+        type='matcher_decision' is required — other event types are not
+        part of the shadow set even if they happen to carry a 'shadow' key.
+        RED: function doesn't exist.
+        """
+        from claude_wayfinder.log_filter import load_shadow_decisions
+
+        entry = _other_event("agent_dispatch")
+        entry["shadow"] = {"score": 0.5}
+        log = _write_jsonl(tmp_path, [entry])
+        results = load_shadow_decisions(log)
+
+        assert results == []
+
+    def test_malformed_lines_skipped(self, tmp_path: Path) -> None:
+        """Malformed JSON lines are silently skipped.
+
+        Mirrors load_organic_decisions resilience behavior.
+        RED: function doesn't exist.
+        """
+        from claude_wayfinder.log_filter import load_shadow_decisions
+
+        good_entry = _python_entry(
+            session_id=_ORGANIC_SESSION,
+            shadow={"score": 0.7},
+        )
+        log = _write_jsonl(tmp_path, ["not json at all", good_entry])
+        results = load_shadow_decisions(log)
+
+        assert len(results) == 1
+
+    def test_returns_full_original_dicts_in_file_order(self, tmp_path: Path) -> None:
+        """load_shadow_decisions returns full dicts in file order.
+
+        No fields are stripped — the caller receives the original record.
+        RED: function doesn't exist.
+        """
+        from claude_wayfinder.log_filter import load_shadow_decisions
+
+        entries = [
+            _python_entry(session_id="s1", shadow={"score": 0.9}),
+            _python_entry(session_id="s2", shadow={"score": 0.7}),
+        ]
+        log = _write_jsonl(tmp_path, entries)
+        results = load_shadow_decisions(log)
+
+        assert len(results) == 2
+        assert results[0]["session_id"] == "s1"
+        assert results[1]["session_id"] == "s2"
+
+    def test_entry_without_shadow_key_excluded(self, tmp_path: Path) -> None:
+        """An entry with no 'shadow' key at all is excluded.
+
+        The shadow key must be present (and non-empty) to qualify.
+        RED: function doesn't exist.
+        """
+        from claude_wayfinder.log_filter import load_shadow_decisions
+
+        entry = _md(
+            session_id=_ORGANIC_SESSION,
+            attribution_source=_PYTHON_ATTRIBUTION,
+        )
+        # No 'shadow' key added.
+        log = _write_jsonl(tmp_path, [entry])
+        results = load_shadow_decisions(log)
+
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Contract D — is_organic_entry(obj) public predicate
+# ---------------------------------------------------------------------------
+#
+# New public function to be added to claude_wayfinder.log_filter in Phase 2.
+#
+# Signature:
+#   def is_organic_entry(obj: dict) -> bool
+#
+# Returns True iff:
+#   - obj is a dict
+#   - obj["type"] == "matcher_decision"
+#   - obj.get("session_id") is a non-empty string
+#   - obj.get("attribution_source") == "post_tool_use_hook"
+#
+# All tests RED until Phase 2 adds the function.
+
+
+class TestIsOrganicEntry:
+    """is_organic_entry(obj) is the single canonical organic predicate.
+
+    All tests in this class are RED with ImportError until Phase 2 exposes
+    the function from claude_wayfinder.log_filter.
+    """
+
+    def test_hook_entry_returns_true(self) -> None:
+        """A post_tool_use_hook entry with non-empty session_id is organic."""
+        from claude_wayfinder.log_filter import is_organic_entry
+
+        obj = _hook_entry(session_id=_ORGANIC_SESSION)
+        assert is_organic_entry(obj) is True
+
+    def test_python_matcher_entry_returns_false(self) -> None:
+        """A python_matcher entry is not organic (double-count source)."""
+        from claude_wayfinder.log_filter import is_organic_entry
+
+        obj = _python_entry(session_id=_ORGANIC_SESSION)
+        assert is_organic_entry(obj) is False
+
+    def test_no_attribution_source_returns_false(self) -> None:
+        """An entry without attribution_source is not organic.
+
+        The hook stamps the field unconditionally, so absence means the
+        entry did not come from the hook.
+        """
+        from claude_wayfinder.log_filter import is_organic_entry
+
+        obj = _md(session_id=_ORGANIC_SESSION)
+        obj.pop("attribution_source", None)
+        assert is_organic_entry(obj) is False
+
+    def test_empty_session_id_returns_false(self) -> None:
+        """Empty session_id disqualifies an entry even with hook attribution."""
+        from claude_wayfinder.log_filter import is_organic_entry
+
+        obj = _hook_entry(session_id="")
+        assert is_organic_entry(obj) is False
+
+    def test_non_matcher_decision_type_returns_false(self) -> None:
+        """A non-matcher_decision type is not organic regardless of attribution."""
+        from claude_wayfinder.log_filter import is_organic_entry
+
+        obj = _other_event("agent_dispatch")
+        obj["attribution_source"] = _HOOK_ATTRIBUTION
+        assert is_organic_entry(obj) is False
+
+    def test_non_dict_input_returns_false(self) -> None:
+        """Non-dict input (list, string, None) returns False without error."""
+        from claude_wayfinder.log_filter import is_organic_entry
+
+        assert is_organic_entry([]) is False  # type: ignore[arg-type]
+        assert is_organic_entry("string") is False  # type: ignore[arg-type]
+        assert is_organic_entry(None) is False  # type: ignore[arg-type]
