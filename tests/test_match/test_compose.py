@@ -36,15 +36,20 @@ Test inventory
                                   out-param of ``compose_route`` populates
                                   per-step §F.1 state without changing
                                   return value or decision logic.
-11. ``TestBranch3OpsGithubGuard`` — NEW (#445): the ops-posture Branch-3
-                                  route requires a ``mcp__github__*``
-                                  tool-mention signal; absent that
-                                  signal, ops is vetoed to
-                                  ``self_handle`` (agent=None) with
-                                  ``diagnostics["posture_veto_reason"]
-                                  == "ops_no_github_signal"``.  Written
-                                  against issue #445 — no implementation
-                                  exists yet.
+11. ``TestBranch3OpsGithubGuard`` — ops-posture Branch-3 route requires
+                                  a GitHub tool-shape signal; absent
+                                  any signal, ops is vetoed to
+                                  ``self_handle`` (agent=None).
+                                  Originally #445 (``mcp__github__*``
+                                  prefix only); replaced by #448's
+                                  tool-shape discriminator (write >
+                                  read > none) after corpus replay
+                                  proved the prefix-only signal inert
+                                  — real inputs use short tool names,
+                                  ``gh``, or an ``ops`` agent_mention.
+                                  Written against issue #448 — no
+                                  implementation of the tool-shape
+                                  discriminator exists yet.
 """
 
 from __future__ import annotations
@@ -2292,15 +2297,40 @@ class TestComposeDiagnosticsParam:
 
 
 class TestBranch3OpsGithubGuard:
-    """Branch 3 ops-posture route requires a GitHub-tool signal (#445).
+    """Branch 3 ops-posture route requires a GitHub-tool signal (#445, #448).
 
     ``ops`` is read-only GitHub-only, but codebase-read tasks resolve to
     the same ``(any, operate)`` cell and previously misrouted to ops even
-    without any ``mcp__github__*`` tool mentioned.  The planned guard
-    vetoes the ops route to ``self_handle`` (agent=``None``) when no
-    member of ``features.tool_mentions`` starts with ``"mcp__github__"``
-    (``tool_mentions`` are lowercased by ``build_features``), and records
-    ``diagnostics["posture_veto_reason"] = "ops_no_github_signal"``.
+    without any ``mcp__github__*`` tool mentioned.
+
+    The original #445 guard keyed the signal on a ``mcp__github__``-
+    prefixed ``tool_mentions`` entry.  Corpus replay proved that signal
+    INERT -- real dispatch inputs use SHORT tool names (``get_issue``,
+    ``list_pull_requests``), ``gh``, or an ``ops`` agent_mention, never
+    the ``mcp__github__`` prefix.  #448 replaces the prefix-only check
+    with a **tool-shape** discriminator, precedence write > read > none,
+    where a tool "basename" is the part after ``mcp__github__`` if that
+    prefix is present, else the token as-is (lowercased by
+    ``build_features``):
+
+    1. **WRITE** (any tool_mention basename starting with ``create``,
+       ``add_``, ``update``, ``merge_``, ``delete``, ``push``, or
+       ``fork``) -> veto to ``self_handle`` (agent=``None``),
+       ``diagnostics["posture_veto_reason"] == "ops_write_tool"``.
+    2. else **READ** (any tool_mention basename starting with ``get_``,
+       ``list_``, or ``search_``; OR ``"gh"`` in tool_mentions; OR any
+       tool_mention starting with ``mcp__github__``; OR ``"ops"`` in
+       agent_mentions) -> route ops unchanged (``decision="delegate"``,
+       ``agent="ops"``, ``disposition_source="posture_routed"``).
+    3. else **no signal** -> veto to ``self_handle``,
+       ``diagnostics["posture_veto_reason"] == "ops_no_github_signal"``
+       (unchanged from #445).
+
+    The four #445-era tests below (``test_ops_with_github_signal_...``
+    through ``test_ops_with_only_non_github_tool_mention_...``) remain
+    valid subsets of this behaviour and are kept unmodified.  The
+    ``#448`` tests that follow cover the short-tool-name shapes the
+    corpus actually produces, plus the new write-tool veto.
     """
 
     # ------------------------------------------------------------------
@@ -2309,12 +2339,19 @@ class TestBranch3OpsGithubGuard:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _make_ops_setup(tool_mentions: list[str]) -> dict:
+    def _make_ops_setup(
+        tool_mentions: list[str],
+        agent_mentions: list[str] | None = None,
+    ) -> dict:
         """Build inputs for the ``(any, operate)`` -> ``ops`` scenario.
 
         Args:
             tool_mentions: Raw tool-mention strings fed into
                 ``build_features`` (lowercased by the builder).
+            agent_mentions: Raw agent-mention strings fed into
+                ``build_features`` (lowercased by the builder).
+                Defaults to an empty list when omitted, preserving the
+                #445-era call sites that only supply tool_mentions.
 
         Returns:
             Dict with scored_agents, catalog, catalog_agent_names,
@@ -2363,7 +2400,7 @@ class TestBranch3OpsGithubGuard:
             {
                 "task_description": "check the pull request status",
                 "file_paths": [],
-                "agent_mentions": [],
+                "agent_mentions": agent_mentions or [],
                 "tool_mentions": tool_mentions,
                 "command_prefix": None,
             }
@@ -2595,4 +2632,250 @@ class TestBranch3OpsGithubGuard:
             "A non-github tool_mention ('grep') must not satisfy the "
             "github-signal guard, expected posture_veto_reason="
             f"'ops_no_github_signal', got {diag.get('posture_veto_reason')!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # #448: tool-shape discriminator -- short (non-prefixed) READ tool
+    # names, ``gh``, and ``ops`` agent_mentions must route ops unchanged.
+    # ------------------------------------------------------------------
+
+    def test_short_read_tool_basename_routes_to_ops(self) -> None:
+        """A short read-shaped tool name (no ``mcp__github__`` prefix) routes ops.
+
+        This is the corpus-replay-identified gap the #445 guard got
+        wrong: real dispatch inputs supply short tool names like
+        ``get_issue``, never the ``mcp__github__`` prefix.  The
+        tool-shape discriminator must recognize the ``get_`` basename
+        on its own and route ops unchanged, not veto it.
+        """
+        setup = self._make_ops_setup(["get_issue"])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "delegate", (
+            "A short read-tool basename ('get_issue') must route ops "
+            f"unchanged, got decision={result['decision']!r}"
+        )
+        assert result["agent"] == "ops"
+        assert diag.get("posture_veto_reason") is None, (
+            "Expected no veto for a short read-tool basename, got "
+            f"{diag.get('posture_veto_reason')!r}"
+        )
+
+    def test_gh_tool_mention_routes_to_ops(self) -> None:
+        """A bare ``gh`` tool_mention satisfies the READ signal and routes ops."""
+        setup = self._make_ops_setup(["gh"])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "delegate", (
+            f"'gh' tool_mention must route ops unchanged, got "
+            f"decision={result['decision']!r}"
+        )
+        assert result["agent"] == "ops"
+        assert diag.get("posture_veto_reason") is None, (
+            f"Expected no veto for 'gh', got {diag.get('posture_veto_reason')!r}"
+        )
+
+    def test_ops_agent_mention_routes_to_ops(self) -> None:
+        """An ``ops`` agent_mention (no tool_mentions at all) satisfies READ.
+
+        Current (pre-#448) code ignores agent_mentions entirely for the
+        signal, so this must fail against the existing implementation.
+        """
+        setup = self._make_ops_setup([], agent_mentions=["ops"])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "delegate", (
+            "An 'ops' agent_mention must route ops unchanged, got "
+            f"decision={result['decision']!r}"
+        )
+        assert result["agent"] == "ops"
+        assert diag.get("posture_veto_reason") is None, (
+            "Expected no veto when agent_mentions contains 'ops', got "
+            f"{diag.get('posture_veto_reason')!r}"
+        )
+
+    def test_list_pull_requests_routes_to_ops(self) -> None:
+        """A short ``list_`` basename (``list_pull_requests``) routes ops."""
+        setup = self._make_ops_setup(["list_pull_requests"])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "delegate", (
+            "'list_pull_requests' must route ops unchanged, got "
+            f"decision={result['decision']!r}"
+        )
+        assert result["agent"] == "ops"
+        assert diag.get("posture_veto_reason") is None, (
+            "Expected no veto for 'list_pull_requests', got "
+            f"{diag.get('posture_veto_reason')!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # #448: WRITE tool_mentions veto ops to self_handle with the new
+    # 'ops_write_tool' reason, taking precedence over any READ signal.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "write_tool",
+        ["create_issue", "add_issue_comment", "update_pull_request"],
+    )
+    def test_write_tool_vetoes_to_self_handle(self, write_tool: str) -> None:
+        """A WRITE-shaped tool_mention alone vetoes ops to self_handle.
+
+        Covers the ``create``, ``add_``, and ``update`` WRITE prefixes.
+        The 'ops_write_tool' veto reason does not exist pre-#448, so
+        this must fail against the current implementation.
+        """
+        setup = self._make_ops_setup([write_tool])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "self_handle", (
+            f"A WRITE tool ({write_tool!r}) must veto ops to self_handle, "
+            f"got decision={result['decision']!r}"
+        )
+        assert result["agent"] is None, (
+            f"Expected agent=None on the WRITE veto, got {result['agent']!r}"
+        )
+        assert diag.get("posture_veto_reason") == "ops_write_tool", (
+            f"Expected posture_veto_reason='ops_write_tool' for "
+            f"{write_tool!r}, got {diag.get('posture_veto_reason')!r}"
+        )
+
+    def test_write_precedence_over_read(self) -> None:
+        """A WRITE signal wins over a simultaneous READ signal.
+
+        ``get_issue`` (READ) and ``create_issue`` (WRITE) are both
+        present -- the write precedence rule must still veto to
+        self_handle with 'ops_write_tool', not route ops.
+        """
+        setup = self._make_ops_setup(["get_issue", "create_issue"])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "self_handle", (
+            "WRITE must take precedence over READ, got decision="
+            f"{result['decision']!r}"
+        )
+        assert result["agent"] is None
+        assert diag.get("posture_veto_reason") == "ops_write_tool", (
+            "Expected posture_veto_reason='ops_write_tool' when both a "
+            "read and write tool_mention are present, got "
+            f"{diag.get('posture_veto_reason')!r}"
+        )
+
+    def test_prefixed_write_tool_vetoes(self) -> None:
+        """A ``mcp__github__``-prefixed WRITE tool still vetoes via its basename.
+
+        Confirms the basename is computed by stripping the
+        ``mcp__github__`` prefix before the WRITE-prefix check, not by
+        matching the raw (prefixed) string.
+        """
+        setup = self._make_ops_setup(["mcp__github__merge_pull_request"])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "self_handle", (
+            "A prefixed WRITE tool must still veto via its basename, "
+            f"got decision={result['decision']!r}"
+        )
+        assert result["agent"] is None
+        assert diag.get("posture_veto_reason") == "ops_write_tool", (
+            "Expected posture_veto_reason='ops_write_tool' for a "
+            "prefixed write tool, got "
+            f"{diag.get('posture_veto_reason')!r}"
         )
