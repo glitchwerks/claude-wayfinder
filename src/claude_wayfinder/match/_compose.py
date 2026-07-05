@@ -217,6 +217,16 @@ def compose_route(
         ``confidence_is_high`` passes, and ``_is_lexically_plausible``
         passes.
 
+        **ops GitHub-signal guard (#445):** when the preferred agent is
+        ``"ops"``, delegation additionally requires a GitHub-tool
+        signal — at least one member of ``features.tool_mentions``
+        starting with ``"mcp__github__"``.  ``ops`` is read-only
+        GitHub-only, but codebase-read tasks resolve to the same
+        ``(any, operate)`` cell; without the signal, the ops route is
+        vetoed to ``self_handle`` (``agent=None``), mirroring the
+        Branch-2 sentinel abstention shape.  Scoped strictly to
+        ``preferred == "ops"`` — no other Branch-3 route is affected.
+
     **Fallback** — ``decide()`` on the gated list: fires when no branch
         routes.
 
@@ -329,7 +339,25 @@ def compose_route(
                 if domain_allowed is not None
                 else gated_names
             )
-            if (
+            # ops GitHub-signal guard (#445): ops is read-only
+            # GitHub-only, but codebase-read tasks resolve to the same
+            # (any, operate) cell.  Require at least one tool_mention
+            # starting with "mcp__github__" before letting ops
+            # delegate; otherwise veto to self_handle.  Scoped strictly
+            # to preferred == "ops" — no other Branch-3 route is
+            # affected.
+            ops_no_github_signal: bool = preferred == "ops" and not any(
+                tm.startswith("mcp__github__")
+                for tm in features.tool_mentions
+            )
+            if ops_no_github_signal:
+                decision_out = "self_handle"
+                agent_out = None
+                confidence_out = 0.9
+                posture_routed = True
+                _branch = "branch3_ops_veto"
+                _posture_veto_reason = "ops_no_github_signal"
+            elif (
                 preferred
                 and preferred in genuine_gated_names
                 and preferred in catalog_agent_names
