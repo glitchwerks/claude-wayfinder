@@ -172,6 +172,85 @@ def _is_lexically_plausible(
 
 
 # ---------------------------------------------------------------------------
+# ops GitHub tool-shape discriminator (#448, supersedes #445)
+# ---------------------------------------------------------------------------
+
+_WRITE_TOOL_PREFIXES: tuple[str, ...] = (
+    "create",
+    "add_",
+    "update",
+    "merge_",
+    "delete",
+    "push",
+    "fork",
+)
+_READ_TOOL_PREFIXES: tuple[str, ...] = ("get_", "list_", "search_")
+
+_GITHUB_TOOL_PREFIX = "mcp__github__"
+
+
+def _tool_basename(tool_mention: str) -> str:
+    """Compute the tool "basename" used by the ops tool-shape guard.
+
+    Lowercases *tool_mention*; when it contains the
+    ``mcp__github__`` prefix, returns the substring after that
+    prefix, otherwise returns the (lowercased) token unchanged.
+
+    Args:
+        tool_mention: A single raw or already-lowercased tool-mention
+            token.
+
+    Returns:
+        The basename used for the WRITE/READ prefix checks.
+    """
+    lowered = tool_mention.lower()
+    if _GITHUB_TOOL_PREFIX in lowered:
+        return lowered.split(_GITHUB_TOOL_PREFIX, 1)[1]
+    return lowered
+
+
+def _github_tool_signal(features: Features) -> str | None:
+    """Classify the ops GitHub tool-shape signal (#448).
+
+    Applies precedence **write > read > none** over
+    ``features.tool_mentions`` basenames (see :func:`_tool_basename`),
+    plus two read-only fallbacks (a bare ``"gh"`` tool mention and an
+    ``"ops"`` agent mention) that a basename check alone would miss.
+
+    Args:
+        features: Extracted feature set for the current context.
+            ``tool_mentions`` and ``agent_mentions`` are lowercased
+            ``frozenset[str]`` values.
+
+    Returns:
+        ``"write"`` when any tool_mention basename starts with a
+        write-shaped prefix (``create``, ``add_``, ``update``,
+        ``merge_``, ``delete``, ``push``, ``fork``); ``"read"`` when
+        no write signal fired but a read-shaped signal is present
+        (a ``get_``/``list_``/``search_`` basename, a bare ``"gh"``
+        tool mention, a raw ``mcp__github__``-prefixed tool mention,
+        or an ``"ops"`` agent mention); ``None`` otherwise.
+    """
+    basenames = [_tool_basename(tm) for tm in features.tool_mentions]
+
+    if any(b.startswith(_WRITE_TOOL_PREFIXES) for b in basenames):
+        return "write"
+
+    if (
+        any(b.startswith(_READ_TOOL_PREFIXES) for b in basenames)
+        or "gh" in features.tool_mentions
+        or any(
+            tm.startswith(_GITHUB_TOOL_PREFIX)
+            for tm in features.tool_mentions
+        )
+        or "ops" in features.agent_mentions
+    ):
+        return "read"
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # compose_route
 # ---------------------------------------------------------------------------
 
@@ -217,15 +296,31 @@ def compose_route(
         ``confidence_is_high`` passes, and ``_is_lexically_plausible``
         passes.
 
-        **ops GitHub-signal guard (#445):** when the preferred agent is
-        ``"ops"``, delegation additionally requires a GitHub-tool
-        signal — at least one member of ``features.tool_mentions``
-        starting with ``"mcp__github__"``.  ``ops`` is read-only
-        GitHub-only, but codebase-read tasks resolve to the same
-        ``(any, operate)`` cell; without the signal, the ops route is
-        vetoed to ``self_handle`` (``agent=None``), mirroring the
-        Branch-2 sentinel abstention shape.  Scoped strictly to
-        ``preferred == "ops"`` — no other Branch-3 route is affected.
+        **ops GitHub tool-shape guard (#448, supersedes #445):** when
+        the preferred agent is ``"ops"``, delegation is additionally
+        gated by :func:`_github_tool_signal`, a tool-shape
+        discriminator applied with precedence **write > read > none**:
+
+        1. **write** — any ``features.tool_mentions`` basename starts
+           with a write-shaped prefix (``create``, ``add_``,
+           ``update``, ``merge_``, ``delete``, ``push``, ``fork``) →
+           veto to ``self_handle`` (``agent=None``),
+           ``posture_veto_reason="ops_write_tool"``.
+        2. **read** — else, any basename starts with ``get_``,
+           ``list_``, or ``search_``; or ``"gh"`` is a raw tool
+           mention; or a raw tool mention keeps the
+           ``mcp__github__`` prefix; or ``"ops"`` is an agent
+           mention → proceed with the ordinary Branch-3 gates below.
+        3. **none** — else, veto to ``self_handle``
+           (``posture_veto_reason="ops_no_github_signal"``,
+           unchanged from #445).
+
+        ``ops`` is read-only GitHub-only, but codebase-read tasks
+        resolve to the same ``(any, operate)`` cell; the write/none
+        vetoes mirror the Branch-2 sentinel abstention shape.  Scoped
+        strictly to ``preferred == "ops"`` — no other Branch-3 route
+        is affected (byte-for-byte unchanged when ``preferred !=
+        "ops"``).
 
     **Fallback** — ``decide()`` on the gated list: fires when no branch
         routes.
@@ -339,18 +434,23 @@ def compose_route(
                 if domain_allowed is not None
                 else gated_names
             )
-            # ops GitHub-signal guard (#445): ops is read-only
-            # GitHub-only, but codebase-read tasks resolve to the same
-            # (any, operate) cell.  Require at least one tool_mention
-            # starting with "mcp__github__" before letting ops
-            # delegate; otherwise veto to self_handle.  Scoped strictly
-            # to preferred == "ops" — no other Branch-3 route is
-            # affected.
-            ops_no_github_signal: bool = preferred == "ops" and not any(
-                tm.startswith("mcp__github__")
-                for tm in features.tool_mentions
+            # ops GitHub tool-shape guard (#448, supersedes #445): ops
+            # is read-only GitHub-only, but codebase-read tasks
+            # resolve to the same (any, operate) cell.  Apply the
+            # write > read > none tool-shape discriminator before
+            # letting ops delegate.  Scoped strictly to preferred ==
+            # "ops" — no other Branch-3 route is affected.
+            ops_tool_signal: str | None = (
+                _github_tool_signal(features) if preferred == "ops" else None
             )
-            if ops_no_github_signal:
+            if preferred == "ops" and ops_tool_signal == "write":
+                decision_out = "self_handle"
+                agent_out = None
+                confidence_out = 0.9
+                posture_routed = True
+                _branch = "branch3_ops_veto"
+                _posture_veto_reason = "ops_write_tool"
+            elif preferred == "ops" and ops_tool_signal is None:
                 decision_out = "self_handle"
                 agent_out = None
                 confidence_out = 0.9
