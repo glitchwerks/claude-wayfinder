@@ -36,6 +36,15 @@ Test inventory
                                   out-param of ``compose_route`` populates
                                   per-step §F.1 state without changing
                                   return value or decision logic.
+11. ``TestBranch3OpsGithubGuard`` — NEW (#445): the ops-posture Branch-3
+                                  route requires a ``mcp__github__*``
+                                  tool-mention signal; absent that
+                                  signal, ops is vetoed to
+                                  ``self_handle`` (agent=None) with
+                                  ``diagnostics["posture_veto_reason"]
+                                  == "ops_no_github_signal"``.  Written
+                                  against issue #445 — no implementation
+                                  exists yet.
 """
 
 from __future__ import annotations
@@ -2272,4 +2281,318 @@ class TestComposeDiagnosticsParam:
             "Expected posture_veto_reason='investigator_not_in_catalog' when "
             "confidence is high but investigator is absent from catalog, "
             f"got {diag.get('posture_veto_reason')!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 11. TestBranch3OpsGithubGuard -- ops posture requires a GitHub signal
+#     (#445). NOT YET IMPLEMENTED -- authored against the spec, before
+#     any code change to _compose.py.
+# ---------------------------------------------------------------------------
+
+
+class TestBranch3OpsGithubGuard:
+    """Branch 3 ops-posture route requires a GitHub-tool signal (#445).
+
+    ``ops`` is read-only GitHub-only, but codebase-read tasks resolve to
+    the same ``(any, operate)`` cell and previously misrouted to ops even
+    without any ``mcp__github__*`` tool mentioned.  The planned guard
+    vetoes the ops route to ``self_handle`` (agent=``None``) when no
+    member of ``features.tool_mentions`` starts with ``"mcp__github__"``
+    (``tool_mentions`` are lowercased by ``build_features``), and records
+    ``diagnostics["posture_veto_reason"] = "ops_no_github_signal"``.
+    """
+
+    # ------------------------------------------------------------------
+    # Shared fixture: (any, operate) -> ops, with tool_mentions supplied
+    # by each test.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_ops_setup(tool_mentions: list[str]) -> dict:
+        """Build inputs for the ``(any, operate)`` -> ``ops`` scenario.
+
+        Args:
+            tool_mentions: Raw tool-mention strings fed into
+                ``build_features`` (lowercased by the builder).
+
+        Returns:
+            Dict with scored_agents, catalog, catalog_agent_names,
+            features.
+        """
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        def _entry(name: str) -> CatalogEntry:
+            tr = _parse_triggers(
+                {
+                    "command_prefixes": [],
+                    "agent_mentions": [],
+                    "path_globs": [],
+                    "path_globs_excluded": [],
+                    "keywords": [],
+                    "tool_mentions": [],
+                    "excludes": [],
+                }
+            )
+            return CatalogEntry(
+                name=name,
+                kind="agent",
+                source="owned",
+                routable=True,
+                triggers=tr,
+                applicable_skills=(),
+                applicable_agents=(),
+            )
+
+        catalog = [
+            _entry("ops"),
+            _entry("code-writer"),
+            _entry("debugger"),
+        ]
+        catalog_agent_names = frozenset({"ops", "code-writer", "debugger"})
+        # ops at rank 1 -- plausible under the §B.1 veto so this scenario
+        # isolates the github-signal guard from the pre-existing veto.
+        scored_agents = _make_gated(
+            [
+                ("ops", 0.9),
+                ("code-writer", 0.7),
+                ("debugger", 0.5),
+            ]
+        )
+        features = build_features(
+            {
+                "task_description": "check the pull request status",
+                "file_paths": [],
+                "agent_mentions": [],
+                "tool_mentions": tool_mentions,
+                "command_prefix": None,
+            }
+        )
+        return {
+            "catalog": catalog,
+            "catalog_agent_names": catalog_agent_names,
+            "scored_agents": scored_agents,
+            "features": features,
+        }
+
+    @staticmethod
+    def _make_code_build_setup() -> dict:
+        """Build inputs for the non-ops regression scenario (code, build).
+
+        Mirrors ``TestBranch3Generic.code_build_setup`` -- (code, build)
+        resolves to ``code-writer`` via the cell map, entirely
+        independent of the ``ops`` github-signal guard.
+
+        Returns:
+            Dict with scored_agents, catalog, catalog_agent_names,
+            features.
+        """
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        def _entry(name: str) -> CatalogEntry:
+            tr = _parse_triggers(
+                {
+                    "command_prefixes": [],
+                    "agent_mentions": [],
+                    "path_globs": [],
+                    "path_globs_excluded": [],
+                    "keywords": [],
+                    "tool_mentions": [],
+                    "excludes": [],
+                }
+            )
+            return CatalogEntry(
+                name=name,
+                kind="agent",
+                source="owned",
+                routable=True,
+                triggers=tr,
+                applicable_skills=(),
+                applicable_agents=(),
+            )
+
+        catalog = [
+            _entry("code-writer"),
+            _entry("debugger"),
+            _entry("code-reviewer"),
+        ]
+        catalog_agent_names = frozenset(
+            {"code-writer", "debugger", "code-reviewer"}
+        )
+        scored_agents = _make_gated(
+            [
+                ("code-writer", 0.9),
+                ("debugger", 0.7),
+                ("code-reviewer", 0.5),
+            ]
+        )
+        features = build_features(
+            {
+                "task_description": "implement the login feature",
+                "file_paths": ["src/auth.py"],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            }
+        )
+        return {
+            "catalog": catalog,
+            "catalog_agent_names": catalog_agent_names,
+            "scored_agents": scored_agents,
+            "features": features,
+        }
+
+    # ------------------------------------------------------------------
+    # 1. ops WITH a github-shaped tool mention -> unchanged delegation.
+    # ------------------------------------------------------------------
+
+    def test_ops_with_github_signal_delegates_unchanged(self) -> None:
+        """ops posture WITH an ``mcp__github__*`` tool mention still delegates.
+
+        A GitHub-shaped tool mention preserves the pre-#445 Branch-3
+        behaviour: the ops route fires exactly as before.
+        """
+        setup = self._make_ops_setup(["mcp__github__get_pull_request"])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "delegate"
+        assert result["agent"] == "ops"
+        assert result["disposition_source"] == "posture_routed"
+        assert diag.get("posture_veto_reason") is None, (
+            "Expected no veto when a github-shaped tool is mentioned, "
+            f"got {diag.get('posture_veto_reason')!r}"
+        )
+        assert diag.get("branch") == "branch3_generic", (
+            f"Expected branch='branch3_generic', got {diag.get('branch')!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # 2. ops WITHOUT any github tool mention -> veto to self_handle.
+    # ------------------------------------------------------------------
+
+    def test_ops_without_github_signal_vetoes_to_self_handle(self) -> None:
+        """ops posture WITHOUT any GitHub tool mention is vetoed.
+
+        No member of ``tool_mentions`` starts with ``mcp__github__`` --
+        the read-only codebase-read task must not misroute to the
+        GitHub-only ops agent.  Currently (pre-fix) this still delegates
+        to ops, so this assertion is expected to FAIL.
+        """
+        setup = self._make_ops_setup([])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "self_handle", (
+            f"Expected self_handle veto, got decision={result['decision']!r}, "
+            f"agent={result.get('agent')!r}"
+        )
+        assert result["agent"] is None, (
+            f"Expected agent=None on the ops veto, got {result['agent']!r}"
+        )
+        assert diag.get("posture_veto_reason") == "ops_no_github_signal", (
+            "Expected posture_veto_reason='ops_no_github_signal', "
+            f"got {diag.get('posture_veto_reason')!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # 3. Regression: a non-ops Branch-3 route is unaffected by the guard.
+    # ------------------------------------------------------------------
+
+    def test_non_ops_branch3_route_unaffected_by_github_guard(self) -> None:
+        """A non-ops Branch-3 route is unchanged by the ops-only guard.
+
+        ``(code, build)`` resolves to ``code-writer``, which must still
+        delegate even with empty ``tool_mentions`` -- the github-signal
+        check is scoped to ``preferred == "ops"`` only.
+        """
+        setup = self._make_code_build_setup()
+        labels = Labels(
+            domain="code",
+            posture="build",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "delegate"
+        assert result["agent"] == "code-writer"
+        assert result["disposition_source"] == "posture_routed"
+        assert diag.get("posture_veto_reason") is None, (
+            "The ops-only github guard must not veto a non-ops preferred "
+            f"agent, got posture_veto_reason={diag.get('posture_veto_reason')!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # 4. ops with only a non-github tool mention -> still vetoed.
+    # ------------------------------------------------------------------
+
+    def test_ops_with_only_non_github_tool_mention_still_vetoed(
+        self,
+    ) -> None:
+        """A non-github tool mention alone does not satisfy the guard.
+
+        The check is specifically an ``mcp__github__`` prefix test, not
+        merely "any tool_mention present" -- a bare ``grep`` mention
+        must still veto the ops route.
+        """
+        setup = self._make_ops_setup(["grep"])
+        labels = Labels(
+            domain=None,
+            posture="operate",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "self_handle", (
+            f"Expected self_handle veto, got decision={result['decision']!r}"
+        )
+        assert result["agent"] is None
+        assert diag.get("posture_veto_reason") == "ops_no_github_signal", (
+            "A non-github tool_mention ('grep') must not satisfy the "
+            "github-signal guard, expected posture_veto_reason="
+            f"'ops_no_github_signal', got {diag.get('posture_veto_reason')!r}"
         )
