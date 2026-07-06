@@ -50,6 +50,15 @@ Test inventory
                                   Written against issue #448 — no
                                   implementation of the tool-shape
                                   discriminator exists yet.
+12. ``TestBranch3TestFirstDiscriminator`` — NEW (#452): code-writer's
+                                  Branch-3 route is redirected to
+                                  ``test-implementer`` when the task
+                                  carries a test-authoring signal.
+                                  Written against the spec — no
+                                  implementation of the discriminator
+                                  or the ``test-implementer`` addition
+                                  to ``DOMAIN_AGENT_MAP["code"]`` exists
+                                  yet.
 """
 
 from __future__ import annotations
@@ -2878,4 +2887,260 @@ class TestBranch3OpsGithubGuard:
             "Expected posture_veto_reason='ops_write_tool' for a "
             "prefixed write tool, got "
             f"{diag.get('posture_veto_reason')!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 12. TestBranch3TestFirstDiscriminator -- code-writer -> test-implementer
+#     redirect on a test-authoring signal (#452). NOT YET IMPLEMENTED --
+#     authored against the spec, before any code change to _compose.py
+#     or _cells.py.
+# ---------------------------------------------------------------------------
+
+
+class TestBranch3TestFirstDiscriminator:
+    """Branch 3 test-authoring discriminator (#452, mirrors #448's ops guard).
+
+    When the cell-map ``preferred`` agent is ``"code-writer"`` AND the
+    task carries a test-authoring signal (e.g. "write failing pytest
+    tests first" / "test-first phase" / "add a RED test"), the route is
+    redirected to ``test-implementer`` instead of ``code-writer``:
+    ``decision="delegate"``, ``agent="test-implementer"``,
+    ``confidence=0.9``, ``disposition_source="posture_routed"``,
+    ``diagnostics["branch"] == "branch3_testfirst"``.
+
+    Scoped strictly to ``preferred == "code-writer"`` -- a cell whose
+    preferred agent is something else (e.g. ``debugger`` for
+    ``(code, diagnose)``) must be unaffected even when the same
+    test-authoring phrasing is present in the task text.
+
+    AMBIGUITY flagged for the implementer (see the test-implementer's
+    return to the router): ``Features`` (``_types.py``) has no raw
+    task-description string field -- only ``keywords`` (Porter2-stemmed
+    tokens) and ``raw_keywords`` (unstemmed tokens), both unordered
+    frozensets. These tests build the signal via ``build_features()``
+    over a task_description containing the briefing's example phrasing
+    and assert only on observable ``compose_route`` behaviour; they
+    intentionally do NOT import or call a ``_test_authoring_signal``
+    helper directly, since its final name/signature is not fixed by any
+    merged contract yet.
+    """
+
+    @staticmethod
+    def _entry(name: str) -> CatalogEntry:
+        """Build a minimal routable CatalogEntry with no triggers.
+
+        Args:
+            name: Agent name.
+
+        Returns:
+            A routable :class:`CatalogEntry` for the given agent.
+        """
+        from claude_wayfinder.match._parse import _parse_triggers
+
+        tr = _parse_triggers(
+            {
+                "command_prefixes": [],
+                "agent_mentions": [],
+                "path_globs": [],
+                "path_globs_excluded": [],
+                "keywords": [],
+                "tool_mentions": [],
+                "excludes": [],
+            }
+        )
+        return CatalogEntry(
+            name=name,
+            kind="agent",
+            source="owned",
+            routable=True,
+            triggers=tr,
+            applicable_skills=(),
+            applicable_agents=(),
+        )
+
+    @classmethod
+    def _make_code_build_with_test_implementer_setup(
+        cls, task_description: str
+    ) -> dict:
+        """Build (code, build) inputs with test-implementer in the catalog.
+
+        ``code-writer`` and ``test-implementer`` are both scored in the
+        top-3 so that whichever agent the discriminator lands on clears
+        the §B.1 plausibility veto regardless of how the implementer
+        wires the redirect.
+
+        Args:
+            task_description: Raw task text fed into ``build_features``.
+
+        Returns:
+            Dict with scored_agents, catalog, catalog_agent_names,
+            features.
+        """
+        catalog = [
+            cls._entry("code-writer"),
+            cls._entry("test-implementer"),
+            cls._entry("debugger"),
+            cls._entry("code-reviewer"),
+        ]
+        catalog_agent_names = frozenset(
+            {"code-writer", "test-implementer", "debugger", "code-reviewer"}
+        )
+        scored_agents = _make_gated(
+            [
+                ("code-writer", 0.9),
+                ("test-implementer", 0.85),
+                ("debugger", 0.6),
+                ("code-reviewer", 0.5),
+            ]
+        )
+        features = build_features(
+            {
+                "task_description": task_description,
+                "file_paths": ["tests/test_parser.py"],
+                "agent_mentions": [],
+                "tool_mentions": [],
+                "command_prefix": None,
+            }
+        )
+        return {
+            "catalog": catalog,
+            "catalog_agent_names": catalog_agent_names,
+            "scored_agents": scored_agents,
+            "features": features,
+        }
+
+    # ------------------------------------------------------------------
+    # 1. test-first task text -> redirected to test-implementer.
+    # ------------------------------------------------------------------
+
+    def test_testfirst_signal_redirects_code_writer_to_test_implementer(
+        self,
+    ) -> None:
+        """A test-authoring task redirects the code-writer route.
+
+        (code, build) normally resolves to code-writer; when the task
+        text carries a test-authoring signal, Branch 3 must instead
+        delegate to test-implementer at confidence 0.9, tagged
+        ``branch3_testfirst`` in diagnostics.
+        """
+        setup = self._make_code_build_with_test_implementer_setup(
+            "Write failing pytest tests first (test-first phase) for "
+            "the new parser before any implementation exists"
+        )
+        labels = Labels(
+            domain="code",
+            posture="build",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "delegate", (
+            f"Expected delegate, got decision={result['decision']!r}"
+        )
+        assert result["agent"] == "test-implementer", (
+            "Expected the test-authoring signal to redirect code-writer "
+            f"to test-implementer, got agent={result.get('agent')!r}"
+        )
+        assert result["confidence"] == pytest.approx(0.9)
+        assert result["disposition_source"] == "posture_routed"
+        assert diag.get("branch") == "branch3_testfirst", (
+            "Expected diagnostics['branch']=='branch3_testfirst' for the "
+            f"test-authoring redirect, got {diag.get('branch')!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # 2. plain implementation task text -> code-writer, no regression.
+    # ------------------------------------------------------------------
+
+    def test_plain_implementation_task_still_routes_to_code_writer(
+        self,
+    ) -> None:
+        """A plain implementation task is unaffected by the discriminator.
+
+        No test-authoring signal is present, so (code, build) must
+        still resolve to code-writer via the ordinary generic Branch-3
+        route (``branch3_generic``), not the new testfirst branch.
+        """
+        setup = self._make_code_build_with_test_implementer_setup(
+            "Implement the login flow in src/auth.py"
+        )
+        labels = Labels(
+            domain="code",
+            posture="build",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["agent"] == "code-writer", (
+            "Plain implementation text must not trigger the "
+            f"test-authoring redirect, got agent={result.get('agent')!r}"
+        )
+        assert diag.get("branch") == "branch3_generic", (
+            "Expected the ordinary generic Branch-3 tag "
+            f"'branch3_generic', got {diag.get('branch')!r}"
+        )
+        assert diag.get("branch") != "branch3_testfirst"
+
+    # ------------------------------------------------------------------
+    # 3. Signal present but preferred != code-writer -> unaffected.
+    # ------------------------------------------------------------------
+
+    def test_signal_present_but_preferred_not_code_writer_is_unaffected(
+        self,
+    ) -> None:
+        """The discriminator is scoped strictly to preferred == 'code-writer'.
+
+        (code, diagnose) with area_span=1 resolves to debugger via the
+        cell map (Branch 1 does not fire because area_span < 2). Even
+        though the same test-authoring phrasing is present, the
+        redirect must not apply -- debugger's route must be unaffected.
+        """
+        setup = self._make_code_build_with_test_implementer_setup(
+            "Write failing pytest tests first (test-first phase) while "
+            "investigating the intermittent test failure"
+        )
+        labels = Labels(
+            domain="code",
+            posture="diagnose",
+            confidence="high",
+            area_span=1,  # < 2: Branch 1 does not fire; falls to Branch 3
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["agent"] == "debugger", (
+            "The test-authoring discriminator is scoped to preferred == "
+            "'code-writer' only; a (code, diagnose) cell must still "
+            f"route to debugger, got agent={result.get('agent')!r}"
+        )
+        assert result["agent"] != "test-implementer"
+        assert diag.get("branch") != "branch3_testfirst", (
+            "The testfirst branch tag must not fire when preferred != "
+            f"'code-writer', got {diag.get('branch')!r}"
         )

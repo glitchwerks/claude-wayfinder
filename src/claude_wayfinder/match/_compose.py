@@ -251,6 +251,43 @@ def _github_tool_signal(features: Features) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# test-authoring discriminator (#452, mirrors #448's ops tool-shape guard)
+# ---------------------------------------------------------------------------
+
+_TEST_AUTHORING_QUALIFIER_STEMS: frozenset[str] = frozenset(
+    {"first", "red", "fail", "pytest", "vitest"}
+)
+
+
+def _test_authoring_signal(features: Features) -> bool:
+    """Detect a test-authoring (test-first / TDD-red) signal (#452).
+
+    ``Features`` exposes no raw task-description string -- only the
+    Porter2-stemmed ``keywords`` and unstemmed ``raw_keywords``
+    frozensets -- so this is a token-presence heuristic, not a phrase
+    match. Fires when the stemmed token set contains the hyphenated
+    ``"test-first"`` token (it survives stemming as a single token), OR
+    contains both ``"test"`` (the stem of "test"/"tests") and at least
+    one test-authoring qualifier stem: ``"first"``, ``"red"``,
+    ``"fail"`` (stem of "fail"/"failing"), ``"pytest"``, or
+    ``"vitest"``. Requiring a qualifier alongside the bare ``"test"``
+    stem avoids firing on plain implementation tasks that mention
+    tests only incidentally.
+
+    Args:
+        features: Extracted feature set for the current context.
+
+    Returns:
+        ``True`` when a test-authoring signal is present in
+        ``features.keywords``, else ``False``.
+    """
+    tokens = features.keywords
+    if "test-first" in tokens:
+        return True
+    return "test" in tokens and bool(tokens & _TEST_AUTHORING_QUALIFIER_STEMS)
+
+
+# ---------------------------------------------------------------------------
 # compose_route
 # ---------------------------------------------------------------------------
 
@@ -321,6 +358,22 @@ def compose_route(
         strictly to ``preferred == "ops"`` — no other Branch-3 route
         is affected (byte-for-byte unchanged when ``preferred !=
         "ops"``).
+
+        **test-authoring discriminator (#452):** when the preferred
+        agent is ``"code-writer"`` AND :func:`_test_authoring_signal`
+        detects a test-first / TDD-red signal in ``features.keywords``,
+        the route is redirected to ``"test-implementer"`` instead of
+        ``"code-writer"``: ``decision="delegate"``, ``confidence=0.9``,
+        ``diagnostics["branch"] == "branch3_testfirst"``.  Gated by the
+        same predicates the generic route below uses — applied to
+        ``"test-implementer"`` rather than the cell-preferred
+        ``"code-writer"``, since it is ``"test-implementer"`` that
+        ultimately delegates: it must be in ``genuine_gated_names`` and
+        ``catalog_agent_names``, ``confidence_is_high`` must pass, and
+        it must clear the §B.1 plausibility veto. Scoped strictly to
+        ``preferred == "code-writer"`` with the signal present — no
+        signal, or any other preferred agent, falls through unchanged
+        to the generic route (``branch3_generic``).
 
     **Fallback** — ``decide()`` on the gated list: fires when no branch
         routes.
@@ -457,6 +510,22 @@ def compose_route(
                 posture_routed = True
                 _branch = "branch3_ops_veto"
                 _posture_veto_reason = "ops_no_github_signal"
+            elif (
+                preferred == "code-writer"
+                and _test_authoring_signal(features)
+                and "test-implementer" in genuine_gated_names
+                and "test-implementer" in catalog_agent_names
+                and confidence_is_high(labels)           # §D.1 live gate
+                and _is_lexically_plausible(               # §B.1 veto,
+                    "test-implementer", gated               # on the redirect
+                )                                          # target
+            ):
+                agent_out = "test-implementer"
+                decision_out = "delegate"
+                confidence_out = 0.9
+                posture_routed = True
+                _branch = "branch3_testfirst"
+                _lexical_agreement = True   # §B.1 passed — record it
             elif (
                 preferred
                 and preferred in genuine_gated_names

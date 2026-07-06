@@ -206,6 +206,47 @@ class TestDomainAgentMap:
         """DOMAIN_AGENT_MAP[None] is None (is_any / unlabeled sentinel)."""
         assert DOMAIN_AGENT_MAP[None] is None
 
+    def test_code_domain_includes_test_implementer(self) -> None:
+        """code domain set includes test-implementer (#452).
+
+        test-implementer authors tests in the test-first split and is
+        NOT a member of ANY_DOMAIN_AGENTS, so it must be added
+        explicitly to the code domain's allowed set -- otherwise
+        gate_agents() drops it for every code-domain task before
+        compose_route's Branch-3 test-first discriminator ever sees it.
+        RED until DOMAIN_AGENT_MAP['code'] is updated to include
+        'test-implementer'.
+        """
+        code_set = DOMAIN_AGENT_MAP["code"]
+        assert code_set is not None
+        assert "test-implementer" in code_set, (
+            "DOMAIN_AGENT_MAP['code'] must include 'test-implementer' "
+            "(#452) so it survives gate_agents() for code-domain tasks. "
+            "Fix: add 'test-implementer' to the code frozenset in "
+            "src/claude_wayfinder/match/_cells.py."
+        )
+
+    def test_code_domain_test_implementer_addition_preserves_existing_members(
+        self,
+    ) -> None:
+        """Adding test-implementer must not remove any existing code member.
+
+        Sanity check: code-writer, debugger, code-reviewer, and
+        inquisitor must all remain present alongside test-implementer.
+        """
+        code_set = DOMAIN_AGENT_MAP["code"]
+        assert code_set is not None
+        for expected in (
+            "code-writer",
+            "debugger",
+            "code-reviewer",
+            "inquisitor",
+        ):
+            assert expected in code_set, (
+                f"{expected!r} must remain in DOMAIN_AGENT_MAP['code'] "
+                "after adding 'test-implementer'."
+            )
+
 
 # ===========================================================================
 # gate_agents
