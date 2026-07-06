@@ -3144,3 +3144,60 @@ class TestBranch3TestFirstDiscriminator:
             "The testfirst branch tag must not fire when preferred != "
             f"'code-writer', got {diag.get('branch')!r}"
         )
+
+    # ------------------------------------------------------------------
+    # 4. Regression (PR #453): a build task that merely mentions a
+    #    failing test must not be mistaken for test-authoring.
+    # ------------------------------------------------------------------
+
+    def test_failing_test_mention_in_build_task_does_not_redirect(
+        self,
+    ) -> None:
+        """An implementation task that mentions a failing test stays code-writer.
+
+        CodeRabbit flagged (PR #453) that the ``fail`` qualifier stem is
+        too broad: a build/implementation task that merely says a test
+        is *failing* -- with no test-authoring intent at all -- must
+        not be redirected to test-implementer. The task text below
+        contains both ``test`` and a ``fail``-family word ("failing")
+        but no test-authoring phrasing ("test-first", "red", "pytest",
+        "vitest", "first"), so after ``fail`` is removed from the
+        qualifier set this must resolve via the ordinary generic
+        Branch-3 route (``branch3_generic``), not ``branch3_testfirst``.
+        """
+        setup = self._make_code_build_with_test_implementer_setup(
+            "Implement the retry helper in src/net.py so the failing "
+            "integration test passes"
+        )
+        labels = Labels(
+            domain="code",
+            posture="build",
+            confidence="high",
+            area_span=1,
+        )
+        diag: dict = {}
+        result = compose_route(
+            labels=labels,
+            scored_agents=setup["scored_agents"],
+            scored_skills=[],
+            features=setup["features"],
+            catalog=setup["catalog"],
+            catalog_agent_names=setup["catalog_agent_names"],
+            diagnostics=diag,
+        )
+        assert result["decision"] == "delegate", (
+            f"Expected delegate, got decision={result['decision']!r}"
+        )
+        assert result["agent"] == "code-writer", (
+            "A build task that merely mentions a failing test is not "
+            "test-authoring; it must not be redirected to "
+            f"test-implementer, got agent={result.get('agent')!r}"
+        )
+        assert diag.get("branch") == "branch3_generic", (
+            "Expected the ordinary generic Branch-3 tag "
+            f"'branch3_generic', got {diag.get('branch')!r}"
+        )
+        assert diag.get("branch") != "branch3_testfirst", (
+            "The 'failing test' mention must not trip the testfirst "
+            f"discriminator, got {diag.get('branch')!r}"
+        )
