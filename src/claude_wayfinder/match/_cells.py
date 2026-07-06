@@ -51,7 +51,20 @@ ANY_DOMAIN_AGENTS: frozenset[str] = frozenset({
 
 DOMAIN_AGENT_MAP: dict[str | None, frozenset[str] | None] = {
     "code": (
-        frozenset({"code-writer", "debugger", "code-reviewer", "inquisitor"})
+        frozenset(
+            {
+                "code-writer",
+                "debugger",
+                "code-reviewer",
+                "inquisitor",
+                # #452: test-implementer authors tests in the test-first
+                # split; not a member of ANY_DOMAIN_AGENTS, so it must be
+                # listed explicitly to survive gate_agents() for
+                # code-domain tasks and reach compose_route's Branch-3
+                # test-first discriminator.
+                "test-implementer",
+            }
+        )
         | ANY_DOMAIN_AGENTS
     ),
     "docs_prose": frozenset({"doc-writer"}) | ANY_DOMAIN_AGENTS,
