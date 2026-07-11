@@ -317,7 +317,7 @@ rm "$DISPATCH_LOG_PATH"                 # if you have set a custom path
 
 ## Shadow-mode dispatch telemetry
 
-When enabled, the matcher also computes a second, telemetry-only routing decision — the Matcher-v3 two-axis "Compose" route — alongside the live lexical decision, and logs both. Compose never changes what gets dispatched: the decision returned to the caller is always the live decision, byte-identical to what earlier releases produced. Shadow compute exists so Compose's decisions can be compared against live traffic offline before any future release lets it steer routing.
+When enabled, the matcher also computes a second, telemetry-only routing decision — the Matcher-v3 two-axis "Compose" route — alongside the live lexical decision, and logs both. Compose never changes what gets dispatched: the routing decision — the selected `decision`/`agent`/`skills` values — is always the live decision, unchanged from earlier releases. (The serialized stdout JSON itself is not fully byte-identical to 1.2.0 — this release also adds `matcher_version` and `catalog_hash` fields — but which agent or skill gets dispatched is unaffected.) Shadow compute exists so Compose's decisions can be compared against live traffic offline before any future release lets it steer routing.
 
 Shadow compute is gated by the `DISPATCH_SHADOW` env var, fail-open to ON:
 
