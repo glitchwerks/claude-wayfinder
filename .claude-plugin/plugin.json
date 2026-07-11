@@ -9,5 +9,12 @@
   "license": "MIT",
   "homepage": "https://github.com/glitchwerks/claude-wayfinder",
   "repository": "https://github.com/glitchwerks/claude-wayfinder",
-  "keywords": ["dispatch", "routing", "matcher", "claude-code", "deterministic"]
+  "keywords": ["dispatch", "routing", "matcher", "claude-code", "deterministic"],
+  "userConfig": {
+    "shadow_enabled": {
+      "type": "boolean",
+      "title": "Enable shadow-mode dispatch telemetry",
+      "description": "When on (default), the matcher computes and logs a second, telemetry-only routing decision alongside the live one for offline comparison. Purely diagnostic — it never changes which agent or skill is actually dispatched. Turn off to skip the extra compute."
+    }
+  }
 }
