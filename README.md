@@ -315,6 +315,22 @@ rm ~/.claude/state/dispatch-log.jsonl   # default hook path when DISPATCH_LOG_PA
 rm "$DISPATCH_LOG_PATH"                 # if you have set a custom path
 ```
 
+## Shadow-mode dispatch telemetry
+
+When enabled, the matcher also computes a second, telemetry-only routing decision — the Matcher-v3 two-axis "Compose" route — alongside the live lexical decision, and logs both. Compose never changes what gets dispatched: the routing decision — the selected `decision`/`agent`/`skills` values — is always the live decision, unchanged from earlier releases. (The serialized stdout JSON itself is not fully byte-identical to 1.2.0 — this release also adds `matcher_version` and `catalog_hash` fields — but which agent or skill gets dispatched is unaffected.) Shadow compute exists so Compose's decisions can be compared against live traffic offline before any future release lets it steer routing.
+
+Shadow compute is gated by the `DISPATCH_SHADOW` env var, fail-open to ON:
+
+```bash
+export DISPATCH_SHADOW=0   # or "false" / "no" — disables shadow compute
+```
+
+- Absent, truthy, unrecognized, or malformed values all resolve to **ON**.
+- Only an exact case-insensitive match of `0`, `false`, or `no` resolves to **OFF**.
+- When OFF, shadow compute is skipped entirely — not computed and then discarded — and the log entry omits the `shadow` key.
+
+The same toggle is exposed as the `shadow_enabled` plugin `userConfig` field for users who configure the plugin through Claude Code's settings UI rather than a shell env var; it is plumbed through to `DISPATCH_SHADOW` at the matcher-launch site.
+
 ## What's next
 
 If you want to use the matcher for real routing in your own Claude Code setup, there are two paths:
