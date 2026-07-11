@@ -34,8 +34,9 @@ changes nothing about what gets routed today.
   routes only after the future flag flip.
 - **`shadow-summary.py` dispatch-log monitor** (#433, PR #434), for
   inspecting shadow-vs-live agreement from logged dispatch decisions.
-- **New routing discriminators on the live lexical path** — test-authoring
-  tasks now route to `test-implementer` (Branch-3 discriminator, #453); an
+- **New discriminators refining the shadow Compose route** — computed and
+  logged alongside the live decision, not steering it — test-authoring
+  tasks now resolve to `test-implementer` (Branch-3 discriminator, #453); an
   ops read/write tool-shape discriminator in Compose branch 3 (#448,
   PR #449); an ops-scoped GitHub-signal guard in Compose branch 3 (#445,
   PR #447); and an `infra_deploy`/`build` → `code-writer` cell-map gate
