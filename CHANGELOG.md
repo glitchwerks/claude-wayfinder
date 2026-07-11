@@ -4,6 +4,68 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-11
+
+Minor release adding shadow-mode dispatch telemetry. **Live routing
+behavior is byte-identical to 1.2.0** — every change in this release is
+additive, telemetry-only, or internal groundwork. The headline addition is
+Matcher-v3's two-axis "Compose" route: the matcher now computes this second
+decision alongside the existing lexical decision and logs both, but Compose
+does not steer which agent or skill actually gets dispatched. The
+live-steering flag flip is deferred to a later release; upgrading to 1.3.0
+changes nothing about what gets routed today.
+
+### Added
+
+- **Shadow-mode dispatch telemetry** (M15-2 through M15-5: #427, #428, #429).
+  The matcher computes the Matcher-v3 two-axis Compose route alongside the
+  live lexical decision on every dispatch and logs both for offline
+  comparison, including a `shadow_data` payload and `disposition_source`
+  audit field. The live decision returned to the caller is unaffected.
+- **`DISPATCH_SHADOW` fail-open env gate** (#457, PR #458). Shadow compute is
+  ON by default. Set `DISPATCH_SHADOW` to `0`, `false`, or `no`
+  (case-insensitive, exact match) to disable it; any absent, truthy,
+  unrecognized, or malformed value resolves to ON. When OFF, shadow compute
+  is skipped entirely rather than computed and discarded. Also exposed as
+  the `shadow_enabled` plugin `userConfig` field.
+- **Four two-axis input fields for `/dispatch`** (M15-8, #431) — `domain`,
+  `posture`, `confidence`, and `area_span`, caller-supplied and optional.
+  These currently feed shadow telemetry only; they begin steering live
+  routes only after the future flag flip.
+- **`shadow-summary.py` dispatch-log monitor** (#433, PR #434), for
+  inspecting shadow-vs-live agreement from logged dispatch decisions.
+- **New routing discriminators on the live lexical path** — test-authoring
+  tasks now route to `test-implementer` (Branch-3 discriminator, #453); an
+  ops read/write tool-shape discriminator in Compose branch 3 (#448,
+  PR #449); an ops-scoped GitHub-signal guard in Compose branch 3 (#445,
+  PR #447); and an `infra_deploy`/`build` → `code-writer` cell-map gate
+  (#364, PR #394).
+- **`matcher_version` and `catalog_hash` in dispatch stdout JSON** (#311,
+  PR #312).
+
+### Fixed
+
+- **SessionStart pidfile keyed on transient node wrapper instead of the
+  nearest Claude Code ancestor** (#441, PR #442).
+- **Compose posture-pick could fall through an empty-gate fallback** (#366,
+  PR #373).
+- **E7 `area_span` diagnose evidence was ungated on `host_condition`** (#347,
+  PR #380).
+- **Dispatch-log writes leaked across pytest runs** — isolated via an
+  autouse conftest fixture (#349, PR #377).
+- **`DISPATCH_HOOK_DEBUG` payload dumps** now write to a private `0600`
+  directory instead of a world-readable location (#345, PR #379).
+- **Health thresholds recalibrated** from the F-1 baseline (#160, PR #317).
+
+### Changed
+
+- Extensive internal Matcher-v3 groundwork — gold-labeled corpus
+  construction, scoring-kernel single-sourcing, and encoder-spike
+  evaluation — landed offline this release with no runtime effect: encoder
+  NO-GO verdicts (PR #354, PR #350, PR #375), corpus construction (PR #341,
+  PR #346, PR #348), and scoring-kernel single-sourcing (#389, PR #390;
+  #391, PR #392).
+
 ## [1.2.0] - 2026-06-03
 
 Minor release adding symmetric morphological normalization to the dispatch
