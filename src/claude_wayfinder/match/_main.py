@@ -56,7 +56,7 @@ def _shadow_enabled() -> bool:
     value = os.environ.get("DISPATCH_SHADOW")
     if value is None:
         return True
-    return value.strip().lower() not in _SHADOW_FALSEY_VALUES
+    return value.lower() not in _SHADOW_FALSEY_VALUES
 
 
 def _build_shadow_record(

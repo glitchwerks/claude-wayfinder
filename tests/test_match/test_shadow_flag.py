@@ -306,6 +306,27 @@ class TestDispatchShadowMalformedFailsOpen:
             f"to shadow ON. Entry keys: {sorted(entry.keys())}"
         )
 
+    @pytest.mark.parametrize("value", [" false ", " 0 "])
+    def test_shadow_key_present_for_whitespace_padded_falsey_values(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        """Whitespace-padded falsey spellings fail open to shadow ON.
+
+        Only an EXACT case-insensitive match of {"0", "false", "no"}
+        disables shadow. A padded value like " false " is not a member
+        of that exact set, so it must fail open to ON — guards against
+        an implementation that ``.strip()``s the value before comparing.
+        """
+        entry = _run_and_read_log(
+            tmp_path,
+            f"shadow_padded_{value.strip()}.jsonl",
+            shadow_env=value,
+        )
+        assert "shadow" in entry, (
+            f"DISPATCH_SHADOW={value!r} is whitespace-padded and must "
+            f"fail open to shadow ON. Entry keys: {sorted(entry.keys())}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 5 — Live decision is byte-identical regardless of the gate
@@ -344,6 +365,12 @@ class TestDispatchShadowLiveDecisionUnaffected:
             tmp_path=tmp_path,
         )
         assert result_off.returncode == 0, result_off.stderr
+
+        assert result_absent.stdout == result_on.stdout == result_off.stdout, (
+            "Live stdout must be byte-identical regardless of "
+            f"DISPATCH_SHADOW. absent={result_absent.stdout!r}, "
+            f"on={result_on.stdout!r}, off={result_off.stdout!r}"
+        )
 
         out_absent = json.loads(result_absent.stdout)
         out_on = json.loads(result_on.stdout)
