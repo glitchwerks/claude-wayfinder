@@ -193,6 +193,97 @@ class TestPluginManifestRequiredFields:
 
 
 # ---------------------------------------------------------------------------
+# plugin.json — userConfig.shadow_enabled (Issue #457)
+# ---------------------------------------------------------------------------
+
+
+class TestPluginManifestUserConfigShadowEnabled:
+    """Tests for the ``userConfig.shadow_enabled`` field (Issue #457).
+
+    The plugin manifest must declare a ``userConfig`` block with a
+    ``shadow_enabled`` boolean entry so Claude Code can prompt the user
+    to toggle the ``DISPATCH_SHADOW`` gate at plugin-enable time. Per
+    the plugin-authoring schema (``userConfig.<key>``), each entry needs
+    a ``type``, a non-empty ``title``, and a non-empty ``description``.
+
+    All tests in this class are expected to FAIL until plugin.json is
+    updated — no ``userConfig`` block exists yet.
+    """
+
+    def test_user_config_block_present(
+        self, plugin_manifest: dict[str, Any]
+    ) -> None:
+        """Verify that plugin.json contains a top-level 'userConfig' block.
+
+        Args:
+            plugin_manifest: The parsed plugin.json dict (from fixture).
+        """
+        assert "userConfig" in plugin_manifest, (
+            "plugin.json must contain a 'userConfig' block declaring "
+            "'shadow_enabled' (Issue #457)."
+        )
+
+    def test_shadow_enabled_key_present(
+        self, plugin_manifest: dict[str, Any]
+    ) -> None:
+        """Verify that 'userConfig' declares a 'shadow_enabled' key.
+
+        Args:
+            plugin_manifest: The parsed plugin.json dict (from fixture).
+        """
+        user_config = plugin_manifest.get("userConfig", {})
+        assert "shadow_enabled" in user_config, (
+            "plugin.json 'userConfig' must declare a 'shadow_enabled' key."
+        )
+
+    def test_shadow_enabled_type_is_boolean(
+        self, plugin_manifest: dict[str, Any]
+    ) -> None:
+        """Verify 'userConfig.shadow_enabled.type' is exactly 'boolean'.
+
+        Args:
+            plugin_manifest: The parsed plugin.json dict (from fixture).
+        """
+        user_config = plugin_manifest.get("userConfig", {})
+        shadow_cfg = user_config.get("shadow_enabled", {})
+        assert shadow_cfg.get("type") == "boolean", (
+            "userConfig.shadow_enabled 'type' must be 'boolean', got "
+            f"{shadow_cfg.get('type')!r}."
+        )
+
+    def test_shadow_enabled_title_non_empty(
+        self, plugin_manifest: dict[str, Any]
+    ) -> None:
+        """Verify 'userConfig.shadow_enabled.title' is a non-empty string.
+
+        Args:
+            plugin_manifest: The parsed plugin.json dict (from fixture).
+        """
+        user_config = plugin_manifest.get("userConfig", {})
+        shadow_cfg = user_config.get("shadow_enabled", {})
+        title = shadow_cfg.get("title", "")
+        assert isinstance(title, str) and title.strip(), (
+            "userConfig.shadow_enabled 'title' must be a non-empty string."
+        )
+
+    def test_shadow_enabled_description_non_empty(
+        self, plugin_manifest: dict[str, Any]
+    ) -> None:
+        """Verify 'userConfig.shadow_enabled.description' is non-empty.
+
+        Args:
+            plugin_manifest: The parsed plugin.json dict (from fixture).
+        """
+        user_config = plugin_manifest.get("userConfig", {})
+        shadow_cfg = user_config.get("shadow_enabled", {})
+        description = shadow_cfg.get("description", "")
+        assert isinstance(description, str) and description.strip(), (
+            "userConfig.shadow_enabled 'description' must be a non-empty "
+            "string."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Validation helpers — unit tests with synthetic manifests
 # ---------------------------------------------------------------------------
 

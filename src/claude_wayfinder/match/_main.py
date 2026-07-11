@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,29 @@ from claude_wayfinder.match._overrides import (
     resolve_override,
 )
 from claude_wayfinder.match._types import Labels
+
+#: Exact (case-insensitive) DISPATCH_SHADOW values that disable shadow
+#: compute.  Anything else — absent, truthy, or malformed — fails open
+#: to ON; see ``_shadow_enabled``.
+_SHADOW_FALSEY_VALUES = frozenset({"0", "false", "no"})
+
+
+def _shadow_enabled() -> bool:
+    """Determine whether shadow-route compute should run this call.
+
+    Reads the ``DISPATCH_SHADOW`` environment variable. The gate is
+    fail-open: an absent, truthy, or unrecognized/malformed value all
+    resolve to ON. Only an exact case-insensitive match of
+    ``{"0", "false", "no"}`` resolves to OFF, matching this module's
+    other never-break-live-dispatch conventions.
+
+    Returns:
+        True if shadow compute should run, False to skip it entirely.
+    """
+    value = os.environ.get("DISPATCH_SHADOW")
+    if value is None:
+        return True
+    return value.strip().lower() not in _SHADOW_FALSEY_VALUES
 
 
 def _build_shadow_record(
@@ -256,30 +280,34 @@ def main(argv: list[str] | None = None) -> None:
     # --- Compose decision ---
     result = decide(scored_agents, scored_skills, features, entries)
 
-    # --- Shadow compute (non-fatal: any failure must not alter stdout) ---
+    # --- Shadow compute (telemetry-only; gated by DISPATCH_SHADOW) ---
+    # When the gate is OFF, shadow compute is skipped entirely (not
+    # computed-then-discarded) — compose_route is never invoked and the
+    # log entry omits the "shadow" key. See _shadow_enabled().
     shadow_record: dict[str, Any] | None = None
-    try:
-        catalog_agent_names: frozenset[str] = frozenset(
-            se.entry.name for se in scored_agents
-        )
-        labels: Labels = parse_labels(context)
-        diag: dict[str, Any] = {}
-        shadow = compose_route(
-            labels,
-            scored_agents,
-            scored_skills,
-            features,
-            entries,
-            catalog_agent_names,
-            diagnostics=diag,
-        )
-        shadow_record = _build_shadow_record(labels, result, shadow, diag)
-    except Exception as exc:   # shadow must never break the live dispatch
-        print(
-            f"[dispatch] shadow compute failed: {exc}",
-            file=sys.stderr,
-        )
-        shadow_record = None
+    if _shadow_enabled():
+        try:
+            catalog_agent_names: frozenset[str] = frozenset(
+                se.entry.name for se in scored_agents
+            )
+            labels: Labels = parse_labels(context)
+            diag: dict[str, Any] = {}
+            shadow = compose_route(
+                labels,
+                scored_agents,
+                scored_skills,
+                features,
+                entries,
+                catalog_agent_names,
+                diagnostics=diag,
+            )
+            shadow_record = _build_shadow_record(labels, result, shadow, diag)
+        except Exception as exc:   # shadow must never break live dispatch
+            print(
+                f"[dispatch] shadow compute failed: {exc}",
+                file=sys.stderr,
+            )
+            shadow_record = None
 
     # --- Log decision (non-fatal: log failure never blocks stdout output) ---
     _write_log_entry(

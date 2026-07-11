@@ -243,6 +243,13 @@ default.
 PY="${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe"   # Windows
 # PY="${CLAUDE_PLUGIN_DATA}/venv/bin/python"          # POSIX
 
+# DISPATCH_SHADOW gates the telemetry-only shadow-route compute (the v3
+# route computed and logged beside the live lexical decision — see "Two-
+# axis labels" above). It never affects the live decision. Sourced from
+# the userConfig `shadow_enabled` toggle in plugin.json so users can opt
+# out without touching source.
+export DISPATCH_SHADOW="${user_config.shadow_enabled}"
+
 # Real-catalog mode — default; resolves to the canonical catalog
 echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
   | "$PY" -m claude_wayfinder dispatch
