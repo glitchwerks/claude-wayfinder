@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-07-11
+
+### Fixed
+
+- **`matcher_version` stamped `"unknown"` on pip-installed builds** (#460,
+  PR #461). It was derived from a runtime `git rev-parse --short HEAD`
+  lookup, which fails when the package runs from an installed wheel (no
+  `.git` in `site-packages`) — so essentially all real consumer traffic
+  (and the enabled plugin venv) logged `matcher_version: "unknown"`,
+  defeating build attribution for shadow/live telemetry. Fixed by adding
+  an `importlib.metadata.version("claude-wayfinder")` fallback between
+  the git lookup and the `"unknown"` default: git SHA stays primary for
+  dev checkouts, installed builds now stamp the distribution version
+  (e.g. `1.3.1`), and `"unknown"` is returned only when both lookups
+  fail.
+
 ## [1.3.0] - 2026-07-11
 
 Minor release adding shadow-mode dispatch telemetry. **Live routing
