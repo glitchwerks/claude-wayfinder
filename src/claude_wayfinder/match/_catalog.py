@@ -17,6 +17,7 @@ Session ID resolution (issue #296) uses a four-tier precedence chain:
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import os
 import subprocess
@@ -298,11 +299,12 @@ def _get_matcher_version() -> str:
     """Return a stable identifier for the current matcher revision.
 
     Attempts to read the short git SHA from the repository that contains
-    this file.  Falls back to the string ``"unknown"`` on any failure
-    (missing git binary, not a git repo, subprocess timeout, etc.).
+    this file. Falls back to the installed distribution version when git
+    metadata is unavailable, then to the string ``"unknown"`` if both
+    lookups fail.
 
     Returns:
-        Short git SHA string, or ``"unknown"`` if unavailable.
+        Short git SHA string, installed dist version, or ``"unknown"``.
     """
     try:
         result = subprocess.run(
@@ -315,6 +317,10 @@ def _get_matcher_version() -> str:
         if result.returncode == 0:
             return result.stdout.strip()
     except Exception:  # any failure is acceptable here
+        pass
+    try:
+        return importlib.metadata.version("claude-wayfinder")
+    except Exception:
         pass
     return "unknown"
 
