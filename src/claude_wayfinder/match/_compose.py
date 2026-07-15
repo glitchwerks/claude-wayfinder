@@ -255,7 +255,7 @@ def _github_tool_signal(features: Features) -> str | None:
 # ---------------------------------------------------------------------------
 
 _TEST_AUTHORING_QUALIFIER_STEMS: frozenset[str] = frozenset(
-    {"first", "red", "pytest", "vitest"}
+    {"first", "red", "pytest", "vitest", "write"}
 )
 
 
@@ -269,9 +269,9 @@ def _test_authoring_signal(features: Features) -> bool:
     ``"test-first"`` token (it survives stemming as a single token), OR
     contains both ``"test"`` (the stem of "test"/"tests") and at least
     one test-authoring qualifier stem: ``"first"``, ``"red"``,
-    ``"pytest"``, or ``"vitest"``. Requiring a qualifier alongside the
-    bare ``"test"`` stem avoids firing on plain implementation tasks
-    that mention tests only incidentally -- and deliberately excludes
+    ``"pytest"``, ``"vitest"``, or ``"write"``. Requiring a qualifier
+    alongside the bare ``"test"`` stem avoids firing on plain implementation
+    tasks that mention tests only incidentally -- and deliberately excludes
     ``"fail"``/"failing", since a build task can legitimately mention a
     failing test without being a test-authoring task.
 
