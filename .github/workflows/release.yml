@@ -17,7 +17,7 @@ jobs:
     name: Build distributions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # verified 2026-05-17 via gh api repos/astral-sh/setup-uv/git/refs/tags/v8.1.0
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
@@ -94,7 +94,7 @@ jobs:
     permissions:
       contents: write  # Required to create GitHub Releases
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
         with:
