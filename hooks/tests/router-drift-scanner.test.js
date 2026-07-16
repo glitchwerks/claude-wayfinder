@@ -1,3 +1,4 @@
+// FROZEN — do not edit without going back through test-implementer (see issue #439).
 /**
  * Tests for hooks/router-drift-scanner.js (Stop hook — v5 §3.3.1/3.3.2).
  *
@@ -454,6 +455,237 @@ test("detectCatalogDegraded: [CATALOG ERROR] in additionalContext attachment = t
 test("detectCatalogDegraded: empty entries = false", () => {
   const { detectCatalogDegraded } = loadLib();
   assert.equal(detectCatalogDegraded([]), false);
+});
+
+// ---------------------------------------------------------------------------
+// FROZEN — do not edit without going back through test-implementer (see
+// issue #439).
+//
+// detectCatalogDegraded — false-positive regression (issue #439)
+//
+// Root cause: the naive substring match fires on the literal string
+// "[CATALOG ERROR]" appearing anywhere in assistant text or attachment
+// content, including prose that merely *describes* the failure mode (e.g.
+// skills/dispatch/SKILL.md: "the skill emits a `[CATALOG ERROR]` banner on
+// stderr"). Those skill bodies load into session context as attachments on
+// essentially every /dispatch invocation, producing a false positive on
+// ~every dispatch session.
+//
+// Observable contract these tests pin (per issue #439 acceptance criteria):
+//   - A transcript whose ONLY [CATALOG ERROR] occurrences are backtick-wrapped
+//     prose / doc mentions (mid-sentence, not a raw line-start banner) must
+//     NOT produce a match — detectCatalogDegraded() returns false.
+//   - A transcript containing a REAL raw stderr banner — a line starting
+//     with "[CATALOG ERROR]" (line-start, not embedded mid-sentence, not
+//     backtick-wrapped) — must produce a match — detectCatalogDegraded()
+//     returns true. "Line start" means the start of a line within the text
+//     (preceded by nothing, or by a newline), not merely the start of the
+//     whole string.
+//   - A marker embedded mid-sentence without backticks, but still not at the
+//     start of its line, must NOT produce a match — pins that line-start
+//     anchoring (not mere literal presence) is what distinguishes a genuine
+//     banner from documentation prose, regardless of which specific fix
+//     strategy (line-start anchoring, surrounding-token requirement, or
+//     code-span exclusion) the implementation chooses.
+// ---------------------------------------------------------------------------
+
+const REAL_BANNER =
+  "[CATALOG ERROR] Catalog not found at ~/.claude/state/dispatch-catalog.json — run `claude-wayfinder catalog build`";
+
+test("detectCatalogDegraded: backtick-wrapped prose mention in assistant text = false (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  // Verbatim phrasing from skills/dispatch/SKILL.md — describes the failure
+  // mode in prose, mid-sentence, wrapped in backticks. Not a raw banner.
+  const entries = [
+    assistantTextEntry(
+      "If neither --demo nor a resolvable catalog is present the skill emits a `[CATALOG ERROR]` banner on stderr and exits non-zero."
+    ),
+  ];
+  assert.equal(detectCatalogDegraded(entries), false);
+});
+
+test("detectCatalogDegraded: backtick-wrapped prose mention in skill-doc attachment content = false (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  // Skill-doc bodies (e.g. skills/dispatch/SKILL.md, skills/router-health/SKILL.md)
+  // load into session context as attachments whenever the skill runs.
+  const entries = [
+    {
+      type: "attachment",
+      attachment: {
+        type: "skill_doc",
+        content:
+          "Catalog path resolution: --catalog-path flag > $DISPATCH_CATALOG_PATH env var > canonical default. " +
+          "If neither --demo nor a resolvable catalog is present the skill emits a `[CATALOG ERROR]` and exits non-zero.",
+      },
+    },
+  ];
+  assert.equal(detectCatalogDegraded(entries), false);
+});
+
+test("detectCatalogDegraded: backtick-wrapped prose mention in additionalContext attachment = false (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  const entries = [
+    {
+      type: "attachment",
+      attachment: {
+        type: "hook_success",
+        additionalContext:
+          "Reminder: router-health checks for a `[CATALOG ERROR]` banner in prior sessions before recommending a rebuild.",
+      },
+    },
+  ];
+  assert.equal(detectCatalogDegraded(entries), false);
+});
+
+test("detectCatalogDegraded: session with ONLY prose mentions across multiple entries = false (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  // Simulates a realistic /dispatch session: the skill body attachment loads,
+  // the router relays no real banner, and router-health's doc is also present.
+  const entries = [
+    {
+      type: "attachment",
+      attachment: {
+        type: "skill_doc",
+        content: "...the skill emits a `[CATALOG ERROR]` banner on stderr and exits non-zero.",
+      },
+    },
+    assistantTextEntry("Dispatch ran successfully — no catalog issues found."),
+    {
+      type: "attachment",
+      attachment: {
+        type: "skill_doc",
+        additionalContext: "router-health also references the `[CATALOG ERROR]` failure mode.",
+      },
+    },
+  ];
+  assert.equal(detectCatalogDegraded(entries), false);
+});
+
+test("detectCatalogDegraded: real raw line-start banner in attachment stdout = true (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  const entries = [
+    {
+      type: "attachment",
+      attachment: {
+        type: "hook_success",
+        stdout: REAL_BANNER,
+      },
+    },
+  ];
+  assert.equal(detectCatalogDegraded(entries), true);
+});
+
+test("detectCatalogDegraded: real raw line-start banner relayed verbatim in assistant text = true (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  // The router relays the genuine stderr banner verbatim to the user.
+  const entries = [assistantTextEntry(REAL_BANNER)];
+  assert.equal(detectCatalogDegraded(entries), true);
+});
+
+test("detectCatalogDegraded: real banner on a later line of a multi-line text block = true (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  // "Line start" means start-of-line, not start-of-string — the banner can
+  // follow other text as long as it starts its own line.
+  const entries = [
+    assistantTextEntry(`Session summary:\n${REAL_BANNER}\n(end of output)`),
+  ];
+  assert.equal(detectCatalogDegraded(entries), true);
+});
+
+test("detectCatalogDegraded: real banner in additionalContext attachment = true (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  const entries = [
+    {
+      type: "attachment",
+      attachment: {
+        type: "hook_success",
+        additionalContext: REAL_BANNER,
+      },
+    },
+  ];
+  assert.equal(detectCatalogDegraded(entries), true);
+});
+
+test("detectCatalogDegraded: marker mid-sentence without backticks but NOT at line start = false (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  // Not backtick-wrapped, but also not a raw banner — the marker is embedded
+  // mid-sentence, preceded by other text on the same line. A real banner is
+  // always the first thing on its line.
+  const entries = [
+    assistantTextEntry(
+      "Note: sessions sometimes show a [CATALOG ERROR] banner in the middle of unrelated text without indicating a real failure."
+    ),
+  ];
+  assert.equal(detectCatalogDegraded(entries), false);
+});
+
+test("detectCatalogDegraded: session mixing a prose mention and a real banner = true (issue #439)", () => {
+  const { detectCatalogDegraded } = loadLib();
+  // The presence of unrelated prose must not suppress detection of a genuine
+  // banner elsewhere in the same session.
+  const entries = [
+    {
+      type: "attachment",
+      attachment: {
+        type: "skill_doc",
+        content: "...the skill emits a `[CATALOG ERROR]` banner on stderr and exits non-zero.",
+      },
+    },
+    {
+      type: "attachment",
+      attachment: {
+        type: "hook_success",
+        stdout: REAL_BANNER,
+      },
+    },
+  ];
+  assert.equal(detectCatalogDegraded(entries), true);
+});
+
+// ---------------------------------------------------------------------------
+// scanSession — catalog_degraded_session must reflect the fixed detector
+// (issue #439)
+// ---------------------------------------------------------------------------
+
+test("scanSession: session with only skill-doc prose mentions produces NO catalog_degraded_session event (issue #439)", () => {
+  const { scanSession } = loadLib();
+  const entries = [
+    {
+      type: "attachment",
+      attachment: {
+        type: "skill_doc",
+        content: "...the skill emits a `[CATALOG ERROR]` banner on stderr and exits non-zero.",
+      },
+    },
+    dispatchAuditEntry("delegate", "writer"),
+  ];
+  const result = scanSession({ entries, sessionId: "sess-439-false-positive" });
+  const degraded = result.filter((e) => e.type === "catalog_degraded_session");
+  assert.equal(
+    degraded.length,
+    0,
+    "catalog_degraded_session must not fire when the only marker occurrences are skill-doc prose"
+  );
+});
+
+test("scanSession: session with a real raw banner still produces catalog_degraded_session event (issue #439)", () => {
+  const { scanSession } = loadLib();
+  const entries = [
+    {
+      type: "attachment",
+      attachment: {
+        type: "hook_success",
+        stdout: REAL_BANNER,
+      },
+    },
+  ];
+  const result = scanSession({ entries, sessionId: "sess-439-true-positive" });
+  const degraded = result.filter((e) => e.type === "catalog_degraded_session");
+  assert.equal(
+    degraded.length,
+    1,
+    "catalog_degraded_session must still fire for a genuine raw stderr banner"
+  );
 });
 
 // ---------------------------------------------------------------------------
