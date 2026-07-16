@@ -227,14 +227,14 @@ function detectNeedsMoreDetailRepeat(events) {
  * and relayed to the user by the router as a verbatim text block. It can also
  * appear in hook additionalContext attachments (from refresh-catalog-on-stale).
  *
- * Algorithm: scan all entries (not just assistant) for the literal string
+ * Algorithm: scan all entries (not just assistant) for a line beginning with
  * "[CATALOG ERROR]" in any text or attachment content field.
  *
  * @param {object[]} entries  Raw transcript entries (before parseTranscript).
  * @returns {boolean}
  */
 function detectCatalogDegraded(entries) {
-  const MARKER = "[CATALOG ERROR]";
+  const CATALOG_ERROR_LINE = /^\[CATALOG ERROR\]/m;
 
   for (const entry of entries) {
     if (!entry) continue;
@@ -245,7 +245,7 @@ function detectCatalogDegraded(entries) {
       const content = Array.isArray(msg?.content) ? msg.content : [];
       for (const item of content) {
         if (item && item.type === "text" && typeof item.text === "string") {
-          if (item.text.includes(MARKER)) return true;
+          if (CATALOG_ERROR_LINE.test(item.text)) return true;
         }
       }
     }
@@ -253,11 +253,14 @@ function detectCatalogDegraded(entries) {
     // Check attachment entries (hook additionalContext arrives as attachments)
     if (entry.type === "attachment" && entry.attachment) {
       const att = entry.attachment;
-      if (typeof att.content === "string" && att.content.includes(MARKER)) return true;
-      if (typeof att.additionalContext === "string" && att.additionalContext.includes(MARKER))
+      if (typeof att.content === "string" && CATALOG_ERROR_LINE.test(att.content)) return true;
+      if (
+        typeof att.additionalContext === "string" &&
+        CATALOG_ERROR_LINE.test(att.additionalContext)
+      )
         return true;
       // Also check nested stdout in hook_success shape
-      if (typeof att.stdout === "string" && att.stdout.includes(MARKER)) return true;
+      if (typeof att.stdout === "string" && CATALOG_ERROR_LINE.test(att.stdout)) return true;
     }
   }
 
