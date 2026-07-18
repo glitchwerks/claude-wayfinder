@@ -787,6 +787,8 @@ test("issue #345: DISPATCH_HOOK_DEBUG dump lands in CLAUDE_PLUGIN_DATA, not os.t
   // directly (it may be a subdir of tmpdir, which is fine; the key is the file
   // must be inside CLAUDE_PLUGIN_DATA, not a flat child of os.tmpdir()).
   const privateDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "345-plugin-data-"));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "345-dispatch-log-"));
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   try {
     const payload = {
       tool_name: "Bash",
@@ -798,7 +800,8 @@ test("issue #345: DISPATCH_HOOK_DEBUG dump lands in CLAUDE_PLUGIN_DATA, not os.t
     const result = runHook(payload, {
       DISPATCH_HOOK_DEBUG: "1",
       CLAUDE_PLUGIN_DATA: privateDataDir,
-      // No DISPATCH_LOG_PATH — we don't care about the normal log for this test.
+      // Isolate the normal log; this test only asserts the debug dump location.
+      DISPATCH_LOG_PATH: logPath,
     });
     assert.equal(result.status, 0, "hook must exit 0 with debug enabled: " + result.stderr);
 
@@ -864,5 +867,6 @@ test("issue #345: DISPATCH_HOOK_DEBUG dump lands in CLAUDE_PLUGIN_DATA, not os.t
   } finally {
     // Always clean up the private dir, even if the test fails.
     fs.rmSync(privateDataDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
