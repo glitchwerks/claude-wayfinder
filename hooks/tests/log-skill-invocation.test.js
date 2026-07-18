@@ -500,13 +500,14 @@ test("log-skill-invocation: exits 0 even on a bad sidecar path (fail-open)", () 
     process.platform === "win32"
       ? "Z:\\nonexistent-drive\\sidecar.jsonl"
       : "/dev/null/x/sidecar.jsonl";
+  const logPath = path.join(tmpDir, "dispatch-log.jsonl");
   const payload = {
     session_id: "test-session-104",
     tool_name: "Skill",
     tool_input: { skill: "dispatch" },
     conversation_history: [],
   };
-  const result = runHook(payload, { SKILL_SIDECAR_PATH: badPath });
+  const result = runHook(payload, { SKILL_SIDECAR_PATH: badPath, DISPATCH_LOG_PATH: logPath });
   assert.equal(result.exitCode, 0);
 });
 
