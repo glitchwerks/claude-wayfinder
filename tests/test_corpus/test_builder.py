@@ -15,6 +15,10 @@ Coverage:
   10. Manifest sha256 matches the written artifact
   11. No raw task_description text in the manifest (privacy)
   12. Empty corpus (no organic entries) handled gracefully
+  15. shadow_only filter — only truthy top-level `shadow` key entries eligible
+  16. exclude_corpus_ids filter — drops entries by 1-based source line number
+  17. shadow_only and exclude_corpus_ids are additive to existing filters and
+      to each other; stratification/cap logic is unaffected by their use
 """
 
 from __future__ import annotations
@@ -29,6 +33,12 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 
+# Sentinel distinguishing "no shadow arg passed" (omit the key entirely,
+# matching every entry produced before the shadow filter existed) from an
+# explicit ``shadow=None`` (key present, value None).
+_SHADOW_NOT_SET = object()
+
+
 def _md(
     session_id: str = "real-session",
     task_description: str = "fix the login bug in auth module",
@@ -38,6 +48,7 @@ def _md(
     include_file_paths: bool = False,
     ts: str = "2026-06-01T10:00:00.000000Z",
     attribution_source: str = "post_tool_use_hook",
+    shadow: Any = _SHADOW_NOT_SET,
 ) -> dict[str, Any]:
     """Build a synthetic matcher_decision entry representing an organic event.
 
@@ -57,6 +68,11 @@ def _md(
         attribution_source: Hook stamp that marks organic production entries.
             Defaults to ``"post_tool_use_hook"`` so callers get an organic
             entry without having to spell out the constant.
+        shadow: Value for the top-level ``shadow`` key.  Left unset by
+            default so the entry has no ``shadow`` key at all (matching
+            every pre-existing fixture).  Pass any value — including
+            ``None``, ``{}``, or ``False`` — to add an explicit ``shadow``
+            key with that value.
 
     Returns:
         A dict shaped like a ``matcher_decision`` log entry.
@@ -65,7 +81,7 @@ def _md(
     if include_file_paths:
         inp["file_paths"] = ["src/main.py"]
 
-    return {
+    entry: dict[str, Any] = {
         "type": "matcher_decision",
         "ts": ts,
         "session_id": session_id,
@@ -81,6 +97,9 @@ def _md(
         "matcher_version": "abc1234",
         "attribution_source": attribution_source,
     }
+    if shadow is not _SHADOW_NOT_SET:
+        entry["shadow"] = shadow
+    return entry
 
 
 def _write_jsonl(tmp_path: Path, entries: list[Any], filename: str = "dispatch-log.jsonl") -> Path:
@@ -751,3 +770,243 @@ def test_manifest_log_path_is_home_relative() -> None:
         f"Expected log_path to start with ~/, got: {log_path_val!r}"
     )
     assert "\\" not in log_path_val, "log_path must use POSIX slashes"
+
+
+# ---------------------------------------------------------------------------
+# 15. shadow_only filter
+# ---------------------------------------------------------------------------
+
+
+def test_shadow_only_includes_truthy_shadow_entries(tmp_path: Path) -> None:
+    """shadow_only=True includes only entries with a truthy top-level shadow key.
+
+    Entries with no ``shadow`` key, ``shadow=None``, ``shadow={}``, and
+    ``shadow=False`` are all excluded; a non-empty dict and ``True`` are
+    both eligible (truthy).
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id="s1", shadow={"foo": "bar"}),  # truthy dict -> included
+        _md(session_id="s2", shadow=True),  # truthy bool -> included
+        _md(session_id="s3"),  # no shadow key -> excluded
+        _md(session_id="s4", shadow=None),  # None -> excluded
+        _md(session_id="s5", shadow={}),  # empty dict -> excluded
+        _md(session_id="s6", shadow=False),  # False -> excluded
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    result = build_corpus(log, output_dir=None, shadow_only=True)
+
+    assert result["total_in_corpus"] == 2
+    session_ids = {e["session_id"] for e in result["entries"]}
+    assert session_ids == {"s1", "s2"}
+
+
+def test_shadow_only_false_matches_default_behavior(tmp_path: Path) -> None:
+    """shadow_only=False reproduces the pre-existing (no-filter) behavior exactly."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id="s1", shadow={"foo": "bar"}),
+        _md(session_id="s2"),
+        _md(session_id="s3", shadow=None),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    baseline = build_corpus(log, output_dir=None)
+    explicit_off = build_corpus(log, output_dir=None, shadow_only=False)
+
+    assert baseline["total_in_corpus"] == 3
+    assert explicit_off["total_in_corpus"] == 3
+    assert [e["corpus_id"] for e in baseline["entries"]] == [
+        e["corpus_id"] for e in explicit_off["entries"]
+    ]
+
+
+def test_shadow_only_defaults_to_false(tmp_path: Path) -> None:
+    """Omitting shadow_only entirely behaves the same as shadow_only=False.
+
+    This is the regression guard: existing callers that never pass the new
+    keyword argument must see no behavior change.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [_md(session_id="s1", shadow={"x": 1}), _md(session_id="s2")]
+    log = _write_jsonl(tmp_path, entries)
+
+    omitted = build_corpus(log, output_dir=None)
+    explicit = build_corpus(log, output_dir=None, shadow_only=False)
+
+    assert omitted["total_in_corpus"] == 2
+    assert explicit["total_in_corpus"] == 2
+    assert [e["corpus_id"] for e in omitted["entries"]] == [
+        e["corpus_id"] for e in explicit["entries"]
+    ]
+
+
+def test_shadow_filter_is_additive_to_organic_session_filter(tmp_path: Path) -> None:
+    """A fixture entry (empty session_id) with a truthy shadow key is still excluded."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id="", shadow={"x": 1}),  # fixture, truthy shadow -> still excluded
+        _md(session_id="s1", shadow={"x": 1}),  # organic, truthy shadow -> included
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    result = build_corpus(log, output_dir=None, shadow_only=True)
+
+    assert result["total_organic"] == 1
+    assert result["total_in_corpus"] == 1
+    assert result["entries"][0]["session_id"] == "s1"
+
+
+def test_shadow_filter_is_additive_to_task_description_filter(tmp_path: Path) -> None:
+    """An entry with empty task_description and a truthy shadow key is still excluded."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id="s1", task_description="", shadow={"x": 1}),  # excluded: empty td
+        _md(session_id="s2", task_description="fix bug", shadow={"x": 1}),  # included
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    result = build_corpus(log, output_dir=None, shadow_only=True)
+
+    assert result["total_in_corpus"] == 1
+    assert result["entries"][0]["session_id"] == "s2"
+
+
+# ---------------------------------------------------------------------------
+# 16. exclude_corpus_ids filter
+# ---------------------------------------------------------------------------
+
+
+def test_exclude_corpus_ids_drops_matching_line_numbers(tmp_path: Path) -> None:
+    """exclude_corpus_ids removes entries whose corpus_id (1-based source line) matches."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id="s1"),  # line 1 -> corpus_id 1
+        _md(session_id="s2"),  # line 2 -> corpus_id 2
+        _md(session_id="s3"),  # line 3 -> corpus_id 3
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(log, output_dir=None, exclude_corpus_ids={2})
+
+    assert result["total_in_corpus"] == 2
+    ids = [e["corpus_id"] for e in result["entries"]]
+    assert ids == [1, 3]
+
+
+def test_exclude_corpus_ids_empty_set_excludes_nothing(tmp_path: Path) -> None:
+    """An empty exclude_corpus_ids set behaves like no exclusion at all."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [_md(session_id=f"s{i}") for i in range(3)]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(log, output_dir=None, exclude_corpus_ids=set())
+    assert result["total_in_corpus"] == 3
+
+
+def test_exclude_corpus_ids_none_matches_default_behavior(tmp_path: Path) -> None:
+    """exclude_corpus_ids=None (or omitted) reproduces the pre-existing behavior exactly.
+
+    This is the regression guard: existing callers that never pass the new
+    keyword argument must see no behavior change.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [_md(session_id=f"s{i}") for i in range(3)]
+    log = _write_jsonl(tmp_path, entries)
+
+    omitted = build_corpus(log, output_dir=None)
+    explicit_none = build_corpus(log, output_dir=None, exclude_corpus_ids=None)
+
+    assert omitted["total_in_corpus"] == 3
+    assert explicit_none["total_in_corpus"] == 3
+    assert [e["corpus_id"] for e in omitted["entries"]] == [
+        e["corpus_id"] for e in explicit_none["entries"]
+    ]
+
+
+def test_exclude_corpus_ids_additive_to_organic_session_filter(tmp_path: Path) -> None:
+    """exclude_corpus_ids only removes entries that already survived organic filtering."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id=""),  # line 1: fixture, excluded regardless of exclude set
+        _md(session_id="s1"),  # line 2: organic eligible, corpus_id=2
+        _md(session_id="s2"),  # line 3: organic eligible, corpus_id=3
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    # Exclude line 1 (never eligible anyway) and line 3.
+    result = build_corpus(log, output_dir=None, exclude_corpus_ids={1, 3})
+
+    assert result["total_organic"] == 2
+    assert result["total_in_corpus"] == 1
+    assert result["entries"][0]["corpus_id"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 17. shadow_only and exclude_corpus_ids combine; stratification/cap unaffected
+# ---------------------------------------------------------------------------
+
+
+def test_shadow_only_and_exclude_corpus_ids_combine(tmp_path: Path) -> None:
+    """shadow_only and exclude_corpus_ids are ANDed — an entry must pass both."""
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id="s1", shadow={"a": 1}),  # line 1: truthy shadow, kept
+        _md(session_id="s2", shadow={"b": 2}),  # line 2: truthy shadow, but id excluded
+        _md(session_id="s3"),  # line 3: no shadow -> excluded by shadow filter
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(log, output_dir=None, shadow_only=True, exclude_corpus_ids={2})
+
+    assert result["total_in_corpus"] == 1
+    assert result["entries"][0]["corpus_id"] == 1
+    assert result["entries"][0]["session_id"] == "s1"
+
+
+def test_stratification_and_cap_apply_after_shadow_and_exclude_filters(
+    tmp_path: Path,
+) -> None:
+    """Existing per-cell cap and stratification logic still apply to filter survivors.
+
+    10 entries share one stratification cell and all carry a truthy shadow
+    key. Two are excluded by corpus_id, leaving 8 eligible; a floor of 3
+    must still cap the corpus at 3 entries, and every surviving entry must
+    carry the expected stratum and avoid the excluded corpus_ids.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(
+            session_id=f"s{i}",
+            decision="delegate",
+            task_description="fix bug",
+            shadow={"i": i},
+        )
+        for i in range(10)
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(
+        log,
+        output_dir=None,
+        sample_floor=3,
+        shadow_only=True,
+        exclude_corpus_ids={1, 2},
+    )
+
+    assert result["total_in_corpus"] == 3
+    for entry in result["entries"]:
+        assert entry["corpus_id"] not in {1, 2}
+        s = entry["stratum"]
+        assert s["decision_band"] == "delegate"
+        assert s["td_length_band"] == "short"
+        assert s["file_paths_present"] is False

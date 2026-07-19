@@ -24,7 +24,8 @@ Corpus artifact format (JSONL):
 
 Public API
 ----------
-- ``build_corpus(log_path, output_dir, sample_floor)``
+- ``build_corpus(log_path, output_dir, sample_floor, *, shadow_only,
+  exclude_corpus_ids)``
         → corpus result dict (entries, counts, strata, shortfalls)
 - ``write_corpus_artifact(result, output_dir)``
         → Path to the written JSONL file
@@ -177,12 +178,15 @@ def build_corpus(
     log_path: Path,
     output_dir: Path | None,  # noqa: ARG001  (reserved for future streaming write)
     sample_floor: int = DEFAULT_SAMPLE_FLOOR,
+    *,
+    shadow_only: bool = False,
+    exclude_corpus_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     """Build a stratified corpus from the dispatch log.
 
     Reads organic entries (non-empty session_id, non-empty task_description),
-    assigns strata, caps at ``sample_floor`` per cell (first-N selection),
-    and returns a result dict.
+    applies optional shadow and corpus ID filters, assigns strata, caps at
+    ``sample_floor`` per cell (first-N selection), and returns a result dict.
 
     The ``output_dir`` parameter is reserved for future streaming writes;
     currently the result is returned in-memory and written separately via
@@ -193,6 +197,10 @@ def build_corpus(
         output_dir:   Reserved; pass ``None``.
         sample_floor: Maximum entries per strata cell (and floor target).
                       Defaults to 30.
+        shadow_only: Include only entries with a truthy top-level ``shadow``
+                     value. Defaults to ``False``.
+        exclude_corpus_ids: Source-log line numbers to exclude. Defaults to
+                            ``None``.
 
     Returns:
         Dict with keys:
@@ -217,6 +225,20 @@ def build_corpus(
         if _get_td(e)
     ]
     total_filtered = total_organic - len(eligible)
+
+    # Apply optional filters before stratum assignment and per-cell capping.
+    if shadow_only:
+        eligible = [
+            (line_no, entry)
+            for line_no, entry in eligible
+            if entry.get("shadow")
+        ]
+    if exclude_corpus_ids:
+        eligible = [
+            (line_no, entry)
+            for line_no, entry in eligible
+            if line_no not in exclude_corpus_ids
+        ]
 
     # Assign corpus IDs: corpus_id = 1-based line number in the source log.
     # This is NOT a compact rank over the eligible list — excluded rows still
@@ -263,6 +285,20 @@ def build_corpus(
         _cell_key_str(k): v for k, v in per_cell_counts_raw.items()
     }
 
+    filter_rules = [
+        "include: type == matcher_decision",
+        "include: session_id non-empty (organic only)",
+        "exclude: empty task_description",
+    ]
+    if shadow_only:
+        filter_rules.append("include: top-level shadow value is truthy")
+    if exclude_corpus_ids:
+        filter_rules.append("exclude: corpus_id in exclude_corpus_ids")
+    filter_rules.append(
+        "cap: first sample_floor entries per "
+        "(decision_band × td_length_band × file_paths_present) cell"
+    )
+
     return {
         "total_organic": total_organic,
         "total_filtered": total_filtered,
@@ -273,13 +309,7 @@ def build_corpus(
         "generation_params": {
             "sample_floor": sample_floor,
             "log_path": _home_relative(log_path),
-            "filter_rules": [
-                "include: type == matcher_decision",
-                "include: session_id non-empty (organic only)",
-                "exclude: empty task_description",
-                "cap: first sample_floor entries per "
-                "(decision_band × td_length_band × file_paths_present) cell",
-            ],
+            "filter_rules": filter_rules,
         },
     }
 
