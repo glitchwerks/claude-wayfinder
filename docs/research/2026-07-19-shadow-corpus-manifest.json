@@ -1,0 +1,154 @@
+{
+  "total_in_corpus": 245,
+  "total_organic": 1478,
+  "total_filtered_empty_td": 209,
+  "strata_table": {
+    "delegate|long|fp=no": 20,
+    "self_handle|medium|fp=yes": 7,
+    "delegate|medium|fp=no": 30,
+    "advisory|long|fp=yes": 26,
+    "advisory|medium|fp=no": 15,
+    "delegate|medium|fp=yes": 15,
+    "self_handle|long|fp=yes": 30,
+    "delegate|long|fp=yes": 30,
+    "self_handle|very_long|fp=yes": 5,
+    "self_handle|long|fp=no": 9,
+    "delegate|very_long|fp=yes": 3,
+    "advisory|very_long|fp=yes": 5,
+    "needs_more_detail|medium|fp=no": 5,
+    "advisory|medium|fp=yes": 1,
+    "mixed_content|long|fp=yes": 1,
+    "needs_more_detail|long|fp=no": 3,
+    "self_handle_unaided|long|fp=yes": 2,
+    "self_handle|medium|fp=no": 28,
+    "self_handle_unaided|medium|fp=no": 5,
+    "self_handle_unaided|medium|fp=yes": 3,
+    "advisory|long|fp=no": 2
+  },
+  "shortfall_table": [
+    {
+      "cell": "advisory|medium|fp=yes",
+      "count": 1,
+      "floor": 30,
+      "shortfall": 29
+    },
+    {
+      "cell": "mixed_content|long|fp=yes",
+      "count": 1,
+      "floor": 30,
+      "shortfall": 29
+    },
+    {
+      "cell": "self_handle_unaided|long|fp=yes",
+      "count": 2,
+      "floor": 30,
+      "shortfall": 28
+    },
+    {
+      "cell": "advisory|long|fp=no",
+      "count": 2,
+      "floor": 30,
+      "shortfall": 28
+    },
+    {
+      "cell": "delegate|very_long|fp=yes",
+      "count": 3,
+      "floor": 30,
+      "shortfall": 27
+    },
+    {
+      "cell": "needs_more_detail|long|fp=no",
+      "count": 3,
+      "floor": 30,
+      "shortfall": 27
+    },
+    {
+      "cell": "self_handle_unaided|medium|fp=yes",
+      "count": 3,
+      "floor": 30,
+      "shortfall": 27
+    },
+    {
+      "cell": "self_handle|very_long|fp=yes",
+      "count": 5,
+      "floor": 30,
+      "shortfall": 25
+    },
+    {
+      "cell": "advisory|very_long|fp=yes",
+      "count": 5,
+      "floor": 30,
+      "shortfall": 25
+    },
+    {
+      "cell": "needs_more_detail|medium|fp=no",
+      "count": 5,
+      "floor": 30,
+      "shortfall": 25
+    },
+    {
+      "cell": "self_handle_unaided|medium|fp=no",
+      "count": 5,
+      "floor": 30,
+      "shortfall": 25
+    },
+    {
+      "cell": "self_handle|medium|fp=yes",
+      "count": 7,
+      "floor": 30,
+      "shortfall": 23
+    },
+    {
+      "cell": "self_handle|long|fp=no",
+      "count": 9,
+      "floor": 30,
+      "shortfall": 21
+    },
+    {
+      "cell": "advisory|medium|fp=no",
+      "count": 15,
+      "floor": 30,
+      "shortfall": 15
+    },
+    {
+      "cell": "delegate|medium|fp=yes",
+      "count": 15,
+      "floor": 30,
+      "shortfall": 15
+    },
+    {
+      "cell": "delegate|long|fp=no",
+      "count": 20,
+      "floor": 30,
+      "shortfall": 10
+    },
+    {
+      "cell": "advisory|long|fp=yes",
+      "count": 26,
+      "floor": 30,
+      "shortfall": 4
+    },
+    {
+      "cell": "self_handle|medium|fp=no",
+      "count": 28,
+      "floor": 30,
+      "shortfall": 2
+    }
+  ],
+  "format_spec": "JSONL; one JSON object per line; fields: original log entry fields + corpus_id (int, 1-based line number in the source dispatch-log.jsonl at generation time; unique and traceable, NOT dense/sequential \u2014 excluded rows still consume line numbers) + stratum (dict: decision_band str, td_length_band str, file_paths_present bool); encoding: UTF-8; entries: organic matcher_decision only, non-empty task_description, capped at sample_floor per (decision_band, td_length_band, file_paths_present) cell; ordering: file order within each cell (first N kept when cap applied)",
+  "sha256": "25d048c51879eb10bfa6941df5eae709d70e6b2bc2e73e62f78ee780d2511b13",
+  "artifact_path": "~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl",
+  "generation_params": {
+    "sample_floor": 30,
+    "log_path": "~/.claude/state/dispatch-log.jsonl",
+    "filter_rules": [
+      "include: type == matcher_decision",
+      "include: session_id non-empty (organic only)",
+      "exclude: empty task_description",
+      "join: shadow from nearest preceding python_matcher twin in session",
+      "include: top-level shadow value is truthy",
+      "exclude: corpus_id in exclude_corpus_ids",
+      "cap: first sample_floor entries per (decision_band \u00d7 td_length_band \u00d7 file_paths_present) cell"
+    ]
+  }
+}
