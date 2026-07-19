@@ -12,6 +12,9 @@ Options
                          (default: ~/.claude/state/wayfinder-corpus/2026-06-12/).
     --sample-floor N     Per-cell sample floor (default: 30).
     --profile-only       Run profiling only; do not build corpus.
+    --shadow-only        Include only shadow-attributed entries.
+    --exclude-gold-labels-file PATH
+                         Exclude corpus IDs listed in a gold-labels JSONL file.
     --manifest-out PATH  Write manifest JSON to this path (repo-safe;
                          default: docs/research/2026-06-12-corpus-manifest.json).
 
@@ -61,6 +64,33 @@ def _default_log_path() -> Path:
 def _default_output_dir() -> Path:
     """Resolve the default local corpus artifact directory."""
     return Path.home() / ".claude" / "state" / "wayfinder-corpus" / "2026-06-12"
+
+
+def _load_excluded_corpus_ids(path: Path) -> set[int]:
+    """Load corpus IDs from a gold-labels JSONL file.
+
+    Args:
+        path: Path to the gold-labels JSONL file.
+
+    Returns:
+        The set of integer corpus IDs found in valid rows.
+    """
+    corpus_ids: set[int] = set()
+    with path.open(encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            corpus_id = row.get("corpus_id")
+            if type(corpus_id) is int:
+                corpus_ids.add(corpus_id)
+    return corpus_ids
 
 
 def _print_profile_report(profile: dict, output_file=None) -> None:
@@ -211,6 +241,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Run profiling only; skip corpus construction.",
     )
     parser.add_argument(
+        "--shadow-only",
+        action="store_true",
+        default=False,
+        help="Include only shadow-attributed entries.",
+    )
+    parser.add_argument(
+        "--exclude-gold-labels-file",
+        type=str,
+        default=None,
+        help="Path to a gold-labels JSONL file whose corpus IDs are excluded.",
+    )
+    parser.add_argument(
         "--manifest-out",
         type=str,
         default=None,
@@ -240,7 +282,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Step 2: Build corpus
-    result = build_corpus(log_path, output_dir=None, sample_floor=sample_floor)
+    exclude_corpus_ids = (
+        _load_excluded_corpus_ids(Path(args.exclude_gold_labels_file))
+        if args.exclude_gold_labels_file
+        else None
+    )
+    result = build_corpus(
+        log_path,
+        output_dir=None,
+        sample_floor=sample_floor,
+        shadow_only=args.shadow_only,
+        exclude_corpus_ids=exclude_corpus_ids,
+    )
     _print_corpus_report(result, sample_floor)
 
     # Step 3: Write artifact locally
