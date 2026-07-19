@@ -1,11 +1,12 @@
-"""Tests for two new CLI flags on ``scripts/corpus/__main__.py`` (issue #468).
+"""Tests for CLI flags on ``scripts/corpus/__main__.py`` (issues #468, #479).
 
 These tests are written BEFORE the implementation exists — they exercise the
 CLI *plumbing* only.  ``build_corpus()`` itself already supports
-``shadow_only`` and ``exclude_corpus_ids`` keyword-only parameters (merged in
-PR #477) and is fully covered by ``tests/test_corpus/test_builder.py``; these
-tests never assert on filtering behavior, only on what the CLI passes through
-to a mocked ``build_corpus``.
+``shadow_only``, ``exclude_corpus_ids`` (merged in PR #477) and
+``join_shadow_from_twins`` (merged in PR #480) as keyword-only parameters,
+and is fully covered by ``tests/test_corpus/test_builder.py``; these tests
+never assert on filtering/joining behavior, only on what the CLI passes
+through to a mocked ``build_corpus``.
 
 New flags under test
 ---------------------
@@ -22,6 +23,15 @@ New flags under test
         ``build_corpus(..., exclude_corpus_ids=<that set>)``.  When omitted,
         ``exclude_corpus_ids=None`` (unchanged default behavior).
 
+    --join-shadow-from-twins
+        Boolean flag (``action="store_true"``, default ``False``), mirroring
+        the ``--shadow-only`` shape exactly.  Passed straight through as
+        ``build_corpus(..., join_shadow_from_twins=args.join_shadow_from_twins)``.
+        Not yet wired at the CLI layer as of issue #468 — this file is the
+        frozen contract the CLI implementation must satisfy (issue #479's
+        ``join_shadow_from_twins`` parameter already exists on
+        ``build_corpus()`` itself; only CLI wiring is under test here).
+
 Malformed gold-labels lines (author's design choice)
 -----------------------------------------------------
 Blank lines, invalid JSON, and lines missing the ``corpus_id`` key are
@@ -33,14 +43,22 @@ skip-and-warn or hard-fail; write ONE test").
 
 Coverage map
 ------------
-  1. ``--help`` lists both new flags.
+  1. ``--help`` lists all three flags (``--shadow-only``,
+     ``--exclude-gold-labels-file``, ``--join-shadow-from-twins``).
   2. Omitting ``--shadow-only`` -> ``build_corpus(..., shadow_only=False)``.
   3. Passing ``--shadow-only`` -> ``build_corpus(..., shadow_only=True)``.
   4. Omitting ``--exclude-gold-labels-file`` -> ``exclude_corpus_ids=None``.
   5. Passing ``--exclude-gold-labels-file`` -> the exact ``set[int]`` of
      ``corpus_id`` values read from the file.
   6. Malformed/empty lines in the gold-labels file are skipped, not fatal.
-  7. Both flags combined reach ``build_corpus`` correctly at the same time.
+  7. Both pre-existing flags combined reach ``build_corpus`` correctly at
+     the same time.
+  8. Omitting ``--join-shadow-from-twins`` ->
+     ``build_corpus(..., join_shadow_from_twins=False)``.
+  9. Passing ``--join-shadow-from-twins`` ->
+     ``build_corpus(..., join_shadow_from_twins=True)``.
+  10. All three flags combined reach ``build_corpus`` correctly at the same
+      time.
 """
 
 from __future__ import annotations
@@ -190,14 +208,14 @@ def mock_build_corpus(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# 1. --help lists both new flags
+# 1. --help lists all three flags
 # ---------------------------------------------------------------------------
 
 
-def test_help_lists_shadow_only_and_exclude_gold_labels_flags(
+def test_help_lists_all_three_flags(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``--help`` output must mention both new flags by name."""
+    """``--help`` output must mention all three flags by name."""
     with pytest.raises(SystemExit) as excinfo:
         corpus_main.main(["--help"])
 
@@ -206,6 +224,9 @@ def test_help_lists_shadow_only_and_exclude_gold_labels_flags(
     assert "--shadow-only" in out, f"--shadow-only missing from help text:\n{out}"
     assert "--exclude-gold-labels-file" in out, (
         f"--exclude-gold-labels-file missing from help text:\n{out}"
+    )
+    assert "--join-shadow-from-twins" in out, (
+        f"--join-shadow-from-twins missing from help text:\n{out}"
     )
 
 
@@ -345,4 +366,78 @@ def test_shadow_only_and_exclude_gold_labels_file_combine(
     mock_build_corpus.assert_called_once()
     kwargs = mock_build_corpus.call_args.kwargs
     assert kwargs.get("shadow_only") is True
+    assert kwargs.get("exclude_corpus_ids") == {31091, 31312}
+
+
+# ---------------------------------------------------------------------------
+# 8 & 9. --join-shadow-from-twins plumbing (issue #468 / #479)
+# ---------------------------------------------------------------------------
+
+
+def test_omitting_join_shadow_from_twins_calls_build_corpus_with_false(
+    organic_log: Path, tmp_path: Path, mock_build_corpus: MagicMock
+) -> None:
+    """Regression guard: omitting --join-shadow-from-twins keeps it False.
+
+    ``build_corpus`` must be called with ``join_shadow_from_twins=False``
+    when the flag is not supplied on argv — the default must not silently
+    become ``True``.
+    """
+    argv = _base_argv(organic_log, tmp_path)
+    rc = corpus_main.main(argv)
+
+    assert rc == 0
+    mock_build_corpus.assert_called_once()
+    assert mock_build_corpus.call_args.kwargs.get("join_shadow_from_twins") is False
+
+
+def test_join_shadow_from_twins_flag_calls_build_corpus_with_true(
+    organic_log: Path, tmp_path: Path, mock_build_corpus: MagicMock
+) -> None:
+    """Passing --join-shadow-from-twins results in build_corpus(True)."""
+    argv = _base_argv(organic_log, tmp_path, extra=["--join-shadow-from-twins"])
+    rc = corpus_main.main(argv)
+
+    assert rc == 0
+    mock_build_corpus.assert_called_once()
+    assert mock_build_corpus.call_args.kwargs.get("join_shadow_from_twins") is True
+
+
+# ---------------------------------------------------------------------------
+# 10. All three flags combined
+# ---------------------------------------------------------------------------
+
+
+def test_all_three_flags_combine(
+    organic_log: Path, tmp_path: Path, mock_build_corpus: MagicMock
+) -> None:
+    """All three flags reach build_corpus correctly when passed together.
+
+    Covers ``--shadow-only``, ``--join-shadow-from-twins``, and
+    ``--exclude-gold-labels-file`` in a single invocation.
+    """
+    gold_path = _write_jsonl(
+        tmp_path / "gold-labels.jsonl",
+        [
+            {"corpus_id": 31091, "domain": "code"},
+            {"corpus_id": 31312, "domain": "code"},
+        ],
+    )
+    argv = _base_argv(
+        organic_log,
+        tmp_path,
+        extra=[
+            "--shadow-only",
+            "--join-shadow-from-twins",
+            "--exclude-gold-labels-file",
+            str(gold_path),
+        ],
+    )
+    rc = corpus_main.main(argv)
+
+    assert rc == 0
+    mock_build_corpus.assert_called_once()
+    kwargs = mock_build_corpus.call_args.kwargs
+    assert kwargs.get("shadow_only") is True
+    assert kwargs.get("join_shadow_from_twins") is True
     assert kwargs.get("exclude_corpus_ids") == {31091, 31312}

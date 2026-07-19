@@ -13,6 +13,9 @@ Options
     --sample-floor N     Per-cell sample floor (default: 30).
     --profile-only       Run profiling only; do not build corpus.
     --shadow-only        Include only shadow-attributed entries.
+    --join-shadow-from-twins
+                         Join shadow data from the nearest preceding
+                         python_matcher twin row in the same session.
     --exclude-gold-labels-file PATH
                          Exclude corpus IDs listed in a gold-labels JSONL file.
     --manifest-out PATH  Write manifest JSON to this path (repo-safe;
@@ -247,6 +250,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Include only shadow-attributed entries.",
     )
     parser.add_argument(
+        "--join-shadow-from-twins",
+        action="store_true",
+        default=False,
+        help=(
+            "Join shadow data from the nearest preceding python_matcher twin row "
+            "in the same session onto the organic row before filtering."
+        ),
+    )
+    parser.add_argument(
         "--exclude-gold-labels-file",
         type=str,
         default=None,
@@ -292,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=None,
         sample_floor=sample_floor,
         shadow_only=args.shadow_only,
+        join_shadow_from_twins=args.join_shadow_from_twins,
         exclude_corpus_ids=exclude_corpus_ids,
     )
     _print_corpus_report(result, sample_floor)
