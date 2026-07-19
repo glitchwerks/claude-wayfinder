@@ -42,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -180,6 +181,7 @@ def build_corpus(
     sample_floor: int = DEFAULT_SAMPLE_FLOOR,
     *,
     shadow_only: bool = False,
+    join_shadow_from_twins: bool = False,
     exclude_corpus_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     """Build a stratified corpus from the dispatch log.
@@ -199,6 +201,9 @@ def build_corpus(
                       Defaults to 30.
         shadow_only: Include only entries with a truthy top-level ``shadow``
                      value. Defaults to ``False``.
+        join_shadow_from_twins: Attach shadow data from the nearest preceding
+                                ``python_matcher`` twin in the same session.
+                                Defaults to ``False``.
         exclude_corpus_ids: Source-log line numbers to exclude. Defaults to
                             ``None``.
 
@@ -217,6 +222,13 @@ def build_corpus(
     # ALL lines count, including non-matcher_decision and blank lines.
     all_organic_with_lineno = _load_organic_entries(log_path)
     total_organic = len(all_organic_with_lineno)
+
+    if join_shadow_from_twins:
+        twin_candidates = _load_twin_candidates(log_path)
+        all_organic_with_lineno = _attach_twin_shadows(
+            all_organic_with_lineno,
+            twin_candidates,
+        )
 
     # Filter out empty task_description entries, preserving line numbers.
     eligible = [
@@ -290,6 +302,10 @@ def build_corpus(
         "include: session_id non-empty (organic only)",
         "exclude: empty task_description",
     ]
+    if join_shadow_from_twins:
+        filter_rules.append(
+            "join: shadow from nearest preceding python_matcher twin in session"
+        )
     if shadow_only:
         filter_rules.append("include: top-level shadow value is truthy")
     if exclude_corpus_ids:
@@ -361,6 +377,90 @@ is_organic_entry` — only ``attribution_source="post_tool_use_hook"`` entries
                 continue
             results.append((line_no, obj))
     return results
+
+
+def _load_twin_candidates(log_path: Path) -> list[dict[str, Any]]:
+    """Load candidate ``python_matcher`` twin rows from a JSONL log.
+
+    Args:
+        log_path: Path to the dispatch-log JSONL file.
+
+    Returns:
+        Candidate matcher decisions with a non-empty session ID, in file
+        order. Invalid JSON and unrelated rows are skipped.
+    """
+    if not log_path.exists():
+        return []
+    results: list[dict[str, Any]] = []
+    with open(log_path, encoding="utf-8") as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                obj: Any = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("type") != "matcher_decision":
+                continue
+            if obj.get("attribution_source") != "python_matcher":
+                continue
+            if not obj.get("session_id"):
+                continue
+            results.append(obj)
+    return results
+
+
+def _attach_twin_shadows(
+    organic_entries: list[tuple[int, dict[str, Any]]],
+    twin_candidates: list[dict[str, Any]],
+) -> list[tuple[int, dict[str, Any]]]:
+    """Attach truthy shadow data from nearest preceding session twins.
+
+    Args:
+        organic_entries: Organic entries paired with source line numbers.
+        twin_candidates: Candidate ``python_matcher`` twin rows.
+
+    Returns:
+        Organic entries in their original order. Entries with a matching,
+        truthy twin shadow are shallow copies containing that shadow value.
+    """
+    joined: list[tuple[int, dict[str, Any]]] = []
+    for line_no, entry in organic_entries:
+        try:
+            entry_ts = datetime.fromisoformat(
+                entry.get("ts").replace("Z", "+00:00")
+            )
+        except (AttributeError, TypeError, ValueError):
+            joined.append((line_no, entry))
+            continue
+
+        nearest_twin: dict[str, Any] | None = None
+        nearest_ts: datetime | None = None
+        for candidate in twin_candidates:
+            if candidate.get("session_id") != entry.get("session_id"):
+                continue
+            try:
+                candidate_ts = datetime.fromisoformat(
+                    candidate.get("ts").replace("Z", "+00:00")
+                )
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if candidate_ts >= entry_ts:
+                continue
+            if nearest_ts is None or candidate_ts > nearest_ts:
+                nearest_twin = candidate
+                nearest_ts = candidate_ts
+
+        if nearest_twin is not None and nearest_twin.get("shadow"):
+            joined_entry = dict(entry)
+            joined_entry["shadow"] = nearest_twin["shadow"]
+            joined.append((line_no, joined_entry))
+        else:
+            joined.append((line_no, entry))
+    return joined
 
 
 def _cell_key_str(key: tuple[str, str, bool]) -> str:

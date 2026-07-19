@@ -19,6 +19,24 @@ Coverage:
   16. exclude_corpus_ids filter — drops entries by 1-based source line number
   17. shadow_only and exclude_corpus_ids are additive to existing filters and
       to each other; stratification/cap logic is unaffected by their use
+  18. join_shadow_from_twins — attaches `shadow` from the nearest preceding
+      `python_matcher` twin (same session_id, strictly earlier ts) onto a
+      copy of the organic hook entry, before shadow_only filtering runs:
+        - twin immediately before with truthy shadow -> attached, and
+          (with shadow_only=True) included in the corpus
+        - no twin in the session at all -> no shadow attached, excluded
+          under shadow_only=True
+        - twin exists but shadow is falsy (missing/None/{}/False) -> no
+          shadow attached
+        - multiple twins in-session -> the nearest one strictly before the
+          hook row's ts wins, not an earlier one
+        - a twin AFTER the hook row's ts is never treated as the twin
+        - join_shadow_from_twins=False (default/omitted) reproduces prior
+          behavior byte-for-byte -- regression guard
+        - twins in a different session_id are never matched, even with an
+          adjacent timestamp
+        - a malformed/unparseable ts on a candidate twin is skipped (treated
+          as no-twin), not a crash
 """
 
 from __future__ import annotations
@@ -1010,3 +1028,293 @@ def test_stratification_and_cap_apply_after_shadow_and_exclude_filters(
         assert s["decision_band"] == "delegate"
         assert s["td_length_band"] == "short"
         assert s["file_paths_present"] is False
+
+
+# ---------------------------------------------------------------------------
+# 18. join_shadow_from_twins — join shadow data from the python_matcher twin
+# ---------------------------------------------------------------------------
+#
+# Background (issue #479): every real dispatch that has shadow data attached
+# writes it on a SEPARATE log line from the canonical organic
+# (attribution_source="post_tool_use_hook") row.  The shadow data lives on a
+# twin row attributed attribution_source="python_matcher", written shortly
+# BEFORE the hook row, sharing the same session_id.  `_load_organic_entries`
+# (via `is_organic_entry`) correctly excludes python_matcher rows as organic
+# entries in their own right — but that means shadow_only=True can never
+# match anything unless the join happens first.  These tests describe the
+# join: find the nearest preceding python_matcher row in the same
+# session_id, and if it carries a truthy `shadow` value, attach that value
+# onto a copy of the organic hook entry before shadow_only filtering runs.
+
+_HOOK_TS = "2026-06-24T22:28:03.591380Z"
+_TWIN_TS_NEAR = "2026-06-24T22:28:03.300000Z"  # 291ms before hook
+_TWIN_TS_FAR = "2026-06-24T22:28:02.900000Z"  # 691ms before hook
+_TWIN_TS_AFTER = "2026-06-24T22:28:04.000000Z"  # after hook
+
+
+def test_join_shadow_from_twins_attaches_nearest_preceding_twin_shadow(
+    tmp_path: Path,
+) -> None:
+    """A python_matcher twin immediately before the hook row (same session)
+    with a truthy shadow value is joined onto the hook entry, and (combined
+    with shadow_only=True) the hook entry is included in the corpus.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(
+            session_id="s1",
+            attribution_source="python_matcher",
+            ts=_TWIN_TS_NEAR,
+            shadow={"matched_agent": "code-writer"},
+        ),
+        _md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(
+        log, output_dir=None, join_shadow_from_twins=True, shadow_only=True
+    )
+
+    assert result["total_in_corpus"] == 1
+    assert result["entries"][0]["shadow"] == {"matched_agent": "code-writer"}
+
+
+def test_join_shadow_from_twins_no_twin_in_session(tmp_path: Path) -> None:
+    """No python_matcher row exists for the session -> no shadow attached,
+    and the hook entry is excluded when combined with shadow_only=True
+    (identical to today's behavior).
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [_md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS)]
+    log = _write_jsonl(tmp_path, entries)
+
+    no_shadow_filter = build_corpus(log, output_dir=None, join_shadow_from_twins=True)
+    assert "shadow" not in no_shadow_filter["entries"][0]
+
+    with_shadow_only = build_corpus(
+        log, output_dir=None, join_shadow_from_twins=True, shadow_only=True
+    )
+    assert with_shadow_only["total_in_corpus"] == 0
+
+
+def test_join_shadow_from_twins_twin_with_falsy_shadow_not_attached(
+    tmp_path: Path,
+) -> None:
+    """A python_matcher twin exists but carries no shadow (missing / None /
+    {} / False) -> nothing is attached to the hook entry.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    falsy_shadows = [
+        ("not-set", _SHADOW_NOT_SET),
+        ("none", None),
+        ("empty-dict", {}),
+        ("false", False),
+    ]
+    for case_id, twin_shadow in falsy_shadows:
+        entries = [
+            _md(
+                session_id="s1",
+                attribution_source="python_matcher",
+                ts=_TWIN_TS_NEAR,
+                shadow=twin_shadow,
+            ),
+            _md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS),
+        ]
+        # Fixture filenames use the case id rather than repr(twin_shadow):
+        # repr() of the _SHADOW_NOT_SET sentinel (a bare object()) embeds
+        # '<' and '>' and a memory address, which is not a valid Windows
+        # filename component.
+        log = _write_jsonl(tmp_path, entries, filename=f"log-falsy-{case_id}.jsonl")
+
+        result = build_corpus(log, output_dir=None, join_shadow_from_twins=True)
+        assert "shadow" not in result["entries"][0], (
+            f"twin shadow case={case_id!r} ({twin_shadow!r}) must not be attached (falsy)"
+        )
+
+
+def test_join_shadow_from_twins_nearest_twin_wins_over_farther_twin(
+    tmp_path: Path,
+) -> None:
+    """Multiple python_matcher twins in the same session -> the NEAREST one
+    strictly before the hook row's ts wins, not an earlier candidate.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(
+            session_id="s1",
+            attribution_source="python_matcher",
+            ts=_TWIN_TS_FAR,
+            shadow={"which": "far"},
+        ),
+        _md(
+            session_id="s1",
+            attribution_source="python_matcher",
+            ts=_TWIN_TS_NEAR,
+            shadow={"which": "near"},
+        ),
+        _md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(log, output_dir=None, join_shadow_from_twins=True)
+
+    assert result["entries"][0]["shadow"] == {"which": "near"}
+
+
+def test_join_shadow_from_twins_nearest_twin_wins_when_farther_has_no_shadow(
+    tmp_path: Path,
+) -> None:
+    """The nearer twin's (lack of) shadow wins even when a farther twin in
+    the same session carries a shadow value — proximity decides, not
+    "any twin with shadow in the session".
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(
+            session_id="s1",
+            attribution_source="python_matcher",
+            ts=_TWIN_TS_FAR,
+            shadow={"which": "far-only-shadow"},
+        ),
+        _md(
+            session_id="s1",
+            attribution_source="python_matcher",
+            ts=_TWIN_TS_NEAR,
+            # no shadow key -> nearest twin carries nothing to join
+        ),
+        _md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(log, output_dir=None, join_shadow_from_twins=True)
+
+    assert "shadow" not in result["entries"][0], (
+        "nearest twin (no shadow) must win over farther twin (has shadow); "
+        "got a shadow attached from the wrong twin"
+    )
+
+
+def test_join_shadow_from_twins_twin_after_hook_row_not_matched(
+    tmp_path: Path,
+) -> None:
+    """A python_matcher row with a ts AFTER the hook row's ts (out of order
+    on disk) must never be treated as its twin — only strictly earlier ts
+    values in the same session qualify.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS),
+        _md(
+            session_id="s1",
+            attribution_source="python_matcher",
+            ts=_TWIN_TS_AFTER,
+            shadow={"should": "not-be-joined"},
+        ),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(log, output_dir=None, join_shadow_from_twins=True)
+    assert "shadow" not in result["entries"][0]
+
+    with_shadow_only = build_corpus(
+        log, output_dir=None, join_shadow_from_twins=True, shadow_only=True
+    )
+    assert with_shadow_only["total_in_corpus"] == 0
+
+
+def test_join_shadow_from_twins_false_matches_prior_behavior_byte_for_byte(
+    tmp_path: Path,
+) -> None:
+    """join_shadow_from_twins=False (the default) must reproduce today's
+    behavior EXACTLY, even when a python_matcher twin with shadow data is
+    present in the log — this is the strict regression guard, since the
+    parameter does not exist yet and no existing caller passes it.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(
+            session_id="s1",
+            attribution_source="python_matcher",
+            ts=_TWIN_TS_NEAR,
+            shadow={"would": "be-joined-if-enabled"},
+        ),
+        _md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    baseline = build_corpus(log, output_dir=None)
+    explicit_off = build_corpus(log, output_dir=None, join_shadow_from_twins=False)
+
+    assert baseline == explicit_off
+    assert "shadow" not in baseline["entries"][0]
+    # shadow_only=True combined with the flag off must still exclude —
+    # no join happened, so the hook entry never gained a shadow key.
+    shadow_only_still_excludes = build_corpus(
+        log, output_dir=None, join_shadow_from_twins=False, shadow_only=True
+    )
+    assert shadow_only_still_excludes["total_in_corpus"] == 0
+
+
+def test_join_shadow_from_twins_cross_session_twin_not_matched(
+    tmp_path: Path,
+) -> None:
+    """A python_matcher row in a DIFFERENT session_id, even with a very
+    close/adjacent timestamp, must never be picked as the twin — session_id
+    must match exactly.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(
+            session_id="s2-different-session",
+            attribution_source="python_matcher",
+            ts=_TWIN_TS_NEAR,
+            shadow={"cross": "session-leak"},
+        ),
+        _md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    result = build_corpus(log, output_dir=None, join_shadow_from_twins=True)
+    assert "shadow" not in result["entries"][0]
+
+    with_shadow_only = build_corpus(
+        log, output_dir=None, join_shadow_from_twins=True, shadow_only=True
+    )
+    assert with_shadow_only["total_in_corpus"] == 0
+
+
+def test_join_shadow_from_twins_malformed_ts_skipped_not_crash(
+    tmp_path: Path,
+) -> None:
+    """A candidate twin with a malformed/unparseable `ts` must not crash the
+    join.  Chosen behavior (documented for the implementer): skip that
+    candidate entirely, as if it were not a twin at all — the join falls
+    through to the next-nearest valid candidate (or no-twin, as here).
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(
+            session_id="s1",
+            attribution_source="python_matcher",
+            ts="not-a-real-timestamp",
+            shadow={"x": 1},
+        ),
+        _md(session_id="s1", attribution_source="post_tool_use_hook", ts=_HOOK_TS),
+    ]
+    log = _write_jsonl(tmp_path, entries)
+
+    # Must not raise.
+    result = build_corpus(log, output_dir=None, join_shadow_from_twins=True)
+
+    assert "shadow" not in result["entries"][0], (
+        "malformed-ts twin must be skipped (treated as no-twin), not joined"
+    )
