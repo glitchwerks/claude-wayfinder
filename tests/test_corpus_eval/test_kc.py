@@ -51,7 +51,6 @@ from scripts.corpus.eval._kc import (
     compute_kc4,
     compute_kc5,
 )
-
 from scripts.corpus.eval._reader import GoldLabel
 
 # ---------------------------------------------------------------------------
