@@ -336,9 +336,13 @@ different go/no-go story. The report MUST:
   accumulation and M15-7's flip. **The guard's scope is not limited to `_compose.py`** — KC-3's
   eligible-set denominator calls `cell_map_lookup` from `src/claude_wayfinder/match/_cells.py` (§3.0,
   §4.2), so a change to `_cells.py` after corpus accumulation can silently shift KC-3's result even
-  though `_compose.py` is untouched. Therefore `scripts/shadow-kc-report.py` MUST: (1) **extract**
-  `matcher_version` from the corpus rows (`6d5f416` in the current corpus) rather than trusting a
-  hand-entered value; (2) **compare each runtime module a selected KC method depends on — at minimum
+  though `_compose.py` is untouched. Therefore `scripts/shadow-kc-report.py` MUST: (1) **extract and
+  validate `matcher_version`** from the corpus rows — first verifying that **every row resolves to
+  the exact same `matcher_version` value** before trusting it, rather than a hand-entered value.
+  **If rows disagree** (mixed/inconsistent `matcher_version` across the corpus), that is itself a
+  **provenance failure** — the evidence spans multiple code versions and cannot be silently collapsed
+  to one — so the tool MUST emit a hard warning and exit non-zero, not silently pick the
+  first/majority value; (2) **compare each runtime module a selected KC method depends on — at minimum
   `_compose.py` and `_cells.py`, and any other module a chosen KC/D-KC4 method reads at runtime —
   between that commit and HEAD** — `matcher_version` is a **commit short-SHA** (`git rev-parse
   --short HEAD`, per `_get_matcher_version` / `tests/test_match/test_matcher_version.py:19`–`:20`,
@@ -347,25 +351,38 @@ different go/no-go story. The report MUST:
   `src/claude_wayfinder/match/_cells.py`** (exit 0 = unchanged, exit 1 = the file changed between
   corpus accumulation and now). **Do NOT compare `matcher_version` against `git rev-parse
   HEAD:src/claude_wayfinder/match/_compose.py`** — that yields a *blob* hash, which never equals a
-  *commit* SHA, so the check would fire on every run and become noise; and (3) **emit a hard warning
+  *commit* SHA, so the check would fire on every run and become noise; (3) **emit a hard warning
   and exit non-zero when any of these files diverges**, so a KC report generated against a
   `_compose.py` or `_cells.py` newer than the one that produced the shadow log cannot be silently
   treated as valid. **Non-SHA edge case:** if `matcher_version` is `"unknown"` or a dist-version string
   (the pip-install fallbacks — same test file `:1`–`:20`), the commit diff is not resolvable; in that
   case emit the same hard warning (provenance unverifiable) and exit non-zero rather than passing
-  silently. The report still records both values as a caveat, but the gate is the tooling check, not the
-  prose. **The KC evidence only validates the set of runtime modules that produced it** — M15-7's flip
-  must use that same version, or shadow data must be re-accumulated.
+  silently; and (4) **also check for a dirty/uncommitted working tree.** The `git diff --quiet
+  <matcher_version> HEAD -- <module>` comparison only diffs two *committed* states — it does **not**
+  detect uncommitted or staged changes in the current working tree, so a report could run against code
+  newer than `HEAD` (a dirty checkout) and this check would still pass. The tool MUST additionally run
+  a working-tree check — e.g. `git status --porcelain -- <module>`, or a `git diff --quiet` against the
+  worktree rather than only `<matcher_version>` vs `HEAD` — for every module a chosen KC method depends
+  on, and treat **any dirty state on a dependency module as the same hard-warning/non-zero-exit
+  failure** as a resolved commit-to-commit divergence. The report still records both values as a
+  caveat, but the gate is the tooling check, not the prose. **The KC evidence only validates the set of
+  runtime modules that produced it** — M15-7's flip must use that same version, or shadow data must be
+  re-accumulated.
 
 ### 4.5 Phase B deliverables
 
 - `scripts/corpus/eval/_kc.py` — spec-exact KC-1..KC-5 logic (reusing `_metrics.py` RC/CW), including
   the KC-2 0.2558 anchor-provenance assertion (§4.3) as a documented, asserted module constant.
 - `scripts/shadow-kc-report.py` — CLI: load corpus + gold, compute KCs, emit the report (Markdown +
-  optional `--json`). Also **extracts `matcher_version` from the corpus rows and compares it against
-  the current git state of every runtime module a selected KC method depends on — at minimum
-  `_compose.py` and `_cells.py` (KC-3's `cell_map_lookup`) — exiting non-zero on divergence in any of
-  them** (§4.4). (Location alternative: extend the existing eval CLI — minor, D-LOC.)
+  optional `--json`). Also **extracts `matcher_version` from the corpus rows — first verifying all
+  rows resolve to the exact same value (hard warning + non-zero exit on mismatch, not a silent
+  first/majority pick) — and compares it against the current git state of every runtime module a
+  selected KC method depends on — at minimum `_compose.py` and `_cells.py` (KC-3's `cell_map_lookup`)
+  — exiting non-zero on divergence in any of them.** This git-state comparison covers both (a)
+  committed divergence (`<matcher_version>` vs `HEAD`) and (b) a dirty/uncommitted working tree on any
+  dependency module (`git status --porcelain` or an equivalent worktree diff) — a `HEAD`-only compare
+  cannot see uncommitted changes, so both checks are required (§4.4). (Location alternative: extend
+  the existing eval CLI — minor, D-LOC.)
 - Unit tests (`tests/test_corpus_eval/test_kc.py` — flat `tests/test_<module>/` convention, matching the
   existing `tests/test_corpus_eval/` dir) with synthetic fixtures covering each KC, the eligible-set
   boundary (ungated / no-cell / low-confidence exclusions), the `self_handle` normalization path, the
@@ -375,6 +392,17 @@ different go/no-go story. The report MUST:
   none reads as a vacuous PASS/FAIL. **This matrix covers KC computation only** — coverage for the
   Phase A label-stripping tool (`scripts/shadow-strip-for-labeling.py`) is a separate deliverable,
   specified in §3.3.
+- **Test fixtures for the provenance guard itself** (§4.4), in `tests/test_corpus_eval/test_kc.py` or a
+  dedicated provenance test module, whichever reads better — separate from the KC-computation matrix
+  above because it exercises `shadow-kc-report.py`'s version/git-state checks rather than KC formulas.
+  Required coverage: (a) a valid, consistent short SHA across all corpus rows → guard passes; (b)
+  mixed/inconsistent `matcher_version` values across rows → guard fails (hard warning, non-zero exit);
+  (c) `_compose.py` or `_cells.py` changed since the recorded `matcher_version` commit → guard fails;
+  (d) an `"unknown"` or pip-dist-version string that cannot be resolved to a commit → guard fails
+  (provenance unverifiable); (e) a git command/subprocess failure (not a git repo, git not on `PATH`) →
+  guard fails safe rather than silently passing; and (f) a dirty/uncommitted working tree on a
+  dependency module (`_compose.py` or `_cells.py`) → guard fails, even when `matcher_version` vs `HEAD`
+  is otherwise clean.
 - The **KC report** (`docs/research/2026-07-19-shadow-kc-report.md`) with the go/no-go verdict.
 
 ---
