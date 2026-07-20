@@ -20,7 +20,7 @@ skills_relevant:
 **Status:** PLAN / ALL §6 DECISIONS RESOLVED (2026-07-19, rev 3). All 6 DECISION REQUIRED items
 in §6 have been resolved by the user; work on M15-6a (#483) and M15-6b (#484) may begin (#485 also
 exists under M15 — see §7). Per CLAUDE.md § Issue Tracking, issue creation already happened for
-#483/#484/#485 — this status update does not itself authorize implementation beyond what those
+`#483`/`#484`/`#485` — this status update does not itself authorize implementation beyond what those
 issues scope.
 
 **Revision log.**
@@ -207,6 +207,15 @@ wants counterfactual KC-4, move to Option 2/3 to earn the domain reliability KC-
   process). This is a real deliverable with non-trivial stripping logic (drop
   `input.{domain,posture,confidence,area_span}`, the entire `output` field, and the entire `shadow`
   dict; retain `agent_mentions`), so it is listed in the `touches:` frontmatter.
+- **Test fixtures for the strip-and-present script itself** (not just the KC computation tests in
+  §4.5) asserting: (1) caller labels — `input.domain`/`posture`/`confidence`/`area_span` — are
+  stripped from the labeler-facing view; (2) the entire `output` field is stripped; (3) the entire
+  `shadow` dict is stripped; (4) all permitted raw-signal fields — `task_description`, `file_paths`,
+  `agent_mentions`, `tool_mentions`, `command_prefix` — remain present and unaltered; (5) absent/null
+  fields on any of the above are handled without error (no spurious key insertion); and (6) the
+  **source corpus file is left unmodified** — stripping produces a new file/view, never an in-place
+  mutation of the on-disk corpus. These fixtures close the §3.1 independence-hardening mandate with
+  verifiable coverage rather than a tooling description alone.
 - The **per-KC denominator estimate** table (§3.0), recorded before labeling.
 - The **redacted gold-labels JSONL** for the labeled sample (same schema as
   `docs/research/2026-06-12-gold-labels-redacted.jsonl`), committed; full artifact (with notes) local
@@ -324,39 +333,48 @@ different go/no-go story. The report MUST:
   the hard block.
 - Pin **version provenance — enforced in tooling, not documentation-only.** Recording the version as a
   prose caveat does not stop a flip on stale KC evidence if `_compose.py` is patched between corpus
-  accumulation and M15-7's flip. Therefore `scripts/shadow-kc-report.py` MUST: (1) **extract**
+  accumulation and M15-7's flip. **The guard's scope is not limited to `_compose.py`** — KC-3's
+  eligible-set denominator calls `cell_map_lookup` from `src/claude_wayfinder/match/_cells.py` (§3.0,
+  §4.2), so a change to `_cells.py` after corpus accumulation can silently shift KC-3's result even
+  though `_compose.py` is untouched. Therefore `scripts/shadow-kc-report.py` MUST: (1) **extract**
   `matcher_version` from the corpus rows (`6d5f416` in the current corpus) rather than trusting a
-  hand-entered value; (2) **compare `_compose.py` between that commit and HEAD** — `matcher_version` is
-  a **commit short-SHA** (`git rev-parse --short HEAD`, per `_get_matcher_version` /
-  `tests/test_match/test_matcher_version.py:19`–`:20`,`:133`–`:159`), so the correct check is a semantic
-  file diff **`git diff --quiet <matcher_version> HEAD -- src/claude_wayfinder/match/_compose.py`** (exit
-  0 = unchanged, exit 1 = the file changed between corpus accumulation and now). **Do NOT compare
-  `matcher_version` against `git rev-parse HEAD:src/claude_wayfinder/match/_compose.py`** — that yields a
-  *blob* hash, which never equals a *commit* SHA, so the check would fire on every run and become
-  noise; and (3) **emit a hard warning and exit non-zero when the file diverges**, so a KC report
-  generated against a `_compose.py` newer than the one that produced the shadow log cannot be silently
+  hand-entered value; (2) **compare each runtime module a selected KC method depends on — at minimum
+  `_compose.py` and `_cells.py`, and any other module a chosen KC/D-KC4 method reads at runtime —
+  between that commit and HEAD** — `matcher_version` is a **commit short-SHA** (`git rev-parse
+  --short HEAD`, per `_get_matcher_version` / `tests/test_match/test_matcher_version.py:19`–`:20`,
+  `:133`–`:159`), so the correct check is a semantic file diff per module, e.g. **`git diff --quiet
+  <matcher_version> HEAD -- src/claude_wayfinder/match/_compose.py`** and the equivalent for
+  `src/claude_wayfinder/match/_cells.py`** (exit 0 = unchanged, exit 1 = the file changed between
+  corpus accumulation and now). **Do NOT compare `matcher_version` against `git rev-parse
+  HEAD:src/claude_wayfinder/match/_compose.py`** — that yields a *blob* hash, which never equals a
+  *commit* SHA, so the check would fire on every run and become noise; and (3) **emit a hard warning
+  and exit non-zero when any of these files diverges**, so a KC report generated against a
+  `_compose.py` or `_cells.py` newer than the one that produced the shadow log cannot be silently
   treated as valid. **Non-SHA edge case:** if `matcher_version` is `"unknown"` or a dist-version string
   (the pip-install fallbacks — same test file `:1`–`:20`), the commit diff is not resolvable; in that
   case emit the same hard warning (provenance unverifiable) and exit non-zero rather than passing
   silently. The report still records both values as a caveat, but the gate is the tooling check, not the
-  prose. **The KC evidence only validates the Compose version that produced it** — M15-7's flip must use
-  that same version, or shadow data must be re-accumulated.
+  prose. **The KC evidence only validates the set of runtime modules that produced it** — M15-7's flip
+  must use that same version, or shadow data must be re-accumulated.
 
 ### 4.5 Phase B deliverables
 
 - `scripts/corpus/eval/_kc.py` — spec-exact KC-1..KC-5 logic (reusing `_metrics.py` RC/CW), including
   the KC-2 0.2558 anchor-provenance assertion (§4.3) as a documented, asserted module constant.
 - `scripts/shadow-kc-report.py` — CLI: load corpus + gold, compute KCs, emit the report (Markdown +
-  optional `--json`). Also **extracts `matcher_version` from the corpus rows and compares it against the
-  current `_compose.py` git state, exiting non-zero on divergence** (§4.4). (Location alternative:
-  extend the existing eval CLI — minor, D-LOC.)
+  optional `--json`). Also **extracts `matcher_version` from the corpus rows and compares it against
+  the current git state of every runtime module a selected KC method depends on — at minimum
+  `_compose.py` and `_cells.py` (KC-3's `cell_map_lookup`) — exiting non-zero on divergence in any of
+  them** (§4.4). (Location alternative: extend the existing eval CLI — minor, D-LOC.)
 - Unit tests (`tests/test_corpus_eval/test_kc.py` — flat `tests/test_<module>/` convention, matching the
   existing `tests/test_corpus_eval/` dir) with synthetic fixtures covering each KC, the eligible-set
   boundary (ungated / no-cell / low-confidence exclusions), the `self_handle` normalization path, the
   three-field KC-3 numerator classification (posture-routed vs gated-delegate vs excluded
   ungated-delegate, §4.2), and the INSUFFICIENT-DATA paths — the empty infra_deploy slice (KC-5), the
   empty KC-4 eligible set (KC-4 not falsely PASS, §4.2), and the empty KC-3 eligible set (§4.2) — so
-  none reads as a vacuous PASS/FAIL.
+  none reads as a vacuous PASS/FAIL. **This matrix covers KC computation only** — coverage for the
+  Phase A label-stripping tool (`scripts/shadow-strip-for-labeling.py`) is a separate deliverable,
+  specified in §3.3.
 - The **KC report** (`docs/research/2026-07-19-shadow-kc-report.md`) with the go/no-go verdict.
 
 ---
@@ -381,6 +399,11 @@ critical path.
   observation. No `_compose.py` dependency; faithful to "in-situ." (b) **Counterfactual re-run**:
   substitute the gold domain, re-run `compose_route`, diff the agent. Heavier; pulls a `src`
   dependency into the tooling and puts real weight on domain-label reliability. **Recommend (a).**
+  **Accepted limitation of (a):** the structural method observes the route that was already logged
+  under the (possibly wrong) caller domain — it does not re-run Compose with the gold domain
+  substituted, so it is an observed-data proxy for the counterfactual, not a true counterfactual
+  re-run. This is a deliberate tradeoff of choosing (a) — lightweight, no live re-routing — not an
+  oversight; it was weighed against option (b) when D-KC4 was resolved and (a) was still recommended.
 - **D-LABEL (Phase A methodology) — RESOLVED: Option 2 (Calibrated middle).** LINKED to D-KC4. Option 1
   (light single-rater) / Option 2 (calibrated middle, RECOMMENDED default, **CHOSEN**) / Option 3
   (heavy full ceremony), per §3.2. Chosen shape: Pass 1
@@ -417,7 +440,7 @@ critical path.
 
 ## 7. Proposed sub-issue decomposition (DO NOT create until user go-ahead)
 
-#423 is scoped large enough that a split clarifies the dependency and lets tooling proceed in parallel
+`#423` is scoped large enough that a split clarifies the dependency and lets tooling proceed in parallel
 with labeling. Under milestone **M15** (`...2026-06-19-matcher-v3-ship-live.md:398`–`:420`):
 
 | Proposed sub-issue | Phase | Depends on | Notes |
@@ -439,7 +462,7 @@ Alternatively keep #423 as one issue if the user prefers not to split — but th
 | **Label leakage / anchoring** (labeler sees caller labels in `input`, the `output`, or the `shadow` dict) | Medium (new — 168-corpus didn't have these fields) | High (inflated agreement invalidates the gold) | §3.1 strip mandate, enforced in the strip-and-present tooling. |
 | **Whole-sample KC-1(ii) dilution misread as Compose failure** | Medium | Medium (a good flip blocked, or a bad one passed, for the wrong reason) | §4.4 dual-cut reporting + caller-label-match breakdown; D-KC1-MARGIN. |
 | **RC/CW divergence from the offline eval** (re-implementing the kernel) | Low | High (KC-2 hard block on a non-comparable number) | §4.3 reuse `_metrics.py`; §4.3 in-code KC-2 0.2558 anchor-provenance assertion inside `_kc.py`. |
-| **Stale Compose version** (logged shadow produced by a `_compose.py` older than what M15-7 flips) | Low | High (KC evidence validates the wrong code) | §4.4 tooling-enforced provenance check: `shadow-kc-report.py` extracts `matcher_version` and exits non-zero on `_compose.py` git-state divergence; flip must use the pinned version or re-accumulate. |
+| **Stale runtime module** (logged shadow produced by a `_compose.py` or `_cells.py` older than what M15-7 flips — e.g. `cell_map_lookup` changes shift KC-3 silently) | Low | High (KC evidence validates the wrong code) | §4.4 tooling-enforced provenance check: `shadow-kc-report.py` extracts `matcher_version` and exits non-zero on git-state divergence of `_compose.py`, `_cells.py`, or any other runtime module a selected KC method depends on; flip must use the pinned version or re-accumulate. |
 | **KC-4 counterfactual pulls `src` into tooling + needs robust domain labels** | Low (if D-KC4=structural) | Medium | Recommend structural KC-4 (D-KC4 a); if counterfactual chosen, escalate D-LABEL to Option 2/3. |
 | **Phase A conflated with Phase 0 re-run** (scope creep) | Medium | Medium | §3.3 explicit framing: gold-anchoring, not re-earning `F_indep_lo`. |
 
