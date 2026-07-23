@@ -173,6 +173,35 @@ def _corpus_row(
     }
 
 
+def _corpus_row_missing_input_key(
+    corpus_id: int,
+    missing_key: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Build a corpus row whose ``input`` dict entirely omits a key.
+
+    Mirrors real dispatch-context JSON, which is permitted to omit an
+    optional caller-input field (``domain``/``posture``/``confidence``/
+    ``area_span``) entirely rather than setting it to ``null`` -- per
+    the dispatch skill's contract ("omit or pass null"). Distinct from
+    ``_corpus_row(..., domain=None)``: this produces a row where
+    ``"domain" not in row["input"]`` is True, not merely
+    ``row["input"]["domain"] is None``.
+
+    Args:
+        corpus_id: Synthetic corpus row ID.
+        missing_key: The key to delete from ``row["input"]``.
+        **kwargs: Forwarded to ``_corpus_row``.
+
+    Returns:
+        A raw corpus JSONL record with ``missing_key`` entirely absent
+        from ``row["input"]``.
+    """
+    row = _corpus_row(corpus_id, **kwargs)
+    del row["input"][missing_key]
+    return row
+
+
 def _gold_row(
     corpus_id: int,
     gold_agent: str = "code-writer",
@@ -877,6 +906,112 @@ class TestCallerLabelMatchBreakdown:
         assert re.search(r"mismatch|disagree|differ", section, re.IGNORECASE)
         assert re.search(r"\d", section), (
             "the breakdown must quantify the matched/mismatched buckets, not just name them"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Optional caller-input fields entirely omitted (not just null)
+# ---------------------------------------------------------------------------
+
+
+class TestOptionalCallerInputFieldsOmitted:
+    """Real dispatch-context JSON is permitted to omit ``domain``,
+    ``posture``, ``confidence``, and ``area_span`` entirely rather than
+    setting them to ``null`` (dispatch skill contract: "omit or pass
+    null"). A row whose ``input`` dict genuinely lacks one of these keys
+    must produce the exact same report as the same row with that key
+    explicit and ``null`` -- not crash with ``KeyError`` (issue #485 bug
+    report from real telemetry; same bug class already fixed in
+    ``scripts/corpus/eval/_kc.py`` for #493/PR #495/#496, but present
+    here in two separate direct-dict-index sites: ``_eligible_rows``'s
+    ``caller_input["confidence"]`` and ``_render_report``'s
+    ``row["input"]["domain"]`` caller-label-match comparison).
+    """
+
+    def test_row_with_confidence_key_entirely_omitted_matches_explicit_null(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``_eligible_rows`` indexes ``caller_input["confidence"]``
+        directly. A row whose ``input`` dict has no ``"confidence"`` key
+        at all must be tolerated exactly like ``confidence=None``, not
+        crash with ``KeyError: 'confidence'``.
+        """
+        repo_root, sha = guard_repo
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(labels_path, [_gold_row(1)])
+
+        null_corpus_path = tmp_path / "corpus_null.jsonl"
+        _write_jsonl(
+            null_corpus_path,
+            [_corpus_row(1, confidence=None, matcher_version=sha)],
+        )
+        rc_null = _run_main(kc_report_module, null_corpus_path, labels_path, repo_root)
+        report_null = capsys.readouterr().out
+        assert rc_null == 0, "the explicit-null baseline row must itself succeed"
+
+        omitted_corpus_path = tmp_path / "corpus_omitted.jsonl"
+        _write_jsonl(
+            omitted_corpus_path,
+            [_corpus_row_missing_input_key(1, "confidence", matcher_version=sha)],
+        )
+        rc_omitted = _run_main(kc_report_module, omitted_corpus_path, labels_path, repo_root)
+        captured_omitted = capsys.readouterr()
+
+        assert rc_omitted == 0, (
+            "a row with 'confidence' entirely omitted from its input dict "
+            "must generate a report just like confidence=None does, not "
+            f"crash. stderr:\n{captured_omitted.err}"
+        )
+        assert captured_omitted.out == report_null, (
+            "omitting 'confidence' must be behaviorally identical to "
+            "confidence=None, not merely non-crashing"
+        )
+
+    def test_row_with_domain_key_entirely_omitted_matches_explicit_null(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The caller-label-match breakdown indexes
+        ``row["input"]["domain"]`` directly. A row whose ``input`` dict
+        has no ``"domain"`` key at all must be tolerated exactly like
+        ``domain=None``, not crash with ``KeyError: 'domain'``.
+        """
+        repo_root, sha = guard_repo
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(labels_path, [_gold_row(1)])
+
+        null_corpus_path = tmp_path / "corpus_null.jsonl"
+        _write_jsonl(
+            null_corpus_path,
+            [_corpus_row(1, domain=None, matcher_version=sha)],
+        )
+        rc_null = _run_main(kc_report_module, null_corpus_path, labels_path, repo_root)
+        report_null = capsys.readouterr().out
+        assert rc_null == 0, "the explicit-null baseline row must itself succeed"
+
+        omitted_corpus_path = tmp_path / "corpus_omitted.jsonl"
+        _write_jsonl(
+            omitted_corpus_path,
+            [_corpus_row_missing_input_key(1, "domain", matcher_version=sha)],
+        )
+        rc_omitted = _run_main(kc_report_module, omitted_corpus_path, labels_path, repo_root)
+        captured_omitted = capsys.readouterr()
+
+        assert rc_omitted == 0, (
+            "a row with 'domain' entirely omitted from its input dict must "
+            "generate a report just like domain=None does, not crash. "
+            f"stderr:\n{captured_omitted.err}"
+        )
+        assert captured_omitted.out == report_null, (
+            "omitting 'domain' must be behaviorally identical to "
+            "domain=None, not merely non-crashing"
         )
 
 
