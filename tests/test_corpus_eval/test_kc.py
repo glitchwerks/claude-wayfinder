@@ -472,6 +472,41 @@ class TestKC3:
         assert verdict.metrics["eligible_n"] == 1
 
 
+class TestKC3MissingOptionalKeys:
+    """Issue #493: `input.confidence` may be an ABSENT key, not just null.
+
+    ``skills/dispatch/SKILL.md`` documents ``confidence`` as one of the four
+    optional caller-supplied labels: "omit or pass null for fields that are
+    not applicable." Real shadow-corpus rows exercise the "omit" form, and a
+    diagnostic run against real telemetry (issue #493 body) confirmed
+    ``compute_kc3`` crashes with an uncaught ``KeyError`` on such rows via
+    direct ``caller_input["confidence"]`` indexing. An absent key and an
+    explicit null must be treated identically -- both mean "no confidence
+    label" per the contract.
+    """
+
+    def test_missing_confidence_key_equals_null_confidence(self) -> None:
+        """A row with no "confidence" key must verdict-match confidence=None.
+
+        Both rows are otherwise identical (posture_routed=True, so each
+        would count toward the numerator if eligible). Neither is eligible
+        under KC-3's `confidence == "high"` clause, so both verdicts must
+        agree: eligible_n excludes them and the KC computation must not
+        raise. Today, evaluating `row_absent` raises KeyError before this
+        assertion is ever reached.
+        """
+        row_null = _row(1, confidence=None, posture_routed=True)
+        row_absent = _row(2, confidence=None, posture_routed=True)
+        del row_absent["input"]["confidence"]
+        gold = _gold_map(_gold(1), _gold(2))
+
+        verdict_null = compute_kc3([row_null], gold)
+        verdict_absent = compute_kc3([row_absent], gold)
+
+        assert verdict_absent.metrics == verdict_null.metrics
+        assert verdict_absent.status == verdict_null.status
+
+
 # ---------------------------------------------------------------------------
 # KC-4 (routing-neutrality, structural method)
 # ---------------------------------------------------------------------------
@@ -531,6 +566,39 @@ class TestKC4:
         verdict = compute_kc4(rows, gold)
         assert verdict.metrics["eligible_n"] == 0
         assert verdict.status == "INSUFFICIENT_DATA"
+
+
+class TestKC4MissingOptionalKeys:
+    """Issue #493: `input.domain` may be an ABSENT key, not just null.
+
+    Same contract gap as ``TestKC3MissingOptionalKeys``, applied to
+    ``domain``. A diagnostic run against real telemetry (issue #493 body)
+    confirmed ``compute_kc4`` crashes with an uncaught ``KeyError`` via
+    direct ``caller_input["domain"]`` indexing on rows that omit the key
+    entirely.
+    """
+
+    def test_missing_domain_key_equals_null_domain(self) -> None:
+        """A row with no "domain" key must verdict-match domain=None.
+
+        `domain=None` means "no domain gate" per the dispatch contract, so
+        neither row falls in KC-4's `{is_any, project_meta}` eligible set
+        and both verdicts must agree. Today, evaluating `row_absent` raises
+        KeyError before this assertion is ever reached.
+        """
+        row_null = _row(1, domain=None, posture_routed=True)
+        row_absent = _row(2, domain=None, posture_routed=True)
+        del row_absent["input"]["domain"]
+        gold = _gold_map(
+            _gold(1, domain="code"),
+            _gold(2, domain="code"),
+        )
+
+        verdict_null = compute_kc4([row_null], gold)
+        verdict_absent = compute_kc4([row_absent], gold)
+
+        assert verdict_absent.metrics == verdict_null.metrics
+        assert verdict_absent.status == verdict_null.status
 
 
 # ---------------------------------------------------------------------------
