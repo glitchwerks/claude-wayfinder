@@ -506,6 +506,27 @@ class TestKC3MissingOptionalKeys:
         assert verdict_absent.metrics == verdict_null.metrics
         assert verdict_absent.status == verdict_null.status
 
+    def test_missing_posture_key_equals_null_posture(self) -> None:
+        """A row with no "posture" key must verdict-match posture=None.
+
+        Both rows are otherwise identical (posture_routed=True, so each
+        would count toward the numerator if eligible). Neither is eligible
+        under KC-3's cell-lookup clause (posture=None -> no cell), so both
+        verdicts must agree: eligible_n excludes them and the KC computation
+        must not raise. Today, evaluating `row_absent` raises KeyError
+        before this assertion is ever reached.
+        """
+        row_null = _row(1, posture=None, posture_routed=True)
+        row_absent = _row(2, posture=None, posture_routed=True)
+        del row_absent["input"]["posture"]
+        gold = _gold_map(_gold(1), _gold(2))
+
+        verdict_null = compute_kc3([row_null], gold)
+        verdict_absent = compute_kc3([row_absent], gold)
+
+        assert verdict_absent.metrics == verdict_null.metrics
+        assert verdict_absent.status == verdict_null.status
+
 
 # ---------------------------------------------------------------------------
 # KC-4 (routing-neutrality, structural method)

@@ -158,7 +158,7 @@ def compute_kc3(
     for row in corpus_rows:
         caller_input = row["input"]
         domain = caller_input.get("domain")
-        posture = caller_input["posture"]
+        posture = caller_input.get("posture")
         confidence = caller_input.get("confidence")
         domain_for_lookup = (
             domain if domain not in (None, "is_any") else "any"
