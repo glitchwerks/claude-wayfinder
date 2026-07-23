@@ -157,9 +157,9 @@ def compute_kc3(
     eligible: list[CorpusRow] = []
     for row in corpus_rows:
         caller_input = row["input"]
-        domain = caller_input["domain"]
+        domain = caller_input.get("domain")
         posture = caller_input["posture"]
-        confidence = caller_input["confidence"]
+        confidence = caller_input.get("confidence")
         domain_for_lookup = (
             domain if domain not in (None, "is_any") else "any"
         )
@@ -216,7 +216,7 @@ def compute_kc4(
     for row in corpus_rows:
         corpus_id = row["corpus_id"]
         label = gold.get(corpus_id)
-        caller_domain = row["input"]["domain"]
+        caller_domain = row["input"].get("domain")
         if (
             label is not None
             and caller_domain in {"is_any", "project_meta"}
