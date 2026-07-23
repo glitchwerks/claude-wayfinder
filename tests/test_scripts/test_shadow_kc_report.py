@@ -561,6 +561,56 @@ class TestMatcherVersionGuard:
         assert rc != 0
         assert "Traceback (most recent call last)" not in captured.err
 
+    def test_bare_semver_matcher_version_resolves_against_v_prefixed_tag(
+        self,
+        kc_report_module: ModuleType,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Real corpus data records ``matcher_version`` as a bare semver
+        string (e.g. ``"1.3.1"``, no ``v`` prefix) while this project's
+        release tags are named ``vX.Y.Z`` (issue #485 bug report). A bare
+        rev-parse of the recorded string alone fails
+        (``git rev-parse 1.3.1`` -> "unknown revision"), but the version
+        genuinely is current: the guard must fall back to resolving
+        against the ``v``-prefixed tag name before declaring the
+        provenance unverifiable. This is a resolution-logic gap, not a
+        real divergence, so the guard must PASS (exit 0, no
+        diverged/mismatch/unverifiable warning) when the tagged commit's
+        dependency files are unchanged at HEAD.
+        """
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        _init_fixture_repo(repo_root)
+        _write_dep_files(
+            repo_root,
+            compose_content="# compose v1\n",
+            cells_content="# cells v1\n",
+        )
+        _commit_all(repo_root, "initial")
+        # Pick a version that will not collide with any real release tag.
+        _run_git(["tag", "v9.9.9"], cwd=repo_root)
+
+        bare_version = "9.9.9"
+        rows = [_corpus_row(1, matcher_version=bare_version)]
+        gold = [_gold_row(1)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        captured = capsys.readouterr()
+
+        assert rc == 0, (
+            f"bare semver '{bare_version}' should resolve against tag "
+            f"'v{bare_version}' when a direct rev-parse fails; guard "
+            f"reported non-zero exit with stderr:\n{captured.err}"
+        )
+        assert "diverg" not in captured.err.lower()
+        assert "mismatch" not in captured.err.lower()
+        assert "unverifiable" not in captured.err.lower()
+
 
 # ---------------------------------------------------------------------------
 # Report structure: all 5 KC sections + correct PASS/FAIL/INSUFFICIENT_DATA

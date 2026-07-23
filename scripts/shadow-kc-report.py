@@ -152,24 +152,38 @@ def _provenance_guard(rows: list[CorpusRow], repo_root: Path) -> bool:
                 f"matcher_version {matcher_version!r} is not a resolvable commit"
             )
 
+        resolved_revision = matcher_version
         resolved = _run_git(
             repo_root,
             "rev-parse",
             "--verify",
-            f"{matcher_version}^{{commit}}",
+            f"{resolved_revision}^{{commit}}",
         )
         if resolved.returncode != 0:
-            detail = resolved.stderr.strip() or "git could not resolve the commit"
-            return _guard_error(
-                f"matcher_version {matcher_version!r} is unverifiable: {detail}"
+            prefixed_revision = f"v{matcher_version}"
+            prefixed_resolved = _run_git(
+                repo_root,
+                "rev-parse",
+                "--verify",
+                f"{prefixed_revision}^{{commit}}",
             )
+            if prefixed_resolved.returncode != 0:
+                detail = (
+                    resolved.stderr.strip()
+                    or "git could not resolve the commit"
+                )
+                return _guard_error(
+                    f"matcher_version {matcher_version!r} is unverifiable: "
+                    f"{detail}"
+                )
+            resolved_revision = prefixed_revision
 
         for module_path in _DEPENDENCY_MODULES:
             comparison = _run_git(
                 repo_root,
                 "diff",
                 "--quiet",
-                matcher_version,
+                resolved_revision,
                 "HEAD",
                 "--",
                 module_path,
