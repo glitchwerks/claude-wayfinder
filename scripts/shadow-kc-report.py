@@ -229,9 +229,9 @@ def _eligible_rows(rows: list[CorpusRow]) -> list[CorpusRow]:
     eligible: list[CorpusRow] = []
     for row in rows:
         caller_input = row["input"]
-        domain = caller_input["domain"]
+        domain = caller_input.get("domain")
         posture = caller_input["posture"]
-        confidence = caller_input["confidence"]
+        confidence = caller_input.get("confidence")
         domain_for_lookup = domain if domain not in (None, "is_any") else "any"
         is_gated = domain not in (None, "is_any")
         cell_exists = (
@@ -364,7 +364,7 @@ def _render_report(
         label = gold.get(row["corpus_id"])
         if label is None:
             continue
-        if row["input"]["domain"] == label.domain:
+        if row["input"].get("domain") == label.domain:
             matched += 1
         else:
             mismatched += 1
