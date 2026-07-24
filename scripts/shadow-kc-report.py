@@ -331,7 +331,8 @@ def _revision_compose_loader(
 
     Each revision is extracted to a unique temporary source path and
     registered under a unique module name. Both artifacts remain alive
-    for the context lifetime so ``inspect.getsource`` can verify the rig.
+    for the context lifetime so the self-check can verify each loaded
+    module's full source file against its intended Git blob.
 
     Args:
         repo_root: Git repository containing revision blobs.
@@ -406,7 +407,8 @@ def _verify_rig_isolation(
 
     Raises:
         RigIsolationError: If textually different revisions resolve to the
-            same function object or identical loaded function source.
+            same function object or snapshot path, or a loaded snapshot's
+            full text does not match its intended Git blob.
     """
     del catalog  # The source-level isolation check is catalog-independent.
 
@@ -424,20 +426,45 @@ def _verify_rig_isolation(
                     "compose import rig returned the same function object "
                     f"for {baseline_revision} and {head_revision}"
                 )
-            baseline_source = inspect.getsource(baseline_compose)
-            head_source = inspect.getsource(head_compose)
+
+            baseline_source_file = inspect.getsourcefile(baseline_compose)
+            head_source_file = inspect.getsourcefile(head_compose)
+            if baseline_source_file is None:
+                raise RigIsolationError(
+                    "compose import rig could not resolve the baseline "
+                    f"source file for {baseline_revision}"
+                )
+            if head_source_file is None:
+                raise RigIsolationError(
+                    f"compose import rig could not resolve the HEAD source file for {head_revision}"
+                )
+
+            baseline_source_path = Path(baseline_source_file).resolve()
+            head_source_path = Path(head_source_file).resolve()
+            if baseline_source_path == head_source_path:
+                raise RigIsolationError(
+                    "compose import rig loaded baseline and HEAD from the "
+                    f"same source file: {baseline_source_path}"
+                )
+
+            baseline_loaded_text = baseline_source_path.read_text(encoding="utf-8")
+            head_loaded_text = head_source_path.read_text(encoding="utf-8")
+            if baseline_loaded_text != baseline_blob:
+                raise RigIsolationError(
+                    "compose import rig baseline snapshot does not match "
+                    f"Git blob {baseline_revision}: {baseline_source_path}"
+                )
+            if head_loaded_text != head_blob:
+                raise RigIsolationError(
+                    "compose import rig HEAD snapshot does not match "
+                    f"Git blob {head_revision}: {head_source_path}"
+                )
     except RigIsolationError:
         raise
     except Exception as exc:
         raise RigIsolationError(
             f"compose import rig could not isolate {baseline_revision} and {head_revision}: {exc}"
         ) from exc
-
-    if baseline_source == head_source:
-        raise RigIsolationError(
-            "compose import rig loaded identical code for textually "
-            f"different revisions {baseline_revision} and {head_revision}"
-        )
 
 
 def _compose_decision(
@@ -614,7 +641,7 @@ def _eligible_rows(rows: list[CorpusRow]) -> list[CorpusRow]:
     for row in rows:
         caller_input = row["input"]
         domain = caller_input.get("domain")
-        posture = caller_input["posture"]
+        posture = caller_input.get("posture")
         confidence = caller_input.get("confidence")
         domain_for_lookup = domain if domain not in (None, "is_any") else "any"
         is_gated = domain not in (None, "is_any")
