@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import inspect
 import json
 import subprocess
 import sys
-from dataclasses import asdict
+import tempfile
+import uuid
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from types import ModuleType
+from typing import Any, Callable, Iterator, Literal
 
 # Direct script execution does not automatically put the repository root on
 # sys.path. Add it before importing the scripts namespace.
@@ -20,7 +26,17 @@ _SRC_DIR = _REPO_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+from claude_wayfinder.match._catalog import (  # noqa: E402
+    _resolve_catalog_path,
+    load_catalog,
+)
 from claude_wayfinder.match._cells import cell_map_lookup  # noqa: E402
+from claude_wayfinder.match._compose import parse_labels  # noqa: E402
+from claude_wayfinder.match._match import (  # noqa: E402
+    build_features,
+    score_entries,
+)
+from claude_wayfinder.match._types import CatalogEntry  # noqa: E402
 from scripts.corpus.eval._kc import (  # noqa: E402
     KCVerdict,
     compute_kc1,
@@ -42,6 +58,8 @@ from scripts.corpus.eval._systems import SystemResult  # noqa: E402
 
 CorpusRow = dict[str, Any]
 Arm = Literal["shadow", "live"]
+ComposeRoute = Callable[..., dict[str, Any]]
+ComposeLoader = Callable[[str], ComposeRoute]
 
 _DEPENDENCY_MODULES = (
     "src/claude_wayfinder/match/_compose.py",
@@ -89,6 +107,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="PATH",
         help="Git repository root used for provenance checks (default: cwd).",
     )
+    parser.add_argument(
+        "--catalog-path",
+        default=None,
+        type=Path,
+        metavar="PATH",
+        help=("Dispatch catalog JSON file (default: DISPATCH_CATALOG_PATH environment variable)."),
+    )
     return parser.parse_args(argv)
 
 
@@ -115,103 +140,462 @@ def _run_git(repo_root: Path, *arguments: str) -> subprocess.CompletedProcess[st
     )
 
 
-def _guard_error(message: str) -> bool:
-    """Print a provenance warning and return the failed-guard sentinel.
+@dataclass(frozen=True)
+class ProvenancePartition:
+    """Per-row matcher provenance outcomes.
+
+    Attributes:
+        included: Corpus IDs whose baseline and HEAD routing agree.
+        excluded: Corpus IDs whose routing differs, with reasons.
+        unverifiable: Corpus IDs whose matcher version cannot be resolved.
+    """
+
+    included: frozenset[int]
+    excluded: dict[int, str]
+    unverifiable: dict[int, str]
+
+
+class ProvenanceGuardError(RuntimeError):
+    """Raised when matcher provenance cannot be checked safely."""
+
+
+class RigIsolationError(ProvenanceGuardError):
+    """Raised when revision-isolated compose imports cannot be trusted."""
+
+
+def _git_failure_detail(
+    result: subprocess.CompletedProcess[str],
+    fallback: str,
+) -> str:
+    """Return the most useful captured Git failure text.
 
     Args:
-        message: Human-readable failure detail.
+        result: Completed Git subprocess.
+        fallback: Detail used when Git emitted no diagnostic text.
 
     Returns:
-        False, indicating that the guard failed.
+        A non-empty error detail.
     """
-    print(f"ERROR: matcher_version provenance guard: {message}", file=sys.stderr)
-    return False
+    return result.stderr.strip() or result.stdout.strip() or fallback
 
 
-def _provenance_guard(rows: list[CorpusRow], repo_root: Path) -> bool:
-    """Validate corpus matcher provenance against committed and dirty state.
+def _resolve_matcher_revision(
+    repo_root: Path,
+    matcher_version: object,
+) -> tuple[str | None, str | None]:
+    """Resolve a logged matcher version to a full commit SHA.
+
+    Direct revision resolution is attempted first, followed by the
+    project's ``v``-prefixed release-tag convention.
+
+    Args:
+        repo_root: Git repository containing the revision.
+        matcher_version: Raw version value from a corpus row.
+
+    Returns:
+        ``(full_sha, None)`` on success, otherwise ``(None, reason)``.
+    """
+    if not isinstance(matcher_version, str) or not matcher_version:
+        return (
+            None,
+            f"matcher_version {matcher_version!r} is not a non-empty string",
+        )
+
+    details: list[str] = []
+    for candidate in (matcher_version, f"v{matcher_version}"):
+        result = _run_git(
+            repo_root,
+            "rev-parse",
+            "--verify",
+            f"{candidate}^{{commit}}",
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip(), None
+        details.append(
+            _git_failure_detail(
+                result,
+                f"git could not resolve {candidate!r}",
+            )
+        )
+
+    return (
+        None,
+        f"matcher_version {matcher_version!r} could not be resolved "
+        f"(direct or v-prefixed): {'; '.join(details)}",
+    )
+
+
+def _validate_provenance_repository(repo_root: Path) -> str:
+    """Validate global repository preconditions and resolve HEAD.
+
+    Args:
+        repo_root: Repository to inspect.
+
+    Returns:
+        The full commit SHA for HEAD.
+
+    Raises:
+        ProvenanceGuardError: If the path is not a Git worktree, HEAD
+            cannot be resolved, or a guarded dependency is dirty.
+    """
+    try:
+        repository = _run_git(
+            repo_root,
+            "rev-parse",
+            "--is-inside-work-tree",
+        )
+    except OSError as exc:
+        raise ProvenanceGuardError(f"cannot inspect repository {repo_root}: {exc}") from exc
+
+    if repository.returncode != 0 or repository.stdout.strip() != "true":
+        detail = _git_failure_detail(repository, "not a git repository")
+        raise ProvenanceGuardError(f"repo_root {repo_root} is not a git repository: {detail}")
+
+    head = _run_git(
+        repo_root,
+        "rev-parse",
+        "--verify",
+        "HEAD^{commit}",
+    )
+    if head.returncode != 0 or not head.stdout.strip():
+        detail = _git_failure_detail(head, "git could not resolve HEAD")
+        raise ProvenanceGuardError(f"cannot resolve HEAD: {detail}")
+    head_revision = head.stdout.strip()
+
+    for module_path in _DEPENDENCY_MODULES:
+        status = _run_git(
+            repo_root,
+            "status",
+            "--porcelain",
+            "--",
+            module_path,
+        )
+        if status.returncode != 0:
+            detail = _git_failure_detail(status, "git status failed")
+            raise ProvenanceGuardError(f"cannot inspect {module_path}: {detail}")
+        if status.stdout.strip():
+            raise ProvenanceGuardError(f"{module_path} has uncommitted changes")
+
+    return head_revision
+
+
+def _compose_blob(repo_root: Path, revision: str) -> str:
+    """Read the committed ``_compose.py`` source at one revision.
+
+    Args:
+        repo_root: Git repository containing the blob.
+        revision: Full commit SHA to inspect.
+
+    Returns:
+        UTF-8 source text for the committed compose module.
+
+    Raises:
+        ImportError: If Git cannot extract the blob.
+    """
+    blob_path = _DEPENDENCY_MODULES[0]
+    result = _run_git(
+        repo_root,
+        "show",
+        f"{revision}:{blob_path}",
+    )
+    if result.returncode != 0:
+        detail = _git_failure_detail(result, "git show failed")
+        raise ImportError(f"cannot load {blob_path} at {revision}: {detail}")
+    return result.stdout
+
+
+def _compose_function(module: ModuleType) -> ComposeRoute:
+    """Extract a callable ``compose_route`` from an imported module.
+
+    Args:
+        module: Revision-isolated compose module.
+
+    Returns:
+        The module's callable ``compose_route`` attribute.
+
+    Raises:
+        AttributeError: If the module lacks ``compose_route``.
+        TypeError: If the attribute is not callable.
+    """
+    function = getattr(module, "compose_route")
+    if not callable(function):
+        raise TypeError(f"{module.__name__}.compose_route is not callable")
+    return function
+
+
+@contextmanager
+def _revision_compose_loader(
+    repo_root: Path,
+) -> Iterator[ComposeLoader]:
+    """Yield a cached loader for isolated compose-module revisions.
+
+    Each revision is extracted to a unique temporary source path and
+    registered under a unique module name. Both artifacts remain alive
+    for the context lifetime so ``inspect.getsource`` can verify the rig.
+
+    Args:
+        repo_root: Git repository containing revision blobs.
+
+    Yields:
+        A function loading and caching ``compose_route`` by full SHA.
+    """
+    module_names: list[str] = []
+    cache: dict[str, ComposeRoute] = {}
+
+    with tempfile.TemporaryDirectory(
+        prefix=".shadow-kc-compose-",
+        dir=repo_root,
+    ) as temporary_directory:
+        snapshot_root = Path(temporary_directory)
+
+        def _load(revision: str) -> ComposeRoute:
+            cached = cache.get(revision)
+            if cached is not None:
+                return cached
+
+            token = uuid.uuid4().hex
+            snapshot_path = snapshot_root / f"_compose_{token}.py"
+            module_name = f"_shadow_kc_compose_{token}"
+            snapshot_path.write_text(
+                _compose_blob(repo_root, revision),
+                encoding="utf-8",
+                newline="",
+            )
+
+            spec = importlib.util.spec_from_file_location(
+                module_name,
+                snapshot_path,
+            )
+            if spec is None or spec.loader is None:
+                raise ImportError(f"could not create import spec for {snapshot_path}")
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            module_names.append(module_name)
+            try:
+                spec.loader.exec_module(module)
+            except Exception:
+                sys.modules.pop(module_name, None)
+                module_names.remove(module_name)
+                raise
+
+            compose_route = _compose_function(module)
+            cache[revision] = compose_route
+            return compose_route
+
+        try:
+            yield _load
+        finally:
+            for module_name in module_names:
+                sys.modules.pop(module_name, None)
+
+
+def _verify_rig_isolation(
+    repo_root: Path,
+    baseline_revision: str,
+    head_revision: str,
+    catalog: list[CatalogEntry],
+) -> None:
+    """Verify that distinct compose revisions load as distinct code.
+
+    Args:
+        repo_root: Git repository containing both revisions.
+        baseline_revision: Full baseline commit SHA.
+        head_revision: Full HEAD commit SHA.
+        catalog: Shared catalog supplied to the provenance partition.
+
+    Raises:
+        RigIsolationError: If textually different revisions resolve to the
+            same function object or identical loaded function source.
+    """
+    del catalog  # The source-level isolation check is catalog-independent.
+
+    baseline_blob = _compose_blob(repo_root, baseline_revision)
+    head_blob = _compose_blob(repo_root, head_revision)
+    if baseline_blob == head_blob:
+        return
+
+    try:
+        with _revision_compose_loader(repo_root) as load_compose:
+            baseline_compose = load_compose(baseline_revision)
+            head_compose = load_compose(head_revision)
+            if baseline_compose is head_compose:
+                raise RigIsolationError(
+                    "compose import rig returned the same function object "
+                    f"for {baseline_revision} and {head_revision}"
+                )
+            baseline_source = inspect.getsource(baseline_compose)
+            head_source = inspect.getsource(head_compose)
+    except RigIsolationError:
+        raise
+    except Exception as exc:
+        raise RigIsolationError(
+            f"compose import rig could not isolate {baseline_revision} and {head_revision}: {exc}"
+        ) from exc
+
+    if baseline_source == head_source:
+        raise RigIsolationError(
+            "compose import rig loaded identical code for textually "
+            f"different revisions {baseline_revision} and {head_revision}"
+        )
+
+
+def _compose_decision(
+    compose_route: ComposeRoute,
+    labels: Any,
+    scored_agents: list[Any],
+    scored_skills: list[Any],
+    features: Any,
+    catalog: list[CatalogEntry],
+    catalog_agent_names: frozenset[str],
+) -> dict[str, Any]:
+    """Run and normalize one revision-specific compose decision.
+
+    Args:
+        compose_route: Revision-specific compose function.
+        labels: Shared parsed caller labels.
+        scored_agents: Shared scored catalog agents.
+        scored_skills: Shared scored catalog skills.
+        features: Shared caller-input features.
+        catalog: Shared catalog entries.
+        catalog_agent_names: Shared routable agent names.
+
+    Returns:
+        The three normalized provenance comparison fields.
+    """
+    diagnostics: dict[str, Any] = {}
+    output = compose_route(
+        labels,
+        scored_agents,
+        scored_skills,
+        features,
+        catalog,
+        catalog_agent_names,
+        diagnostics=diagnostics,
+    )
+    return {
+        "agent": output.get("agent"),
+        "decision": output.get("decision"),
+        "posture_routed": diagnostics.get("posture_routed"),
+    }
+
+
+def _caller_context(row: CorpusRow) -> dict[str, Any]:
+    """Build a missing-key-safe matcher context from one corpus row.
+
+    Args:
+        row: Raw shadow-corpus record.
+
+    Returns:
+        Context containing every feature and label input used by the real
+        HEAD matcher helpers.
+    """
+    raw_input = row.get("input")
+    caller_input = raw_input if isinstance(raw_input, dict) else {}
+    return {
+        "domain": caller_input.get("domain"),
+        "posture": caller_input.get("posture"),
+        "confidence": caller_input.get("confidence"),
+        "area_span": caller_input.get("area_span"),
+        "task_description": caller_input.get("task_description") or "",
+        "file_paths": caller_input.get("file_paths") or [],
+        "agent_mentions": caller_input.get("agent_mentions") or [],
+        "tool_mentions": caller_input.get("tool_mentions") or [],
+        "command_prefix": caller_input.get("command_prefix"),
+    }
+
+
+def _provenance_partition(
+    rows: list[CorpusRow],
+    repo_root: Path,
+    catalog: list[CatalogEntry],
+) -> ProvenancePartition:
+    """Partition corpus rows by baseline-vs-HEAD compose agreement.
 
     Args:
         rows: Raw shadow-corpus records.
         repo_root: Git repository containing matcher dependency modules.
+        catalog: One shared HEAD-loaded catalog for both compose runs.
 
     Returns:
-        True only when one resolvable matcher version produced every row and
-        both dependency modules are unchanged and clean.
+        A complete, mutually exclusive provenance partition.
+
+    Raises:
+        ProvenanceGuardError: If repository-wide safety checks fail or the
+            revision import rig cannot be trusted.
     """
-    try:
-        versions = {row.get("matcher_version") for row in rows}
-        if len(versions) != 1:
-            return _guard_error(
-                "corpus rows do not contain one consistent matcher_version"
-            )
+    head_revision = _validate_provenance_repository(repo_root)
+    included: set[int] = set()
+    excluded: dict[int, str] = {}
+    unverifiable: dict[int, str] = {}
+    verified_pairs: set[tuple[str, str]] = set()
 
-        matcher_version = next(iter(versions))
-        if not isinstance(matcher_version, str) or matcher_version == "unknown":
-            return _guard_error(
-                f"matcher_version {matcher_version!r} is not a resolvable commit"
-            )
-
-        resolved_revision = matcher_version
-        resolved = _run_git(
-            repo_root,
-            "rev-parse",
-            "--verify",
-            f"{resolved_revision}^{{commit}}",
-        )
-        if resolved.returncode != 0:
-            prefixed_revision = f"v{matcher_version}"
-            prefixed_resolved = _run_git(
+    with _revision_compose_loader(repo_root) as load_compose:
+        for row in rows:
+            corpus_id = int(row["corpus_id"])
+            baseline_revision, reason = _resolve_matcher_revision(
                 repo_root,
-                "rev-parse",
-                "--verify",
-                f"{prefixed_revision}^{{commit}}",
+                row.get("matcher_version"),
             )
-            if prefixed_resolved.returncode != 0:
-                detail = (
-                    resolved.stderr.strip()
-                    or "git could not resolve the commit"
-                )
-                return _guard_error(
-                    f"matcher_version {matcher_version!r} is unverifiable: "
-                    f"{detail}"
-                )
-            resolved_revision = prefixed_revision
+            if baseline_revision is None:
+                unverifiable[corpus_id] = reason or "matcher version could not be resolved"
+                continue
 
-        for module_path in _DEPENDENCY_MODULES:
-            comparison = _run_git(
-                repo_root,
-                "diff",
-                "--quiet",
-                resolved_revision,
-                "HEAD",
-                "--",
-                module_path,
+            if baseline_revision == head_revision:
+                included.add(corpus_id)
+                continue
+
+            revision_pair = (baseline_revision, head_revision)
+            if revision_pair not in verified_pairs:
+                _verify_rig_isolation(
+                    repo_root,
+                    baseline_revision,
+                    head_revision,
+                    catalog,
+                )
+                verified_pairs.add(revision_pair)
+
+            context = _caller_context(row)
+            labels = parse_labels(context)
+            features = build_features(context)
+            scored_agents, scored_skills = score_entries(catalog, features)
+            catalog_agent_names = frozenset(scored.entry.name for scored in scored_agents)
+
+            baseline_decision = _compose_decision(
+                load_compose(baseline_revision),
+                labels,
+                scored_agents,
+                scored_skills,
+                features,
+                catalog,
+                catalog_agent_names,
             )
-            if comparison.returncode == 1:
-                return _guard_error(
-                    f"{module_path} changed after matcher_version {matcher_version}"
-                )
-            if comparison.returncode != 0:
-                detail = comparison.stderr.strip() or "git diff failed"
-                return _guard_error(f"cannot compare {module_path}: {detail}")
-
-            status = _run_git(
-                repo_root,
-                "status",
-                "--porcelain",
-                "--",
-                module_path,
+            head_decision = _compose_decision(
+                load_compose(head_revision),
+                labels,
+                scored_agents,
+                scored_skills,
+                features,
+                catalog,
+                catalog_agent_names,
             )
-            if status.returncode != 0:
-                detail = status.stderr.strip() or "git status failed"
-                return _guard_error(f"cannot inspect {module_path}: {detail}")
-            if status.stdout.strip():
-                return _guard_error(f"{module_path} has uncommitted changes")
-    except Exception as exc:  # Fail closed for all git/process edge cases.
-        return _guard_error(f"git verification failed safely: {exc}")
+            disagreeing_fields = [
+                field
+                for field in ("agent", "decision", "posture_routed")
+                if baseline_decision[field] != head_decision[field]
+            ]
+            if disagreeing_fields:
+                excluded[corpus_id] = (
+                    f"baseline and HEAD compose_route disagree on: {', '.join(disagreeing_fields)}"
+                )
+            else:
+                included.add(corpus_id)
 
-    return True
+    return ProvenancePartition(
+        included=frozenset(included),
+        excluded=excluded,
+        unverifiable=unverifiable,
+    )
 
 
 def _eligible_rows(rows: list[CorpusRow]) -> list[CorpusRow]:
@@ -235,8 +619,7 @@ def _eligible_rows(rows: list[CorpusRow]) -> list[CorpusRow]:
         domain_for_lookup = domain if domain not in (None, "is_any") else "any"
         is_gated = domain not in (None, "is_any")
         cell_exists = (
-            posture is not None
-            and cell_map_lookup(domain_for_lookup, posture) is not None
+            posture is not None and cell_map_lookup(domain_for_lookup, posture) is not None
         )
         if is_gated and cell_exists and confidence == "high":
             eligible.append(row)
@@ -297,11 +680,7 @@ def _recommendation(verdicts: list[KCVerdict]) -> str:
     """
     by_kc = {verdict.kc: verdict for verdict in verdicts}
     failed = [verdict.kc for verdict in verdicts if verdict.status == "FAIL"]
-    insufficient = [
-        verdict.kc
-        for verdict in verdicts
-        if verdict.status == "INSUFFICIENT_DATA"
-    ]
+    insufficient = [verdict.kc for verdict in verdicts if verdict.status == "INSUFFICIENT_DATA"]
 
     if by_kc["KC-2"].status != "PASS" or failed:
         recommendation = "NO-GO"
@@ -371,8 +750,7 @@ def _render_report(
     lines.extend(
         [
             "## Caller-label match breakdown",
-            f"Matched gold: {matched}; caller-label mismatch/disagreement: "
-            f"{mismatched}.",
+            f"Matched gold: {matched}; caller-label mismatch/disagreement: {mismatched}.",
             "",
             "## Go/no-go recommendation",
             recommendation,
@@ -395,6 +773,17 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
     try:
+        catalog_path = _resolve_catalog_path(args.catalog_path)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) and exc.code != 0 else 1
+
+    try:
+        catalog = load_catalog(catalog_path)
+    except Exception as exc:
+        print(f"ERROR loading dispatch catalog: {exc}", file=sys.stderr)
+        return 1
+
+    try:
         entries = load_corpus(args.corpus)
         gold = load_labels(args.labels)
     except Exception as exc:
@@ -402,8 +791,27 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     rows = [entry.raw for entry in entries]
-    if not _provenance_guard(rows, args.repo_root):
+    try:
+        partition = _provenance_partition(rows, args.repo_root, catalog)
+    except ProvenanceGuardError as exc:
+        print(
+            f"ERROR: matcher_version provenance guard: {exc}",
+            file=sys.stderr,
+        )
         return 1
+
+    for corpus_id, reason in sorted(partition.excluded.items()):
+        print(
+            f"Excluded corpus_id {corpus_id} from KC computation: {reason}",
+            file=sys.stderr,
+        )
+    for corpus_id, reason in sorted(partition.unverifiable.items()):
+        print(
+            f"Unverifiable corpus_id {corpus_id}; excluded from KC computation: {reason}",
+            file=sys.stderr,
+        )
+
+    rows = [row for row in rows if int(row["corpus_id"]) in partition.included]
 
     try:
         verdicts = [

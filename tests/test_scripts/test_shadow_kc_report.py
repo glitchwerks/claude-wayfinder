@@ -18,22 +18,22 @@ RED -- written before implementation.
 Design judgment calls made by the test-implementer (documented for the
 router / code-implementer, since no prior contract existed for these):
 
-1. **Exit-code resolution on a matcher_version provenance-guard failure.**
-   The router briefing that produced this test file says a provenance
-   mismatch should degrade like an INSUFFICIENT-DATA verdict (warn, exit 0).
-   That contradicts three more durable sources this briefing itself names:
-   plan Sec 4.4/4.5 ("emit a hard warning and exit non-zero ... not silently
-   pick the first/majority value" / "... exiting non-zero on divergence in
-   any of them"), issue #484 Sec 4.5 item 2 ("hard warning + non-zero exit on
-   divergence or unresolvable version" -- the exact text the briefing cites
-   as its own source), and issue #485 step 1 ("if it diverges, re-accumulate
-   shadow data ... before running", a block-and-stop framing). All guard
-   tests below therefore assert a **non-zero** exit code on a provenance
-   failure, matching the plan/issues. **This conflicts with the briefing's
-   items 4 and 6 -- flagged for the router to confirm before this contract
-   is frozen for the code-implementer.** Both sources agree the guard must
-   also emit a legible warning (stderr + reflected in the report) rather
-   than an unhandled crash; that much is asserted without conflict.
+1. **[SUPERSEDED by issue #501 -- see items 4-8 below.] Exit-code
+   resolution on a matcher_version provenance-guard failure.** The
+   original two-part boolean guard (``_provenance_guard(rows,
+   repo_root) -> bool``, whole-run abort on any mismatch) asserted a
+   **non-zero** exit code on ANY provenance failure -- mixed
+   ``matcher_version`` stamps across rows, or any dependency-module diff
+   since the recorded version. Issue #501 replaces that whole two-part
+   model with a **per-row** HEAD-vs-baseline ``compose_route`` agreement
+   check that partitions rows into included / excluded / unverifiable
+   buckets rather than aborting the whole run on any single row's
+   provenance problem. The tests below implementing that per-row model
+   supersede ``TestMatcherVersionGuard`` from the original design; see
+   item 4 for the new contract. A **dirty working tree** on either
+   dependency module (see item 6) is the one case that still hard-aborts
+   the whole run -- there is no stable HEAD baseline to compare against
+   in that case, which is a global problem, not a per-row one.
 2. **`--repo-root PATH` (new, optional CLI flag, default: cwd).** The
    provenance guard's git-state comparison is inherently tied to a real git
    worktree containing ``src/claude_wayfinder/match/_compose.py`` and
@@ -48,6 +48,78 @@ router / code-implementer, since no prior contract existed for these):
    "metrics"}`` objects, one per KC-1..KC-5, mirroring
    ``scripts.corpus.eval._kc.KCVerdict`` field names) and an
    ``"overall_recommendation"`` string key.
+4. **[NEW, issue #501] Guard function name/signature and partition
+   shape.** ``_provenance_partition(rows: list[CorpusRow], repo_root:
+   Path, catalog: list[CatalogEntry]) -> ProvenancePartition`` replaces
+   ``_provenance_guard(rows, repo_root) -> bool`` entirely (both the
+   one-consistent-version gate and the module file-diff check are
+   dropped per issue #501's §4a "full narrow" design -- per-row
+   HEAD-vs-baseline ``compose_route`` agreement subsumes the intent of
+   both). ``ProvenancePartition`` is a frozen dataclass with three
+   fields: ``included: frozenset[int]`` (corpus_ids where HEAD and the
+   row's baseline ``compose_route`` agree, or where baseline == HEAD
+   trivially), ``excluded: dict[int, str]`` (corpus_id -> a string
+   naming which field(s) disagreed, e.g. mentions ``"agent"``,
+   ``"decision"``, or ``"posture_routed"``), and ``unverifiable: dict[int,
+   str]`` (corpus_id -> a reason the row's ``matcher_version`` could not
+   be resolved to a git revision at all). Every corpus_id in the input
+   ``rows`` appears in exactly one bucket. The comparison vehicle is
+   ``compose_route`` (``src/claude_wayfinder/match/_compose.py:296``)
+   run against the row's own logged caller labels
+   (``input.{domain,posture,confidence,area_span}``) and ONE shared,
+   caller-supplied ``catalog`` for both the baseline and HEAD calls --
+   never ``scripts/corpus/eval/_systems.run_supplied_compose`` (a
+   divergent reimplementation blind to ``_compose.py`` changes) and
+   never gold labels.
+5. **[NEW, issue #501] Rig-isolation self-check.**
+   ``_verify_rig_isolation(repo_root: Path, baseline_revision: str,
+   head_revision: str, catalog: list[CatalogEntry]) -> None`` is a
+   dedicated self-check that ``_provenance_partition`` calls (whenever a
+   row's resolved baseline revision differs from HEAD's resolved
+   revision) BEFORE trusting that row's ``compose_route`` comparison. It
+   raises ``RigIsolationError`` when the two-version import mechanism
+   appears to have loaded the *same* code for two textually-different
+   revisions (the module-cache-collision false-negative documented in
+   issue #500 §3.4) -- a false-negative here means every row would
+   silently show "agreement" even though the import rig is broken. When
+   a row's resolved baseline revision equals HEAD's resolved revision
+   (the common case -- most corpus rows are logged against a version at
+   or near HEAD), there is nothing to isolate (only one version exists)
+   and the row is included without invoking the self-check.
+6. **[NEW, issue #501] Exception hierarchy for whole-run aborts.**
+   ``class ProvenanceGuardError(RuntimeError)`` is raised by
+   ``_provenance_partition`` (not returned as a partition) when the
+   guard cannot proceed at all: a dirty working tree on either
+   dependency module at HEAD (no stable HEAD baseline exists to compare
+   any row against), or ``repo_root`` not being a git repository at all.
+   ``class RigIsolationError(ProvenanceGuardError)`` is the rig-isolation
+   self-check's specific failure. ``main()`` catches
+   ``ProvenanceGuardError`` and returns a non-zero exit code, mirroring
+   the old boolean guard's whole-run-abort behavior for these two global
+   cases only -- everything else is now a per-row partition, not a
+   global abort.
+7. **[NEW, issue #501] `--catalog-path PATH` (new, optional CLI flag).**
+   ``_provenance_partition`` needs a real, fixed ``list[CatalogEntry]``
+   to drive ``build_features``/``score_entries``/``compose_route`` for
+   its per-row comparisons -- reusing the project's existing
+   ``--catalog-path`` / ``DISPATCH_CATALOG_PATH`` resolution convention
+   (``src/claude_wayfinder/match/_catalog.py:_resolve_catalog_path``:
+   explicit flag wins, then the env var, else a loud ``[CATALOG ERROR]``
+   and non-zero exit) rather than inventing new resolution semantics.
+   This suite's ``_run_main`` helper auto-provisions a small hermetic
+   default catalog and passes ``--catalog-path`` under the hood so
+   existing (non-guard-focused) test call sites do not need to change.
+8. **[NEW, issue #501] KC computation scope after partitioning.** KC-1
+   through KC-5 computation (unchanged per issue #501's explicit "KC
+   computation is untouched" -- the plan this issue's design rests on,
+   §4) still runs over the corpus rows, but only the ``included``
+   partition -- ``excluded`` and ``unverifiable`` rows are dropped
+   before KC compute, not fed to it. This suite does not re-pin the
+   exact KC-per-row filtering call site (that is an implementation
+   detail); it asserts the externally observable behavior: a run with
+   some excluded/unverifiable rows still completes (exit 0) and the
+   report/stderr surfaces the exclusion, rather than the whole run
+   aborting non-zero the way the old boolean guard did.
 
 Public API designed here (the implementer builds to match):
 
@@ -55,7 +127,9 @@ Public API designed here (the implementer builds to match):
     (mirrors the ``scripts/corpus/eval/__main__.py`` convention).
 
     CLI flags: ``--corpus PATH`` (required), ``--labels PATH`` (required),
-    ``--json PATH`` (optional), ``--repo-root PATH`` (optional, default cwd).
+    ``--json PATH`` (optional), ``--repo-root PATH`` (optional, default cwd),
+    ``--catalog-path PATH`` (optional, falls back to ``DISPATCH_CATALOG_PATH``
+    env var, else fails loud -- issue #501, item 7).
 """
 
 from __future__ import annotations
@@ -70,6 +144,9 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+
+from claude_wayfinder.match._parse import _parse_triggers
+from claude_wayfinder.match._types import CatalogEntry
 
 # Load the script from its path (it lives under scripts/, is not part of
 # the installed package, and its filename is not a valid Python
@@ -226,12 +303,120 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
 
+def _make_agent_dict(name: str) -> dict[str, Any]:
+    """Build a minimal on-disk (JSON) catalog agent entry for ``name``.
+
+    Args:
+        name: Agent name.
+
+    Returns:
+        A dict matching the ``load_catalog``-consumed on-disk schema.
+    """
+    return {
+        "name": name,
+        "kind": "agent",
+        "description": f"Agent {name}.",
+        "source": "owned",
+        "routable": True,
+        "triggers": {
+            "command_prefixes": [],
+            "agent_mentions": [],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [],
+            "tool_mentions": [],
+            "excludes": [],
+        },
+        "applicable_skills": [],
+    }
+
+
+#: Agent names covered by the default hermetic catalog -- chosen to match
+#: names already used by ``_corpus_row``/``_gold_row`` default and
+#: parametrized call sites across this test module.
+_DEFAULT_CATALOG_AGENT_NAMES = (
+    "code-writer",
+    "ops",
+    "investigator",
+    "test-implementer",
+    "researcher",
+)
+
+
+def _default_catalog_json() -> dict[str, Any]:
+    """Build the on-disk (JSON) default hermetic catalog envelope."""
+    return {
+        "schema_version": 1,
+        "entries": [_make_agent_dict(n) for n in _DEFAULT_CATALOG_AGENT_NAMES],
+    }
+
+
+def _provision_default_catalog_path(near: Path) -> Path:
+    """Write (idempotently) the default hermetic catalog next to ``near``.
+
+    Args:
+        near: A path inside the directory the catalog file should live in
+            (typically a ``tmp_path``-derived corpus/labels file).
+
+    Returns:
+        Path to the written catalog JSON file.
+    """
+    catalog_path = near.parent / "_default_catalog.json"
+    catalog_path.write_text(
+        json.dumps(_default_catalog_json()), encoding="utf-8"
+    )
+    return catalog_path
+
+
+def _make_catalog_entry(name: str) -> CatalogEntry:
+    """Build a minimal in-memory ``CatalogEntry`` for direct guard calls.
+
+    Args:
+        name: Agent name.
+
+    Returns:
+        A routable agent :class:`CatalogEntry` with no triggers.
+    """
+    triggers = _parse_triggers(
+        {
+            "command_prefixes": [],
+            "agent_mentions": [],
+            "path_globs": [],
+            "path_globs_excluded": [],
+            "keywords": [],
+            "tool_mentions": [],
+            "excludes": [],
+        }
+    )
+    return CatalogEntry(
+        name=name,
+        kind="agent",
+        source="owned",
+        routable=True,
+        triggers=triggers,
+        applicable_skills=(),
+        applicable_agents=(),
+    )
+
+
+def _default_catalog_entries() -> list[CatalogEntry]:
+    """Build the default hermetic catalog as in-memory ``CatalogEntry``\\ s.
+
+    Returns:
+        A list of routable agent entries covering
+        ``_DEFAULT_CATALOG_AGENT_NAMES``, for direct (non-subprocess,
+        non-CLI) calls into the guard function under test.
+    """
+    return [_make_catalog_entry(n) for n in _DEFAULT_CATALOG_AGENT_NAMES]
+
+
 def _run_main(
     mod: ModuleType,
     corpus: Path,
     labels: Path,
     repo_root: Path,
     json_path: Path | None = None,
+    catalog_path: Path | None = None,
 ) -> int:
     """Invoke ``mod.main`` with the standard required flags.
 
@@ -241,10 +426,17 @@ def _run_main(
         labels: Path to the gold-labels JSONL fixture.
         repo_root: Path passed as ``--repo-root``.
         json_path: Optional path passed as ``--json``.
+        catalog_path: Optional path passed as ``--catalog-path``. When
+            ``None``, a small hermetic default catalog is auto-provisioned
+            next to ``corpus`` so existing (non-guard-focused) call sites
+            do not need to supply one explicitly (issue #501, judgment
+            call 7).
 
     Returns:
         The CLI's exit code.
     """
+    if catalog_path is None:
+        catalog_path = _provision_default_catalog_path(corpus)
     argv = [
         "--corpus",
         str(corpus),
@@ -252,6 +444,8 @@ def _run_main(
         str(labels),
         "--repo-root",
         str(repo_root),
+        "--catalog-path",
+        str(catalog_path),
     ]
     if json_path is not None:
         argv += ["--json", str(json_path)]
@@ -357,6 +551,120 @@ def guard_repo(tmp_path: Path) -> tuple[Path, str]:
 
 
 # ---------------------------------------------------------------------------
+# Two-commit ("baseline" + "HEAD") fixture for the per-row HEAD-vs-baseline
+# compose_route provenance partition (issue #501). The fixture's
+# ``_compose.py`` is a small, self-contained FAKE ``compose_route`` -- not
+# the real production algorithm -- so these tests stay fast/isolated and do
+# not need the full production Labels/Features/ScoredEntry/CatalogEntry
+# machinery wired through a real git worktree per commit. It reads only
+# ``labels.domain`` off whatever ``Labels`` object the guard passes in,
+# which is a real, stable production ``Labels`` instance (built by HEAD's
+# own ``parse_labels`` -- ``_types.Labels`` is not one of the two guarded
+# dependency modules, so it is safe to rely on its real attribute shape
+# here without pulling in a fixture-repo copy of it).
+# ---------------------------------------------------------------------------
+
+#: Domain value the "v1"/"v2" fake compose_route bodies disagree on --
+#: rows whose caller-logged ``input.domain`` is this value get a DIFFERENT
+#: routing decision at "v1" vs "v2", simulating a small, partial-impact
+#: change like the real 07eb3dd delta (issue #499/#500) that only flips
+#: some corpus rows, not all of them.
+_FLAKY_DOMAIN = "flaky"
+
+_FAKE_COMPOSE_V1 = '''\
+"""Fake compose_route fixture (v1) -- disposable guard-repo test only."""
+
+
+def compose_route(
+    labels,
+    scored_agents,
+    scored_skills,
+    features,
+    catalog,
+    catalog_agent_names,
+    diagnostics=None,
+):
+    if labels.domain == "flaky":
+        return {
+            "decision": "delegate",
+            "agent": "agent-old",
+            "posture_routed": True,
+        }
+    return {
+        "decision": "delegate",
+        "agent": "agent-stable",
+        "posture_routed": False,
+    }
+'''
+
+_FAKE_COMPOSE_V2 = '''\
+"""Fake compose_route fixture (v2) -- disposable guard-repo test only."""
+
+
+def compose_route(
+    labels,
+    scored_agents,
+    scored_skills,
+    features,
+    catalog,
+    catalog_agent_names,
+    diagnostics=None,
+):
+    if labels.domain == "flaky":
+        return {
+            "decision": "self_handle",
+            "agent": None,
+            "posture_routed": True,
+        }
+    return {
+        "decision": "delegate",
+        "agent": "agent-stable",
+        "posture_routed": False,
+    }
+'''
+
+
+@pytest.fixture
+def versioned_guard_repo(tmp_path: Path) -> tuple[Path, str]:
+    """A disposable git repo with two commits carrying diverging fake
+    ``compose_route`` bodies, simulating a small partial-impact
+    ``_compose.py`` change (like the real 07eb3dd delta).
+
+    Commit 1 ("baseline"): fake ``compose_route`` returns
+    ``agent="agent-old"`` for ``labels.domain == "flaky"`` rows and
+    ``agent="agent-stable"`` for everything else.
+
+    Commit 2 (the repo's HEAD): fake ``compose_route`` CHANGES behavior
+    only for ``labels.domain == "flaky"`` rows (now
+    ``decision="self_handle"``, ``agent=None``) -- rows with any other
+    domain get byte-identical treatment across both commits.
+
+    Returns:
+        Tuple of ``(repo_root, baseline_matcher_version)`` where
+        ``baseline_matcher_version`` is the short SHA of commit 1. The
+        repo's HEAD (commit 2) is a distinct, later revision.
+    """
+    repo_root = tmp_path / "versioned_repo"
+    repo_root.mkdir()
+    _init_fixture_repo(repo_root)
+    _write_dep_files(
+        repo_root,
+        compose_content=_FAKE_COMPOSE_V1,
+        cells_content="# cells v1\n",
+    )
+    baseline_sha = _commit_all(repo_root, "baseline compose_route")
+
+    _write_dep_files(
+        repo_root,
+        compose_content=_FAKE_COMPOSE_V2,
+        cells_content="# cells v1\n",
+    )
+    _commit_all(repo_root, "07eb3dd-like partial-impact change")
+
+    return repo_root, baseline_sha
+
+
+# ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 
@@ -414,17 +722,361 @@ class TestCliArgumentParsing:
 
 
 # ---------------------------------------------------------------------------
-# matcher_version provenance guard
+# matcher_version provenance guard (issue #501 -- per-row HEAD-vs-baseline
+# compose_route partition, replacing the old TestMatcherVersionGuard
+# whole-run boolean guard entirely; see module docstring judgment calls
+# 4-8).
 # ---------------------------------------------------------------------------
 
 
-class TestMatcherVersionGuard:
-    """Guard: consistent matcher_version + clean dependency modules -> pass;
-    any divergence, dirtiness, inconsistency, or unresolvable version ->
-    hard warning + non-zero exit (see module docstring judgment call 1).
+class TestProvenancePartitionDirect:
+    """Direct (non-subprocess, non-main()) calls to
+    ``_provenance_partition(rows, repo_root, catalog) ->
+    ProvenancePartition``. Fast/isolated: uses disposable, throwaway git
+    fixture repos carrying a small self-contained FAKE ``compose_route``
+    (see ``versioned_guard_repo``), not the real production algorithm.
     """
 
-    def test_consistent_matching_version_and_clean_dependencies_passes(
+    def test_row_with_baseline_equal_to_head_is_included(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+    ) -> None:
+        """The common case -- a row's resolved baseline revision equals
+        HEAD's resolved revision (nothing to compare, trivially valid).
+        ``guard_repo``'s single-commit ``_compose.py`` content
+        (``"# compose v1\\n"``) defines no ``compose_route`` function at
+        all, so this also pins that the implementation must SHORTCUT
+        the comparison in this case rather than attempting to import a
+        nonexistent function from both (identical) revisions.
+        """
+        repo_root, sha = guard_repo
+        rows = [_corpus_row(1, matcher_version=sha)]
+        catalog = _default_catalog_entries()
+
+        partition = kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+        assert partition.included == frozenset({1})
+        assert partition.excluded == {}
+        assert partition.unverifiable == {}
+
+    def test_row_where_baseline_and_head_compose_route_agree_is_included(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+    ) -> None:
+        """A row whose caller-logged domain is NOT ``"flaky"`` gets
+        byte-identical treatment from the fixture's v1 (baseline) and v2
+        (HEAD) fake ``compose_route`` bodies -- agreement, included.
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [_corpus_row(1, domain="code", matcher_version=baseline_sha)]
+        catalog = _default_catalog_entries()
+
+        partition = kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+        assert 1 in partition.included
+        assert 1 not in partition.excluded
+        assert 1 not in partition.unverifiable
+
+    def test_row_where_baseline_and_head_compose_route_disagree_is_excluded(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+    ) -> None:
+        """A row whose caller-logged domain IS ``"flaky"`` gets DIFFERENT
+        treatment from the fixture's v1 (baseline) vs v2 (HEAD) fake
+        ``compose_route`` -- genuine disagreement, excluded.
+
+        This is also the test that would fail if the implementation
+        wrongly used ``scripts/corpus/eval/_systems.run_supplied_compose``
+        (or any vehicle blind to this fixture's throwaway
+        ``_compose.py``) instead of actually running the per-revision
+        ``compose_route`` found in ``repo_root``: such an implementation
+        has no way to observe the fixture's v1/v2 divergence and would
+        report every row as agreeing (``run_supplied_compose`` only
+        knows about ``scripts/corpus/eval/_systems.py``, which this
+        fixture never touches), so this row would incorrectly land in
+        ``included`` instead of ``excluded``.
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [_corpus_row(1, domain=_FLAKY_DOMAIN, matcher_version=baseline_sha)]
+        catalog = _default_catalog_entries()
+
+        partition = kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+        assert 1 in partition.excluded, (
+            "a row whose baseline and HEAD compose_route disagree must be "
+            f"excluded, not included; partition: {partition!r}"
+        )
+        assert 1 not in partition.included
+        assert 1 not in partition.unverifiable
+
+    def test_excluded_reason_names_a_disagreeing_field(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+    ) -> None:
+        """The excluded-row reason must name which ``compose_route``
+        field(s) disagreed (``agent``/``decision``/``posture_routed``),
+        not just a generic "mismatch" string -- issue #501 acceptance
+        criterion: "reports which rows are excluded ... not just
+        pass/fail".
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [_corpus_row(1, domain=_FLAKY_DOMAIN, matcher_version=baseline_sha)]
+        catalog = _default_catalog_entries()
+
+        partition = kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+        reason = partition.excluded[1]
+        assert isinstance(reason, str) and reason.strip(), (
+            "the excluded reason must be a non-empty, human-legible string"
+        )
+        assert re.search(r"agent|decision|posture_routed", reason, re.IGNORECASE), (
+            f"the excluded reason must name a disagreeing compose_route "
+            f"field; got: {reason!r}"
+        )
+
+    def test_unresolvable_matcher_version_is_unverifiable_not_a_global_failure(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+    ) -> None:
+        """A row whose ``matcher_version`` cannot be resolved to any git
+        revision (bare or ``v``-prefixed) is UNVERIFIABLE -- a distinct
+        third bucket, not silently dropped into included or excluded,
+        and NOT a reason to abort the whole guard call (contrast with
+        ``test_dirty_dependency_module_raises_provenance_guard_error``,
+        which IS a whole-call abort).
+        """
+        repo_root, _baseline_sha = versioned_guard_repo
+        rows = [_corpus_row(1, matcher_version="zzz-not-a-real-revision")]
+        catalog = _default_catalog_entries()
+
+        partition = kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+        assert 1 in partition.unverifiable
+        assert 1 not in partition.included
+        assert 1 not in partition.excluded
+        reason = partition.unverifiable[1]
+        assert isinstance(reason, str) and reason.strip()
+
+    def test_partition_covers_every_row_exactly_once_across_all_buckets(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+    ) -> None:
+        """A corpus mixing all three outcomes -- included, excluded,
+        unverifiable -- partitions every corpus_id into EXACTLY one
+        bucket: no row lost, no row double-counted (issue #501
+        acceptance criterion, spec item 2).
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [
+            _corpus_row(1, domain="code", matcher_version=baseline_sha),  # agree
+            _corpus_row(2, domain=_FLAKY_DOMAIN, matcher_version=baseline_sha),  # disagree
+            _corpus_row(3, matcher_version="not-a-real-revision-either"),  # unresolvable
+        ]
+        catalog = _default_catalog_entries()
+
+        partition = kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+        all_ids = set(partition.included) | set(partition.excluded) | set(
+            partition.unverifiable
+        )
+        assert all_ids == {1, 2, 3}, f"every corpus_id must appear once; got {all_ids!r}"
+        assert 1 in partition.included
+        assert 2 in partition.excluded
+        assert 3 in partition.unverifiable
+        # No row appears in more than one bucket.
+        assert set(partition.included) & set(partition.excluded) == set()
+        assert set(partition.included) & set(partition.unverifiable) == set()
+        assert set(partition.excluded) & set(partition.unverifiable) == set()
+
+    def test_dirty_dependency_module_raises_provenance_guard_error(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+    ) -> None:
+        """A dirty (uncommitted) dependency-module change at HEAD means
+        there is no stable, trustworthy HEAD baseline to compare ANY row
+        against -- a global problem, so the whole guard call fails
+        closed (raises), rather than degrading to a per-row bucket.
+        """
+        repo_root, sha = guard_repo
+        target = repo_root / "src" / "claude_wayfinder" / "match" / "_compose.py"
+        target.write_text(
+            target.read_text(encoding="utf-8") + "\n# uncommitted\n",
+            encoding="utf-8",
+        )
+        rows = [_corpus_row(1, matcher_version=sha)]
+        catalog = _default_catalog_entries()
+
+        with pytest.raises(kc_report_module.ProvenanceGuardError):
+            kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+    def test_repo_root_without_git_raises_provenance_guard_error(
+        self,
+        kc_report_module: ModuleType,
+        tmp_path: Path,
+    ) -> None:
+        """``repo_root`` not being a git repository at all is a global,
+        whole-call problem (nothing is resolvable for any row) -- the
+        guard fails closed rather than degrading every row to
+        unverifiable one at a time.
+        """
+        plain_dir = tmp_path / "not_a_repo"
+        _write_dep_files(plain_dir, compose_content="# x\n", cells_content="# y\n")
+        rows = [_corpus_row(1, matcher_version="abc1234")]
+        catalog = _default_catalog_entries()
+
+        with pytest.raises(kc_report_module.ProvenanceGuardError):
+            kc_report_module._provenance_partition(rows, plain_dir, catalog)
+
+
+class TestRigIsolationSelfCheck:
+    """The dedicated rig-isolation self-check
+    (``_verify_rig_isolation(repo_root, baseline_revision, head_revision,
+    catalog) -> None``, raising ``RigIsolationError`` on a detected
+    module-cache-collision false-negative -- issue #500 §3.4 / issue
+    #501 acceptance criterion) must be part of ``_provenance_partition``'s
+    normal call path, not merely available to call manually.
+    """
+
+    def test_self_check_is_exercised_in_the_normal_partition_call_path(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Force the self-check to always report a collision, then prove
+        ``_provenance_partition`` actually invokes it (and fails closed
+        because of it) on an otherwise-normal, genuinely-two-version
+        corpus. If the self-check were merely defined but never called
+        by the guard's normal path, this forced failure would never
+        fire and the call would return a partition instead of raising.
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+
+        def _always_flag_collision(*args: Any, **kwargs: Any) -> None:
+            raise kc_report_module.RigIsolationError(
+                "forced collision for test -- proves the self-check runs"
+            )
+
+        monkeypatch.setattr(
+            kc_report_module, "_verify_rig_isolation", _always_flag_collision
+        )
+        rows = [_corpus_row(1, domain="code", matcher_version=baseline_sha)]
+        catalog = _default_catalog_entries()
+
+        with pytest.raises(kc_report_module.ProvenanceGuardError):
+            kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+    def test_self_check_does_not_fire_when_baseline_equals_head(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When a row's resolved baseline revision equals HEAD's
+        resolved revision, there is only one version in play -- nothing
+        to isolate. Forcing the self-check to always fail must NOT
+        affect this row: if the guard incorrectly ran (and trusted) the
+        self-check here, this forced failure would wrongly abort a
+        request that should trivially succeed.
+        """
+        repo_root, sha = guard_repo  # sha IS this repo's sole commit / HEAD
+
+        def _always_flag_collision(*args: Any, **kwargs: Any) -> None:
+            raise kc_report_module.RigIsolationError(
+                "must not fire when baseline == HEAD"
+            )
+
+        monkeypatch.setattr(
+            kc_report_module, "_verify_rig_isolation", _always_flag_collision
+        )
+        rows = [_corpus_row(1, matcher_version=sha)]
+        catalog = _default_catalog_entries()
+
+        partition = kc_report_module._provenance_partition(rows, repo_root, catalog)
+
+        assert 1 in partition.included
+
+
+class TestCatalogPathFlag:
+    """``--catalog-path PATH`` (issue #501, judgment call 7) resolves
+    like the project's existing ``--catalog-path`` /
+    ``DISPATCH_CATALOG_PATH`` convention: explicit flag, else the env
+    var, else fail loud.
+    """
+
+    def test_explicit_catalog_path_flag_is_sufficient(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("DISPATCH_CATALOG_PATH", raising=False)
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        catalog_path = _provision_default_catalog_path(corpus_path)
+
+        rc = _run_main(
+            kc_report_module,
+            corpus_path,
+            labels_path,
+            repo_root,
+            catalog_path=catalog_path,
+        )
+        assert rc == 0
+
+    def test_missing_catalog_path_and_env_var_fails_loud(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.delenv("DISPATCH_CATALOG_PATH", raising=False)
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+
+        argv = [
+            "--corpus",
+            str(corpus_path),
+            "--labels",
+            str(labels_path),
+            "--repo-root",
+            str(repo_root),
+        ]
+        rc = kc_report_module.main(argv)
+        captured = capsys.readouterr()
+
+        assert rc != 0
+        assert re.search(r"catalog", captured.err, re.IGNORECASE), (
+            f"missing --catalog-path (and no env var) must fail loud "
+            f"naming the catalog problem; stderr:\n{captured.err}"
+        )
+
+
+class TestProvenanceGuardMainIntegration:
+    """End-to-end ``main()`` behavior of the per-row provenance
+    partition -- carries forward the invariants
+    ``TestMatcherVersionGuard`` established for the old boolean guard,
+    updated to the new per-row semantics (module docstring judgment
+    calls 4-8).
+    """
+
+    def test_consistent_matching_version_and_agreeing_dependencies_passes(
         self,
         kc_report_module: ModuleType,
         guard_repo: tuple[Path, str],
@@ -446,23 +1098,29 @@ class TestMatcherVersionGuard:
         captured = capsys.readouterr()
 
         assert rc == 0
-        assert "diverg" not in captured.err.lower()
-        assert "mismatch" not in captured.err.lower()
+        assert "Traceback (most recent call last)" not in captured.err
 
-    def test_mixed_matcher_versions_across_rows_fails(
+    def test_mixed_matcher_versions_across_rows_now_succeeds_when_each_row_agrees(
         self,
         kc_report_module: ModuleType,
-        guard_repo: tuple[Path, str],
+        versioned_guard_repo: tuple[Path, str],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Inconsistent matcher_version across rows is itself a provenance
-        failure -- the tool must not silently pick the first/majority value.
+        """[Was ``test_mixed_matcher_versions_across_rows_fails`` under
+        the old boolean guard.] Issue #501 explicitly DROPS the
+        one-consistent-version gate: a corpus with rows stamped at
+        different (individually resolvable, individually agreeing)
+        ``matcher_version`` values must NOT itself fail the run -- the
+        real-world 245-row corpus (issue #499/#500) carried three
+        different stamps and this was exactly the false-positive block
+        issue #501 exists to remove.
         """
-        repo_root, sha = guard_repo
+        repo_root, baseline_sha = versioned_guard_repo
+        head_sha = _run_git(["rev-parse", "HEAD"], cwd=repo_root).stdout.strip()
         rows = [
-            _corpus_row(1, matcher_version=sha),
-            _corpus_row(2, matcher_version="deadbee"),
+            _corpus_row(1, domain="code", matcher_version=baseline_sha),
+            _corpus_row(2, domain="code", matcher_version=head_sha),
         ]
         gold = [_gold_row(1), _gold_row(2)]
         corpus_path = tmp_path / "corpus.jsonl"
@@ -473,52 +1131,23 @@ class TestMatcherVersionGuard:
         rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
         captured = capsys.readouterr()
 
-        assert rc != 0, "mixed matcher_version values must fail the guard"
-        assert "Traceback (most recent call last)" not in captured.err
-
-    @pytest.mark.parametrize("dep_file", ["_compose.py", "_cells.py"])
-    def test_dependency_file_diverged_since_recorded_commit_fails(
-        self,
-        kc_report_module: ModuleType,
-        guard_repo: tuple[Path, str],
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        dep_file: str,
-    ) -> None:
-        repo_root, sha1 = guard_repo
-        target = repo_root / "src" / "claude_wayfinder" / "match" / dep_file
-        target.write_text(
-            target.read_text(encoding="utf-8") + "\n# changed after sha1\n",
-            encoding="utf-8",
-        )
-        _commit_all(repo_root, f"modify {dep_file}")
-
-        rows = [_corpus_row(1, matcher_version=sha1)]
-        gold = [_gold_row(1)]
-        corpus_path = tmp_path / "corpus.jsonl"
-        labels_path = tmp_path / "labels.jsonl"
-        _write_jsonl(corpus_path, rows)
-        _write_jsonl(labels_path, gold)
-
-        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
-        captured = capsys.readouterr()
-
-        assert rc != 0, (
-            f"{dep_file} changed between the recorded matcher_version and "
-            "HEAD -- the guard must fail"
+        assert rc == 0, (
+            "rows stamped at two DIFFERENT but individually-agreeing "
+            f"matcher_versions must not fail the run; stderr:\n{captured.err}"
         )
         assert "Traceback (most recent call last)" not in captured.err
 
-    def test_dirty_working_tree_on_dependency_file_fails(
+    def test_dirty_working_tree_on_dependency_file_still_fails(
         self,
         kc_report_module: ModuleType,
         guard_repo: tuple[Path, str],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A dirty (uncommitted) dependency-module change must fail the
-        guard even when matcher_version == HEAD -- a commit-to-commit diff
-        alone cannot see this.
+        """Carried forward unchanged: a dirty dependency-module working
+        tree at HEAD means no stable baseline exists for ANY row, so
+        this remains a whole-run abort (module docstring judgment call
+        1/6) even under the new per-row partition design.
         """
         repo_root, sha = guard_repo
         target = repo_root / "src" / "claude_wayfinder" / "match" / "_compose.py"
@@ -540,19 +1169,25 @@ class TestMatcherVersionGuard:
         assert rc != 0, "a dirty dependency-module working tree must fail the guard"
         assert "Traceback (most recent call last)" not in captured.err
 
-    def test_unknown_matcher_version_string_fails(
+    def test_unknown_matcher_version_is_unverifiable_run_still_completes(
         self,
         kc_report_module: ModuleType,
         guard_repo: tuple[Path, str],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A dist-version-fallback ``"unknown"`` matcher_version cannot be
-        resolved to a commit -- provenance is unverifiable, guard fails.
+        """[Was ``test_unknown_matcher_version_string_fails`` under the
+        old boolean guard, asserting ``rc != 0``.] Under the new per-row
+        partition, an unresolvable ``matcher_version`` (e.g. the
+        dist-version fallback ``"unknown"``) marks ONLY that row
+        unverifiable -- it is not a reason to abort the whole run.
         """
-        repo_root, _sha = guard_repo
-        rows = [_corpus_row(1, matcher_version="unknown")]
-        gold = [_gold_row(1)]
+        repo_root, sha = guard_repo
+        rows = [
+            _corpus_row(1, matcher_version="unknown"),
+            _corpus_row(2, matcher_version=sha),
+        ]
+        gold = [_gold_row(1), _gold_row(2)]
         corpus_path = tmp_path / "corpus.jsonl"
         labels_path = tmp_path / "labels.jsonl"
         _write_jsonl(corpus_path, rows)
@@ -561,7 +1196,10 @@ class TestMatcherVersionGuard:
         rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
         captured = capsys.readouterr()
 
-        assert rc != 0
+        assert rc == 0, (
+            "an unresolvable matcher_version on one row must not abort the "
+            f"whole run; stderr:\n{captured.err}"
+        )
         assert "Traceback (most recent call last)" not in captured.err
 
     def test_repo_root_without_git_fails_safe(
@@ -570,9 +1208,8 @@ class TestMatcherVersionGuard:
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A git subprocess failure (not a repo) must fail safe -- non-zero
-        exit and a clean warning, not an unhandled crash and not a silent
-        pass.
+        """Carried forward unchanged: ``repo_root`` not being a git repo
+        at all remains a whole-run, fail-safe abort.
         """
         plain_dir = tmp_path / "not_a_repo"
         _write_dep_files(plain_dir, compose_content="# x\n", cells_content="# y\n")
@@ -596,17 +1233,15 @@ class TestMatcherVersionGuard:
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Real corpus data records ``matcher_version`` as a bare semver
-        string (e.g. ``"1.3.1"``, no ``v`` prefix) while this project's
-        release tags are named ``vX.Y.Z`` (issue #485 bug report). A bare
-        rev-parse of the recorded string alone fails
-        (``git rev-parse 1.3.1`` -> "unknown revision"), but the version
-        genuinely is current: the guard must fall back to resolving
-        against the ``v``-prefixed tag name before declaring the
-        provenance unverifiable. This is a resolution-logic gap, not a
-        real divergence, so the guard must PASS (exit 0, no
-        diverged/mismatch/unverifiable warning) when the tagged commit's
-        dependency files are unchanged at HEAD.
+        """Carried forward: real corpus data records ``matcher_version``
+        as a bare semver string (e.g. ``"1.3.1"``, no ``v`` prefix)
+        while this project's release tags are named ``vX.Y.Z`` (issue
+        #485 bug report). A bare rev-parse of the recorded string alone
+        fails, but the version genuinely is current: the guard must fall
+        back to resolving against the ``v``-prefixed tag name before
+        declaring the row unverifiable. Under the new design this row
+        also resolves to a baseline == HEAD trivial-agree (the tagged
+        commit is this fixture's sole commit), so the run must PASS.
         """
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -636,9 +1271,48 @@ class TestMatcherVersionGuard:
             f"'v{bare_version}' when a direct rev-parse fails; guard "
             f"reported non-zero exit with stderr:\n{captured.err}"
         )
-        assert "diverg" not in captured.err.lower()
-        assert "mismatch" not in captured.err.lower()
         assert "unverifiable" not in captured.err.lower()
+
+    def test_row_with_diverging_compose_route_is_excluded_but_run_completes(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A row whose baseline-vs-HEAD compose_route genuinely disagrees
+        is excluded from the KC-computation substrate, but -- unlike the
+        old boolean guard -- this does NOT abort the whole run, and the
+        exclusion is surfaced (report/stderr), not silently dropped
+        (issue #501 acceptance criterion).
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [
+            _corpus_row(1, domain=_FLAKY_DOMAIN, matcher_version=baseline_sha),
+            _corpus_row(2, domain="code", matcher_version=baseline_sha),
+        ]
+        gold = [_gold_row(1, domain=_FLAKY_DOMAIN), _gold_row(2)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        captured = capsys.readouterr()
+        combined = captured.out + "\n" + captured.err
+
+        assert rc == 0, (
+            "one excluded row alongside one included row must not abort "
+            f"the whole run; stderr:\n{captured.err}"
+        )
+        assert re.search(r"exclud", combined, re.IGNORECASE), (
+            "the excluded row must be surfaced in the report/stderr, not "
+            f"silently dropped; combined output:\n{combined}"
+        )
+        assert "1" in combined, (
+            "the excluded row's corpus_id (1) should be discoverable in "
+            f"the surfaced exclusion detail; combined output:\n{combined}"
+        )
 
 
 # ---------------------------------------------------------------------------
