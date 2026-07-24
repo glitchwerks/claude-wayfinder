@@ -189,6 +189,15 @@ def test_eligible_rows_tolerates_missing_posture(
         }
     }
 
-    assert kc_report_module._eligible_rows([missing_posture]) == kc_report_module._eligible_rows(
-        [explicit_null]
+    missing_result = kc_report_module._eligible_rows([missing_posture])
+    explicit_result = kc_report_module._eligible_rows([explicit_null])
+    assert missing_result == explicit_result, (
+        "an omitted posture key must be treated identically to an "
+        "explicit null"
+    )
+    assert missing_result == [], (
+        "domain='code'/confidence='high' rows with no posture are never "
+        "KC-3 eligible (posture is required before any cell-map lookup "
+        "is attempted); a regression that incorrectly included them would "
+        "escape a bare cross-comparison assertion"
     )

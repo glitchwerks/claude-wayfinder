@@ -61,10 +61,18 @@ Arm = Literal["shadow", "live"]
 ComposeRoute = Callable[..., dict[str, Any]]
 ComposeLoader = Callable[[str], ComposeRoute]
 
-_DEPENDENCY_MODULES = (
-    "src/claude_wayfinder/match/_compose.py",
+_COMPOSE_MODULE_PATH = "src/claude_wayfinder/match/_compose.py"
+# First-party modules used transitively by ``compose_route``.
+_TRANSITIVE_DEPENDENCY_MODULES = (
     "src/claude_wayfinder/match/_cells.py",
+    "src/claude_wayfinder/match/_decide.py",
+    "src/claude_wayfinder/match/_types.py",
+    "src/claude_wayfinder/match/_match.py",
+    "src/claude_wayfinder/match/_stem.py",
+    "src/claude_wayfinder/match_filters.py",
 )
+# Every dependency that must be clean before provenance comparison.
+_DEPENDENCY_MODULES = (_COMPOSE_MODULE_PATH,) + _TRANSITIVE_DEPENDENCY_MODULES
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -292,7 +300,7 @@ def _compose_blob(repo_root: Path, revision: str) -> str:
     Raises:
         ImportError: If Git cannot extract the blob.
     """
-    blob_path = _DEPENDENCY_MODULES[0]
+    blob_path = _COMPOSE_MODULE_PATH
     result = _run_git(
         repo_root,
         "show",
@@ -302,6 +310,68 @@ def _compose_blob(repo_root: Path, revision: str) -> str:
         detail = _git_failure_detail(result, "git show failed")
         raise ImportError(f"cannot load {blob_path} at {revision}: {detail}")
     return result.stdout
+
+
+def _blob_or_none(repo_root: Path, revision: str, path: str) -> str | None:
+    """Read a committed blob at one revision, or None if absent there.
+
+    Args:
+        repo_root: Git repository containing the revision.
+        revision: Full commit SHA to inspect.
+        path: Repository-relative blob path.
+
+    Returns:
+        The committed blob text, or None when the path is absent.
+
+    Raises:
+        ProvenanceGuardError: If Git finds the blob but cannot read it.
+    """
+    exists = _run_git(
+        repo_root,
+        "cat-file",
+        "-e",
+        f"{revision}:{path}",
+    )
+    if exists.returncode != 0:
+        return None
+
+    result = _run_git(
+        repo_root,
+        "show",
+        f"{revision}:{path}",
+    )
+    if result.returncode != 0:
+        detail = _git_failure_detail(result, "git show failed")
+        raise ProvenanceGuardError(f"cannot read {path} at {revision}: {detail}")
+    return result.stdout
+
+
+def _dependency_drift_reason(
+    repo_root: Path,
+    baseline_revision: str,
+    head_revision: str,
+) -> str | None:
+    """Return the first transitive compose dependency drift reason, if any.
+
+    Args:
+        repo_root: Git repository containing both revisions.
+        baseline_revision: Full baseline commit SHA.
+        head_revision: Full HEAD commit SHA.
+
+    Returns:
+        A fail-closed exclusion reason for the first differing module, or
+        None when all transitive dependency blobs match.
+    """
+    for module_path in _TRANSITIVE_DEPENDENCY_MODULES:
+        baseline_blob = _blob_or_none(repo_root, baseline_revision, module_path)
+        head_blob = _blob_or_none(repo_root, head_revision, module_path)
+        if baseline_blob != head_blob:
+            return (
+                f"dependency module {module_path} differs between baseline and HEAD; "
+                "compose_route comparison cannot verify decisions that transitively "
+                "depend on it"
+            )
+    return None
 
 
 def _compose_function(module: ModuleType) -> ComposeRoute:
@@ -327,12 +397,14 @@ def _compose_function(module: ModuleType) -> ComposeRoute:
 def _revision_compose_loader(
     repo_root: Path,
 ) -> Iterator[ComposeLoader]:
-    """Yield a cached loader for isolated compose-module revisions.
+    """Yield a cached loader for isolated ``_compose.py`` revisions.
 
     Each revision is extracted to a unique temporary source path and
     registered under a unique module name. Both artifacts remain alive
     for the context lifetime so the self-check can verify each loaded
-    module's full source file against its intended Git blob.
+    module's full source file against its intended Git blob. Transitive
+    first-party dependencies remain HEAD-loaded and are guarded separately
+    by raw blob comparison before this loader is used.
 
     Args:
         repo_root: Git repository containing revision blobs.
@@ -537,7 +609,7 @@ def _provenance_partition(
     repo_root: Path,
     catalog: list[CatalogEntry],
 ) -> ProvenancePartition:
-    """Partition corpus rows by baseline-vs-HEAD compose agreement.
+    """Partition rows by dependency drift and baseline-vs-HEAD compose agreement.
 
     Args:
         rows: Raw shadow-corpus records.
@@ -556,6 +628,7 @@ def _provenance_partition(
     excluded: dict[int, str] = {}
     unverifiable: dict[int, str] = {}
     verified_pairs: set[tuple[str, str]] = set()
+    dependency_drift_cache: dict[tuple[str, str], str | None] = {}
 
     with _revision_compose_loader(repo_root) as load_compose:
         for row in rows:
@@ -573,6 +646,17 @@ def _provenance_partition(
                 continue
 
             revision_pair = (baseline_revision, head_revision)
+            if revision_pair not in dependency_drift_cache:
+                dependency_drift_cache[revision_pair] = _dependency_drift_reason(
+                    repo_root,
+                    baseline_revision,
+                    head_revision,
+                )
+            dependency_drift_reason = dependency_drift_cache[revision_pair]
+            if dependency_drift_reason is not None:
+                excluded[corpus_id] = dependency_drift_reason
+                continue
+
             if revision_pair not in verified_pairs:
                 _verify_rig_isolation(
                     repo_root,
