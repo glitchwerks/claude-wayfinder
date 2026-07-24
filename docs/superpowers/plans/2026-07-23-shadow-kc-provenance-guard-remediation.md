@@ -29,7 +29,7 @@ executor must compute first (§3), and the branch choice is the user's.
 **Initiative.** #499 blocks #485 (M15-6c), which is the last step before the M15-7 hard-routing flip
 on Matcher v3 (`docs/superpowers/plans/2026-06-19-matcher-v3-ship-live.md`). Milestone **M15 —
 matcher-v3-ship-live**. This plan's job is to get a *valid* KC substrate past the provenance guard so
-#485 can produce the flip go/no-go verdict, and to decide whether the guard's coarse file-diff check
+issue #485 can produce the flip go/no-go verdict, and to decide whether the guard's coarse file-diff check
 should be replaced with a per-row behavioral check so this class of block cannot silently recur.
 
 **Author's tooling constraint (flag to router).** This plan was produced by a planner sub-agent with
@@ -251,7 +251,7 @@ standing-process fix** (§8): it replaces the file-diff proxy that produced this
   mixed substrate. Narrower, faster, but leaves the file-diff proxy in place for the next drift.
 
 Option (a) is recommended and dovetails with §8; (b) is the minimal-change fallback if the user wants
-#485 unblocked with the least new code. **A `posture_routed=False` shortcut is NOT assumed safe:**
+issue #485 unblocked with the least new code. **A `posture_routed=False` shortcut is NOT assumed safe:**
 `07eb3dd` "widen test-authoring qualifier stems" could plausibly flip a row's `_is_lexically_plausible`
 result (`_compose.py:335`) and newly trigger *or* suppress posture-routing, so run the HEAD-vs-tag
 comparison over **all** rows rather than pre-excluding any class — it is cheap (245 deterministic rows)
