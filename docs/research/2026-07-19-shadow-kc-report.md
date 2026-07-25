@@ -64,8 +64,18 @@ actually change the route. PR #506 (merged as `bee6683`) fixed this by adding a 
 each row's actual pair, so a coincidental domain-pair collision (where the route provably could
 not change) is correctly excluded from eligibility.
 
-Re-running the same command as above (unchanged except for `--json`) against `bee6683` — the
-original run cited everywhere else in this document was against `d0230cd` — produced:
+Re-running the command below — identical in every flag to the "Command run" above except the
+`--json` output filename — against repo revision `bee6683` (the commit that merged PR #506; the
+original run cited everywhere else in this document was against `d0230cd`) produced:
+
+```
+PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/shadow-kc-report.py \
+  --corpus ~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl \
+  --labels docs/research/2026-07-19-shadow-sample-gold-labels-redacted.jsonl \
+  --repo-root . \
+  --catalog-path ~/.claude/state/dispatch-catalog.json \
+  --json .tmp/2026-07-25-shadow-kc-report-post-merge.json
+```
 
 ```text
 KC-1: FAIL — {"lexical_rc": 0.4268, "shadow_rc": 0.6707}
