@@ -102,9 +102,12 @@ class SystemResult:
 
     Attributes:
         corpus_id: Matches the input CorpusEntry.corpus_id.
-        decision: Routing decision string (e.g. ``"delegate"``).
+        decision: Routing decision string (e.g. ``"delegate"``), or ``None``
+            when the corresponding corpus-row key is absent from a
+            shadow-joined row.
         agent: Target agent name when decision implies one, else ``None``.
-        confidence: Confidence score in [0.0, 1.0].
+        confidence: Confidence score in [0.0, 1.0], or ``None`` when the
+            corresponding corpus-row key is absent from a shadow-joined row.
         extras: Runner-specific metadata dict.  Keys vary by system:
             - lexical: ``{"scores": {agent: score, ...}}``
             - extractors: ``{"postures": [...], "tier_c_fired": bool,
@@ -114,9 +117,9 @@ class SystemResult:
     """
 
     corpus_id: int
-    decision: str
+    decision: str | None
     agent: str | None
-    confidence: float
+    confidence: float | None
     extras: dict[str, Any]
 
 
