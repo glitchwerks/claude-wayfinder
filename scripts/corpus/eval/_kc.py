@@ -95,13 +95,13 @@ def _system_results(
     """
     results: list[SystemResult] = []
     for row in corpus_rows:
-        shadow = row["shadow"]
+        shadow = row.get("shadow") or {}
         results.append(
             SystemResult(
                 corpus_id=row["corpus_id"],
-                decision=shadow[f"{arm}_decision"],
-                agent=shadow[f"{arm}_agent"],
-                confidence=shadow[f"{arm}_confidence"],
+                decision=shadow.get(f"{arm}_decision"),
+                agent=shadow.get(f"{arm}_agent"),
+                confidence=shadow.get(f"{arm}_confidence"),
                 extras={},
             )
         )
@@ -188,7 +188,7 @@ def compute_kc3(
     del gold
     eligible: list[CorpusRow] = []
     for row in corpus_rows:
-        caller_input = row["input"]
+        caller_input = row.get("input") or {}
         domain = caller_input.get("domain")
         posture = caller_input.get("posture")
         confidence = caller_input.get("confidence")
@@ -204,16 +204,15 @@ def compute_kc3(
             eligible.append(row)
 
     eligible_n = len(eligible)
-    numerator = sum(
-        1
-        for row in eligible
-        if row["shadow"]["posture_routed"] is True
-        or (
-            row["shadow"]["posture_routed"] is False
-            and row["shadow"]["shadow_decision"] == "delegate"
-            and bool(row["shadow"]["gated_agent_names"])
-        )
-    )
+    numerator = 0
+    for row in eligible:
+        shadow = row.get("shadow") or {}
+        if shadow.get("posture_routed") is True or (
+            shadow.get("posture_routed") is False
+            and shadow.get("shadow_decision") == "delegate"
+            and bool(shadow.get("gated_agent_names"))
+        ):
+            numerator += 1
     rate = numerator / eligible_n if eligible_n else 0.0
     if eligible_n == 0:
         status: KCStatus = "INSUFFICIENT_DATA"
@@ -248,8 +247,9 @@ def compute_kc4(
     for row in corpus_rows:
         corpus_id = row["corpus_id"]
         label = gold.get(corpus_id)
-        caller_domain = row["input"].get("domain")
-        posture = row["input"].get("posture")
+        caller_input = row.get("input") or {}
+        caller_domain = caller_input.get("domain")
+        posture = caller_input.get("posture")
         if (
             label is not None
             and caller_domain in {"is_any", "project_meta"}
@@ -260,7 +260,8 @@ def compute_kc4(
 
     eligible_n = len(eligible)
     violations = sum(
-        row["shadow"]["posture_routed"] is True for row in eligible
+        (row.get("shadow") or {}).get("posture_routed") is True
+        for row in eligible
     )
     if eligible_n == 0:
         status: KCStatus = "INSUFFICIENT_DATA"
