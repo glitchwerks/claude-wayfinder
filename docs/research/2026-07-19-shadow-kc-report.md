@@ -1,0 +1,152 @@
+# Shadow KC Report — M15-6c Go/No-Go Verdict
+
+**Issue:** #485 ("M15-6c: Run the KC report on frozen gold + go/no-go verdict"), part of Milestone
+**M15 — Matcher v3 live (two-axis routing shipped)**.
+
+This report is the deliverable issue #485 asks for: the frozen-gold KC-1..KC-5 verdicts, the
+traffic-mix and caller-label diagnostic cuts, and the overall go/no-go recommendation that feeds
+the M15-7 hard-routing flip decision.
+
+## Overall recommendation
+
+> **NO-GO** — failed criteria: KC-1, KC-4, KC-5.
+
+See [What this means for M15-7](#what-this-means-for-m15-7) for the closing interpretation.
+
+## Methodology
+
+**Inputs:**
+
+- Corpus: `~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl` (245 rows)
+- Gold labels: `docs/research/2026-07-19-shadow-sample-gold-labels-redacted.jsonl`
+- Dispatch catalog: `~/.claude/state/dispatch-catalog.json`
+- Repo HEAD: `d0230cd` — the commit that merged PR #502 ("fix(#499): narrow shadow-kc-report
+  provenance guard to per-row `compose_route` agreement"), which closed issue #499. #499 was
+  issue #485's step-1 precondition (see [Provenance partition](#provenance-partition) below).
+
+**Command run** (exit code 0):
+
+```
+PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/shadow-kc-report.py \
+  --corpus ~/.claude/state/wayfinder-corpus/2026-06-12/wayfinder-corpus.jsonl \
+  --labels docs/research/2026-07-19-shadow-sample-gold-labels-redacted.jsonl \
+  --repo-root . \
+  --catalog-path ~/.claude/state/dispatch-catalog.json \
+  --json .tmp/2026-07-24-shadow-kc-report.json
+```
+
+**Tooling:** the computation logic lives in `scripts/shadow-kc-report.py` (provenance
+partitioning and CLI/report assembly) and `scripts/corpus/eval/_kc.py` (the KC-1..KC-5 metric
+functions). All figures below are taken directly from that command's JSON output and stderr
+diagnostics; no numbers in this report were invented or estimated.
+
+**Catalog-drift safety note.** `--catalog-path` is consumed only inside `_provenance_partition`
+(`scripts/shadow-kc-report.py:607`, invoked at `:906`), where one shared HEAD-loaded catalog scores
+`compose_route` at both a row's baseline revision and at HEAD — the function's own docstring
+states "One shared HEAD-loaded catalog for both compose runs" (`scripts/shadow-kc-report.py:617`).
+Catalog drift therefore cancels by construction for the provenance check, per the parent
+remediation plan's design (`docs/superpowers/plans/2026-07-23-shadow-kc-provenance-guard-remediation.md`
+§4). The KC-1..KC-5 metrics themselves take only the rows that survive that partition
+(`scripts/shadow-kc-report.py:925`) plus their already-logged shadow/live decisions and the frozen
+gold labels — no live catalog re-scoring feeds the KC metrics. Today's freshly rebuilt catalog is
+therefore safe to use for the provenance check and does not confound the verdicts below.
+
+## Provenance partition
+
+PR #502 replaced the prior whole-run boolean provenance guard with a per-row
+`_provenance_partition` (`scripts/shadow-kc-report.py:607`): each corpus row's `matcher_version` is
+individually resolved to a git revision and its dependency modules diffed against HEAD, rather than
+requiring one globally consistent version across all 245 rows. This is what unblocked #499/#485.
+
+Running that partition over the full 245-row corpus produced:
+
+| Partition | Rows | Reason |
+|---|---|---|
+| **Included** | 161 | `compose_route` agrees between the row's baseline revision and HEAD (`scripts/shadow-kc-report.py:925` filters rows to this set; all KC criteria below are computed only over these 161) |
+| **Excluded** | 75 | 74 rows: a dependency module (`_cells.py` or one of the other five transitively-checked modules — `_decide.py`, `_types.py`, `_match.py`, `_stem.py`, `match_filters.py`) differs between the row's stamped baseline revision and HEAD. 1 row (`corpus_id` 57925): an actual `compose_route` decision disagreement between baseline and HEAD, disagreeing on `agent`. |
+| **Unverifiable** | 9 | `matcher_version` was literally the string `"unknown"` and could not resolve to any git revision |
+| **Total** | 245 | 161 + 75 + 9 = 245, reconciling exactly against the full corpus |
+
+**Context on the excluded bucket.** Per issue #499's original triage, the 245-row corpus carries
+three `matcher_version` stamps: 162 rows at `1.3.1`, 74 rows at dev-commit `6d5f416` (predating
+`1.3.1`), and 9 rows `unknown`. The 74-row `6d5f416` bucket lines up numerically with the 74
+dependency-drift exclusions above — i.e. the verdict in this report is computed almost entirely on
+the `1.3.1`-stamped subset (161 ≈ 162 − 1, where the 1 is the lone disagreement row, itself
+presumably `1.3.1`-stamped).
+
+**This should be stated plainly: the go/no-go verdict below rests on the `1.3.1` subset. The older
+`6d5f416` traffic was excluded en bloc by the narrowed guard's per-row dependency-drift check, not
+cherry-picked to produce a favorable result.**
+
+## Per-criterion verdicts (KC-1..KC-5)
+
+Computed over the 161 included rows, per `scripts/corpus/eval/_kc.py`.
+
+| KC | Status | Metrics |
+|---|---|---|
+| KC-1 | **FAIL** | `lexical_rc: 0.4268`, `shadow_rc: 0.6707` |
+| KC-2 (hard block) | **PASS** | `anchor: 0.2558`, `lexical_cw: 0.25`, `shadow_cw: 0.1509` |
+| KC-3 | **PASS** | `eligible_n: 42`, `numerator: 40`, `rate: 0.9524` |
+| KC-4 | **FAIL** | `eligible_n: 36`, `violations: 30` |
+| KC-5 | **FAIL** | `shadow_rc: 0.5714`, `slice_n: 7` |
+
+**KC-5 small-sample caveat.** KC-5's FAIL rests on `slice_n: 7` — the gold `infra_deploy` slice
+within the 161 included rows is thin. `scripts/corpus/eval/_kc.py`'s `compute_kc5` (`:243`–`:278`)
+only returns `"INSUFFICIENT_DATA"` when `slice_n == 0` (`:269`–`:270`); at n=7 it computes a normal
+PASS/FAIL against the routing-correctness floor, so this FAIL is the script's correct, by-design
+output rather than a bug or a suppressed insufficient-data case. Even so, a milestone-gating
+verdict resting partly on a 7-row slice deserves that flag stated here, in the document itself: KC-5's
+FAIL should be read with the caveat that it is a small-sample result, not a high-confidence one.
+
+## Whole-sample vs. gated-eligible cuts
+
+This cut isolates traffic-mix dilution (rows outside the two-axis gate's intended scope) from
+genuine Compose routing underperformance.
+
+| Cut | n | `shadow_cw` | `shadow_rc` |
+|---|---|---|---|
+| Whole-sample (all 161 included rows) | 161 | 0.1509 | 0.6707 |
+| Gated-eligible subset (KC-3-eligible rows only) | 42 | 0.1905 | 0.8182 |
+
+`shadow_rc` rises from 0.6707 on the whole sample to 0.8182 on the gated-eligible subset — routing
+correctness is materially better on the subset where the two-axis gate actually applies cleanly.
+The whole-sample number is diluted by rows outside that gate's intended scope. This is exactly the
+traffic-mix-dilution effect issue #485 asked this cut to isolate: part of KC-1's whole-sample
+shortfall is attributable to traffic mix, not to Compose logic on the traffic the gate targets.
+
+## Caller-label match breakdown
+
+This cut isolates caller-label noise (the caller's own declared `domain` disagreeing with the
+human-annotated gold `domain`, before Compose ever runs) from genuine Compose-logic error.
+
+Of the 161 included rows, 82 also carry a gold label:
+
+| Outcome | Rows |
+|---|---|
+| Caller-declared `domain` matches gold `domain` | 29 |
+| Caller-declared `domain` disagrees with gold `domain` | 53 |
+| **Total gold-labeled, included rows** | 82 |
+
+(The remaining rows of the 120-row gold set fall outside the 161-row included partition and are not
+part of this breakdown.)
+
+A 53/82 (~65%) caller-label disagreement rate is a large share of "disagreement" that is not
+necessarily Compose's fault — the caller declared a different domain than gold before Compose ever
+ran. This matters for interpreting the FAIL criteria above: some of KC-1's and KC-4's shortfall may
+trace to upstream caller-labeling noise rather than to the Compose routing logic itself. This is
+stated as a contributing factor worth investigating further, not a proven explanation — the data
+here does not by itself decompose how much of the FAIL is caller-label noise versus Compose error.
+
+## What this means for M15-7
+
+The verdict is **NO-GO**. The M15-7 hard-routing flip should **not** proceed on this evidence.
+Three of five criteria fail — KC-1 (lexical/shadow routing correctness), KC-4 (a 36-row eligible
+gate with 30 violations), and KC-5 (infra-deploy routing correctness, on a thin 7-row slice) — and
+those failures indicate real Compose routing-correctness and traffic-mix issues that warrant
+investigation before any flip decision is revisited. KC-2, the hard block criterion, does PASS, so
+the failure is not of the single most severe kind this gate exists to catch — but a NO-GO on three
+other criteria, including two whose failure surfaces genuine routing-correctness gaps (KC-1, KC-5)
+and one gating a specific eligible-decision population (KC-4), is enough on its own to withhold the
+flip. The caller-label disagreement rate (~65% of gold-labeled included rows) and the whole-sample
+vs. gated-eligible gap are offered above as diagnostic leads for that follow-up investigation, not
+as mitigating factors that override the FAIL verdicts.
