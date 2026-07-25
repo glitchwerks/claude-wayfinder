@@ -27,7 +27,10 @@ Public API designed here (the implementer builds to match):
         PASS iff violations == 0; INSUFFICIENT_DATA if eligible_n == 0.
     compute_kc5(corpus_rows, gold) -> KCVerdict
         metrics: {"slice_n", "shadow_rc"}
-        PASS iff infra_deploy-slice shadow_rc >= 0.600; INSUFFICIENT_DATA if slice_n == 0.
+        PASS iff infra_deploy-slice shadow_rc >= 0.600 AND slice_n >= 20;
+        INSUFFICIENT_DATA if slice_n < 20 (issue #511 — minimum-sample-size
+        floor, same shape as the eligible_n == 0 short-circuit but with a
+        20-row bar instead of zero).
 
     KC2_LEXICAL_CW_ANCHOR: float == 0.2558 (spec §F.3, ...:586). Its denominator
     (wrong-delegates / all-delegates) must match metric_confident_wrong_rate's;
@@ -143,6 +146,25 @@ def _gold(
 def _gold_map(*labels: GoldLabel) -> dict[int, GoldLabel]:
     """Build a corpus_id -> GoldLabel dict."""
     return {label.corpus_id: label for label in labels}
+
+
+def _infra_slice(
+    n_correct: int, n_wrong: int = 0
+) -> tuple[list[dict[str, Any]], dict[int, GoldLabel]]:
+    """Build an infra_deploy-domain slice of n_correct correctly-routed rows
+    plus n_wrong wrongly-routed rows, for KC-5 fixtures.
+
+    Gold agent is always "devops"; correct rows shadow-route to "devops",
+    wrong rows shadow-route to "ops" instead.
+    """
+    total = n_correct + n_wrong
+    rows = [_row(i, shadow_agent="devops") for i in range(1, n_correct + 1)] + [
+        _row(i, shadow_agent="ops") for i in range(n_correct + 1, total + 1)
+    ]
+    gold = _gold_map(
+        *[_gold(i, gold_agent="devops", domain="infra_deploy") for i in range(1, total + 1)]
+    )
+    return rows, gold
 
 
 _VALID_STATUSES = {"PASS", "FAIL", "INSUFFICIENT_DATA"}
@@ -798,71 +820,95 @@ class TestKC4DomainInvariantPostureExemption:
 
 
 class TestKC5:
-    """KC-5: shadow RC on the gold.domain=='infra_deploy' slice >= 0.600."""
+    """KC-5: shadow RC on the gold.domain=='infra_deploy' slice >= 0.600,
+    gated by a minimum-sample-size floor of 20 (issue #511).
+
+    Below the floor (slice_n < 20) the verdict is always
+    INSUFFICIENT_DATA, regardless of shadow_rc. At or above the floor
+    (slice_n >= 20) the normal >= 0.600 compare applies, unchanged from
+    before #511.
+    """
+
+    # -- at/above the floor: normal PASS/FAIL compare, unchanged ----------
 
     def test_pass_when_slice_rc_above_floor(self) -> None:
-        """infra slice shadow_rc 0.8 (4 of 5) >= 0.600 -> PASS.
+        """infra slice shadow_rc 0.8 (16 of 20) >= 0.600, slice_n 20 >= floor
+        -> PASS.
 
-        A non-infra row (corpus_id 6) the shadow gets wrong must NOT affect the
-        slice RC — it is outside the infra_deploy slice.
+        A non-infra row the shadow gets wrong must NOT affect the slice RC —
+        it is outside the infra_deploy slice.
         """
-        rows = [
-            _row(1, shadow_agent="devops"),
-            _row(2, shadow_agent="devops"),
-            _row(3, shadow_agent="devops"),
-            _row(4, shadow_agent="devops"),
-            _row(5, shadow_agent="ops"),  # wrong within slice
-            _row(6, shadow_agent="ops"),  # non-infra, wrong, must be ignored
-        ]
-        gold = _gold_map(
-            *[_gold(i, gold_agent="devops", domain="infra_deploy") for i in range(1, 6)],
-            _gold(6, gold_agent="code-writer", domain="code"),
-        )
+        rows, gold = _infra_slice(n_correct=16, n_wrong=4)
+        rows.append(_row(21, shadow_agent="ops"))  # non-infra, wrong, ignored
+        gold[21] = _gold(21, gold_agent="code-writer", domain="code")
         verdict = compute_kc5(rows, gold)
-        assert verdict.metrics["slice_n"] == 5
+        assert verdict.metrics["slice_n"] == 20
         assert verdict.metrics["shadow_rc"] == 0.8
         assert verdict.status == "PASS"
 
     def test_pass_at_exactly_point_six_boundary(self) -> None:
-        """infra slice shadow_rc exactly 0.60 (3 of 5) -> PASS (pins >= not >).
+        """infra slice shadow_rc exactly 0.60 (12 of 20), slice_n 20 is the
+        floor value itself -> PASS (pins >= not >, and pins the floor as
+        inclusive rather than exclusive).
 
-        The go/no-go floor is `>= 0.600`; 3/5 rounds to a clean 0.6, so a `>`
-        implementation would wrongly FAIL this fixture.
+        The go/no-go floor is `>= 0.600`; 12/20 rounds to a clean 0.6, so a
+        `>` implementation would wrongly FAIL this fixture.
         """
-        rows = [
-            _row(1, shadow_agent="devops"),
-            _row(2, shadow_agent="devops"),
-            _row(3, shadow_agent="devops"),
-            _row(4, shadow_agent="ops"),  # wrong
-            _row(5, shadow_agent="ops"),  # wrong
-        ]
-        gold = _gold_map(
-            *[_gold(i, gold_agent="devops", domain="infra_deploy") for i in range(1, 6)]
-        )
+        rows, gold = _infra_slice(n_correct=12, n_wrong=8)
         verdict = compute_kc5(rows, gold)
-        assert verdict.metrics["slice_n"] == 5
+        assert verdict.metrics["slice_n"] == 20
         assert verdict.metrics["shadow_rc"] == 0.6
         assert verdict.status == "PASS"
 
     def test_fail_when_slice_rc_below_floor(self) -> None:
-        """infra slice shadow_rc 0.4 (2 of 5) < 0.600 -> FAIL."""
-        rows = [
-            _row(1, shadow_agent="devops"),
-            _row(2, shadow_agent="devops"),
-            _row(3, shadow_agent="ops"),  # wrong
-            _row(4, shadow_agent="ops"),  # wrong
-            _row(5, shadow_agent="ops"),  # wrong
-        ]
-        gold = _gold_map(
-            *[_gold(i, gold_agent="devops", domain="infra_deploy") for i in range(1, 6)]
-        )
+        """infra slice shadow_rc 0.4 (8 of 20) < 0.600, slice_n 20 >= floor
+        -> FAIL (sample size is sufficient; the rate itself is what fails).
+        """
+        rows, gold = _infra_slice(n_correct=8, n_wrong=12)
         verdict = compute_kc5(rows, gold)
-        assert verdict.metrics["slice_n"] == 5
+        assert verdict.metrics["slice_n"] == 20
         assert verdict.metrics["shadow_rc"] == 0.4
         assert verdict.status == "FAIL"
 
+    def test_pass_at_slice_n_42_realistic_count(self) -> None:
+        """slice_n 42 (matching the current live KC-3 eligible count) with a
+        perfect shadow_rc of 1.0 -> PASS. Confirms the floor logic doesn't
+        regress well above the boundary, at a realistic larger sample size.
+        """
+        rows, gold = _infra_slice(n_correct=42, n_wrong=0)
+        verdict = compute_kc5(rows, gold)
+        assert verdict.metrics["slice_n"] == 42
+        assert verdict.metrics["shadow_rc"] == 1.0
+        assert verdict.status == "PASS"
+
+    # -- below the floor: INSUFFICIENT_DATA regardless of shadow_rc -------
+
+    @pytest.mark.parametrize(
+        "slice_n",
+        [1, 7, 19],
+        ids=["n=1", "n=7-live-report-value", "n=19-one-below-floor"],
+    )
+    def test_insufficient_data_when_below_min_sample_floor(self, slice_n: int) -> None:
+        """slice_n in [1, 19] -> INSUFFICIENT_DATA even though every row is
+        correctly routed (shadow_rc would be a clean 1.0, comfortably above
+        the 0.600 floor, if the sample-size gate weren't applied).
+
+        n=7 pins the exact slice size from the current live shadow-kc-report
+        run that produced a fragile FAIL on too few rows (issue #511); n=1
+        and n=19 bound the rest of the below-floor range.
+        """
+        rows, gold = _infra_slice(n_correct=slice_n, n_wrong=0)
+        verdict = compute_kc5(rows, gold)
+        assert verdict.metrics["slice_n"] == slice_n
+        assert verdict.metrics["shadow_rc"] == 1.0
+        assert verdict.status == "INSUFFICIENT_DATA"
+
     def test_insufficient_data_when_slice_empty(self) -> None:
-        """No infra_deploy rows -> INSUFFICIENT_DATA, never a vacuous PASS/FAIL."""
+        """No infra_deploy rows -> INSUFFICIENT_DATA, never a vacuous
+        PASS/FAIL. Regression guard for the pre-#511 eligible_n == 0
+        short-circuit, which the >= 20 floor must subsume rather than
+        replace.
+        """
         rows = [
             _row(1, shadow_agent="code-writer"),
             _row(2, shadow_agent="code-writer"),
@@ -873,4 +919,24 @@ class TestKC5:
         )
         verdict = compute_kc5(rows, gold)
         assert verdict.metrics["slice_n"] == 0
+        assert "shadow_rc" in verdict.metrics
         assert verdict.status == "INSUFFICIENT_DATA"
+
+    # -- metrics dict shape is preserved across every status branch -------
+
+    def test_metrics_dict_has_slice_n_and_shadow_rc_in_every_status(self) -> None:
+        """Existing consumers of KCVerdict.metrics read slice_n and
+        shadow_rc unconditionally; both keys must survive in the
+        INSUFFICIENT_DATA (below-floor), PASS, and FAIL branches alike.
+        """
+        below_floor_rows, below_floor_gold = _infra_slice(n_correct=7, n_wrong=0)
+        at_floor_pass_rows, at_floor_pass_gold = _infra_slice(n_correct=20, n_wrong=0)
+        at_floor_fail_rows, at_floor_fail_gold = _infra_slice(n_correct=5, n_wrong=15)
+
+        for rows, gold in (
+            (below_floor_rows, below_floor_gold),
+            (at_floor_pass_rows, at_floor_pass_gold),
+            (at_floor_fail_rows, at_floor_fail_gold),
+        ):
+            verdict = compute_kc5(rows, gold)
+            assert set(verdict.metrics) >= {"slice_n", "shadow_rc"}
