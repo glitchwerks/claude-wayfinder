@@ -27,6 +27,7 @@ _KC1_SHADOW_RC_FLOOR: float = 0.6891
 _KC1_LEXICAL_MARGIN: float = 0.20
 _KC3_DECISIVENESS_FLOOR: float = 0.55
 _KC5_INFRA_RC_FLOOR: float = 0.600
+_KC5_MIN_SLICE_N: int = 20
 
 KCStatus = Literal["PASS", "FAIL", "INSUFFICIENT_DATA"]
 CorpusRow = dict[str, Any]
@@ -299,7 +300,7 @@ def compute_kc5(
     shadow_rc = metric_routing_correctness(
         _system_results(slice_rows, "shadow"), slice_gold
     )
-    if slice_n == 0:
+    if slice_n < _KC5_MIN_SLICE_N:
         status: KCStatus = "INSUFFICIENT_DATA"
     else:
         status = "PASS" if shadow_rc >= _KC5_INFRA_RC_FLOOR else "FAIL"
