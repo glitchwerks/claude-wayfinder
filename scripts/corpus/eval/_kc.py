@@ -48,6 +48,37 @@ class KCVerdict:
     metrics: dict[str, Any]
 
 
+def _route_could_differ(
+    caller_domain: str, gold_domain: str, posture: str | None
+) -> bool:
+    """Return whether correcting the caller's domain could change the route.
+
+    Compares the preferred agent under the caller's (mislabeled) domain
+    against the preferred agent under the gold domain, for this row's
+    actual posture -- not whether the posture is invariant across every
+    domain in the abstract. A coincidental pair collision (e.g. ``is_any``
+    and ``code`` both resolving to ``code-writer`` under ``build``) is
+    correctly excluded even for postures with genuine per-domain variance
+    elsewhere in the map.
+
+    Args:
+        caller_domain: The caller-supplied (mislabeled) domain, one of
+            ``"is_any"`` or ``"project_meta"``.
+        gold_domain: The corrected domain from the gold label.
+        posture: Caller-supplied posture label, or ``None`` when omitted.
+
+    Returns:
+        ``True`` when the two domains resolve to different preferred
+        agents under this posture. A missing posture preserves the
+        original KC-4 behavior of never being exempted.
+    """
+    if posture is None:
+        return True
+    return cell_map_lookup(caller_domain, posture) != cell_map_lookup(
+        gold_domain, posture
+    )
+
+
 def _system_results(
     corpus_rows: list[CorpusRow],
     arm: Literal["shadow", "live"],
@@ -217,10 +248,12 @@ def compute_kc4(
         corpus_id = row["corpus_id"]
         label = gold.get(corpus_id)
         caller_domain = row["input"].get("domain")
+        posture = row["input"].get("posture")
         if (
             label is not None
             and caller_domain in {"is_any", "project_meta"}
             and label.domain != caller_domain
+            and _route_could_differ(caller_domain, label.domain, posture)
         ):
             eligible.append(row)
 
