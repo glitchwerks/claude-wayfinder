@@ -82,13 +82,20 @@ cherry-picked to produce a favorable result.**
 
 Computed over the 161 included rows, per `scripts/corpus/eval/_kc.py`.
 
-| KC | Status | Metrics |
-|---|---|---|
-| KC-1 | **FAIL** | `lexical_rc: 0.4268`, `shadow_rc: 0.6707` |
-| KC-2 (hard block) | **PASS** | `anchor: 0.2558`, `lexical_cw: 0.25`, `shadow_cw: 0.1509` |
-| KC-3 | **PASS** | `eligible_n: 42`, `numerator: 40`, `rate: 0.9524` |
-| KC-4 | **FAIL** | `eligible_n: 36`, `violations: 30` |
-| KC-5 | **FAIL** | `shadow_rc: 0.5714`, `slice_n: 7` |
+| KC | Status | Threshold | Metrics |
+|---|---|---|---|
+| KC-1 | **FAIL** | `shadow_rc >= 0.6891` AND `shadow_rc >= lexical_rc + 0.20` (`scripts/corpus/eval/_kc.py:26`–`:27`, `:98`–`:101`) | `lexical_rc: 0.4268`, `shadow_rc: 0.6707` |
+| KC-2 (hard block) | **PASS** | `shadow_cw <= 0.2558` — fixed historical lexical-CW anchor (`scripts/corpus/eval/_kc.py:21`, `:128`–`:130`) | `anchor: 0.2558`, `lexical_cw: 0.25`, `shadow_cw: 0.1509` |
+| KC-3 | **PASS** | `rate >= 0.55` (`scripts/corpus/eval/_kc.py:28`, `:189`) | `eligible_n: 42`, `numerator: 40`, `rate: 0.9524` |
+| KC-4 | **FAIL** | `violations == 0` on the eligible set (`scripts/corpus/eval/_kc.py:234`) | `eligible_n: 36`, `violations: 30` |
+| KC-5 | **FAIL** | `shadow_rc >= 0.600` (`scripts/corpus/eval/_kc.py:29`, `:272`) | `shadow_rc: 0.5714`, `slice_n: 7` |
+
+**KC-4 root cause.** All 30 violations trace to one path: `caller_domain=is_any`, `posture=operate`,
+routed to `ops` via `branch3_generic`/`branch3_ops_veto`. This fires because `is_any` is
+unconditionally ungated by design (`src/claude_wayfinder/match/_cells.py:155`) — a
+design-vs-criterion mismatch, not a routing bug: KC-4's neutrality criterion has no way to express
+"posture-routed to a domain-independent agent" as non-violating. Tracked in issue #503 (open, needs
+a design decision).
 
 **KC-5 small-sample caveat.** KC-5's FAIL rests on `slice_n: 7` — the gold `infra_deploy` slice
 within the 161 included rows is thin. `scripts/corpus/eval/_kc.py`'s `compute_kc5` (`:243`–`:278`)
@@ -100,8 +107,9 @@ FAIL should be read with the caveat that it is a small-sample result, not a high
 
 ## Whole-sample vs. gated-eligible cuts
 
-This cut isolates traffic-mix dilution (rows outside the two-axis gate's intended scope) from
-genuine Compose routing underperformance.
+This cut compares the whole sample against the gated-eligible subset (rows outside the two-axis
+gate's intended scope excluded), to look for a traffic-mix-dilution effect distinct from genuine
+Compose routing underperformance.
 
 | Cut | n | `shadow_cw` | `shadow_rc` |
 |---|---|---|---|
@@ -110,9 +118,10 @@ genuine Compose routing underperformance.
 
 `shadow_rc` rises from 0.6707 on the whole sample to 0.8182 on the gated-eligible subset — routing
 correctness is materially better on the subset where the two-axis gate actually applies cleanly.
-The whole-sample number is diluted by rows outside that gate's intended scope. This is exactly the
-traffic-mix-dilution effect issue #485 asked this cut to isolate: part of KC-1's whole-sample
-shortfall is attributable to traffic mix, not to Compose logic on the traffic the gate targets.
+This gap is consistent with the whole-sample number being diluted by rows outside that gate's
+intended scope — the traffic-mix-dilution effect issue #485 asked this cut to look for — though the
+cut does not control for other differences between the two subsets, so part of KC-1's whole-sample
+shortfall may reflect traffic mix rather than Compose logic on the traffic the gate targets.
 
 ## Caller-label match breakdown
 
@@ -132,10 +141,13 @@ part of this breakdown.)
 
 A 53/82 (~65%) caller-label disagreement rate is a large share of "disagreement" that is not
 necessarily Compose's fault — the caller declared a different domain than gold before Compose ever
-ran. This matters for interpreting the FAIL criteria above: some of KC-1's and KC-4's shortfall may
-trace to upstream caller-labeling noise rather than to the Compose routing logic itself. This is
-stated as a contributing factor worth investigating further, not a proven explanation — the data
-here does not by itself decompose how much of the FAIL is caller-label noise versus Compose error.
+ran. This matters for interpreting KC-1's FAIL above: some of KC-1's shortfall may trace to upstream
+caller-labeling noise rather than to the Compose routing logic itself. (KC-4 is not implicated here:
+per `compute_kc4`, caller-domain disagreement with gold is a precondition for a row's KC-4
+eligibility, not a candidate cause of the violations counted among those eligible rows — see the
+KC-4 root cause note above.) This is stated as a contributing factor worth investigating further,
+not a proven explanation — the data here does not by itself decompose how much of KC-1's FAIL is
+caller-label noise versus Compose error.
 
 ## What this means for M15-7
 
@@ -143,7 +155,16 @@ The verdict is **NO-GO**. The M15-7 hard-routing flip should **not** proceed on 
 Three of five criteria fail — KC-1 (lexical/shadow routing correctness), KC-4 (a 36-row eligible
 gate with 30 violations), and KC-5 (infra-deploy routing correctness, on a thin 7-row slice) — and
 those failures indicate real Compose routing-correctness and traffic-mix issues that warrant
-investigation before any flip decision is revisited. KC-2, the hard block criterion, does PASS, so
+investigation before any flip decision is revisited. On KC-1 specifically, the failure is on the
+absolute floor only: `shadow_rc` (0.6707) falls short of the 0.6891 floor by 0.0184, while it clears
+the lexical-margin requirement (0.6707 >= 0.4268 + 0.20 = 0.6268) with room to spare — so shadow
+does out-route lexical by the required margin; the shortfall is specifically against the absolute
+correctness bar, not against lexical. On KC-4 specifically, all 30 violations trace
+to one path — `caller_domain=is_any`, `posture=operate`, routed to `ops` via
+`branch3_generic`/`branch3_ops_veto` — because `is_any` is unconditionally ungated by design
+(`src/claude_wayfinder/match/_cells.py:155`), a design-vs-criterion mismatch rather than a routing
+bug; this is tracked in issue #503 (open, needs a design decision) and should be resolved before
+KC-4 is re-evaluated. KC-2, the hard block criterion, does PASS, so
 the failure is not of the single most severe kind this gate exists to catch — but a NO-GO on three
 other criteria, including two whose failure surfaces genuine routing-correctness gaps (KC-1, KC-5)
 and one gating a specific eligible-decision population (KC-4), is enough on its own to withhold the
