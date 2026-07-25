@@ -4,6 +4,55 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-24
+
+Minor release: M15-6 shadow-KC evaluation tooling — the machinery that
+computes the KC-1..KC-5 go/no-go criteria for the M15-7 hard-routing flip
+decision from gold-anchored shadow telemetry. No live routing behavior
+changes; all additions are offline analysis tooling and provenance-guard
+correctness fixes for it.
+
+### Added
+
+- **Gold-anchored shadow sample tooling** (M15-6a: #483, PRs #490, #491) —
+  `shadow-strip-for-labeling.py` and `shadow-sample-for-labeling.py`,
+  producing the frozen 120-row gold-label sample the KC criteria are
+  evaluated against.
+- **KC-1..KC-5 computation tooling** (M15-6b: #484, PR #489) —
+  `scripts/corpus/eval/_kc.py`, computing whole-sample/gated-eligible
+  routing-correctness and confident-wrong rates against gold labels.
+- **`shadow-kc-report.py` CLI** (M15-6c: #485, PR #492) — runs the KC-1..KC-5
+  criteria end to end and renders the go/no-go report, with a per-row
+  provenance guard (see Fixed) gating which corpus rows may be used as
+  evidence.
+- **Corpus builder shadow/gold-label filtering flags** (#477, #478, #480,
+  #481) — `--shadow-only`, `--exclude-gold-labels-file`,
+  `--join-shadow-from-twins`, joining shadow data from `python_matcher`
+  twin rows.
+
+### Fixed
+
+- **Provenance guard narrowed to a per-row `compose_route` check** (#499,
+  PR #502). The prior guard required one globally consistent
+  `matcher_version` across the whole corpus and hard-aborted the report if
+  any dependency module changed since that version's tag — a single
+  post-tag commit to `_compose.py` (#464) permanently blocked every future
+  report run, with no remedy short of re-accumulating the corpus. Replaced
+  with `_provenance_partition`: each row's own `matcher_version` is
+  individually resolved and its dependency modules diff-checked against
+  HEAD, partitioning rows into `included` (HEAD-valid evidence) /
+  `excluded` / `unverifiable` instead of aborting the whole run. Includes a
+  rig-isolation self-check guarding against a module-cache-collision
+  false-negative, and closes a dependency-drift blind spot where only
+  `_compose.py`/`_cells.py` were checked but `compose_route` transitively
+  depends on four more modules.
+- **`shadow-kc-report.py` / `compute_kc3`/`compute_kc4` crashed on corpus
+  rows with entirely-omitted `confidence`/`domain`/`posture` keys** (#493,
+  #497, PRs #495, #496, #498) — now tolerate absent keys instead of raising
+  `KeyError`.
+- **Test-authoring qualifier stems widened** to catch "write tests"
+  phrasing (#463, PR #464).
+
 ## [1.3.1] - 2026-07-11
 
 ### Fixed
