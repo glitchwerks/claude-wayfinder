@@ -542,8 +542,26 @@ class TestKC4:
     def test_pass_when_no_route_changes(self) -> None:
         """Eligible mislabel rows with posture_routed=False -> violations 0 -> PASS.
 
-        Row 3 (domain='code') is NOT in {is_any, project_meta} even though it is
-        posture_routed=True, so it is excluded and does not count as a violation.
+        Row 3 (caller domain='code') is NOT in {is_any, project_meta}, so it is
+        excluded from the eligible set on the caller-domain gate alone -- its
+        gold is deliberately 'docs_prose' (whose ``build`` cell is
+        ``doc-writer``, genuinely different from ``code``'s ``code-writer``)
+        so this row would flip to eligible if an implementation ever dropped
+        the caller-domain gate and relied on cell-collision exclusion alone;
+        it must stay excluded regardless.
+
+        Row 1 (caller domain='is_any', default posture='build') IS in the
+        mislabel-caller set, but under ``build`` the ``is_any`` cell and the
+        gold ``code`` cell both resolve to ``code-writer`` (confirmed by
+        calling ``cell_map_lookup`` directly: ``cell_map_lookup("is_any",
+        "build") == cell_map_lookup("code", "build") == "code-writer"``) --
+        a coincidental pair collision, not a genuine domain-invariant
+        posture. Per-row eligibility (comparing the ACTUAL caller/gold pair,
+        not a posture-level invariance check) therefore excludes row 1 too:
+        the route could never have changed for this specific pair. Only row
+        2 (caller 'project_meta' -> gold 'code', where the cells genuinely
+        differ: ``__self_handle__`` vs ``code-writer``) is genuinely
+        eligible, so ``eligible_n`` is 1, not 2.
         """
         rows = [
             _row(1, domain="is_any", posture_routed=False),
@@ -553,10 +571,10 @@ class TestKC4:
         gold = _gold_map(
             _gold(1, domain="code"),
             _gold(2, domain="code"),
-            _gold(3, domain="data"),
+            _gold(3, domain="docs_prose"),
         )
         verdict = compute_kc4(rows, gold)
-        assert verdict.metrics["eligible_n"] == 2
+        assert verdict.metrics["eligible_n"] == 1
         assert verdict.metrics["violations"] == 0
         assert verdict.status == "PASS"
 
@@ -741,6 +759,37 @@ class TestKC4DomainInvariantPostureExemption:
         assert verdict.metrics["eligible_n"] == 1
         assert verdict.metrics["violations"] == 1
         assert verdict.status == "FAIL"
+
+    def test_coincidental_pair_collision_excluded_even_in_variant_posture(
+        self,
+    ) -> None:
+        """A caller/gold pair that happens to share a cell is excluded even
+        though the posture is NOT globally domain-invariant.
+
+        ``build`` has genuine per-domain variance overall (``project_meta``
+        -> ``__self_handle__`` differs from ``code`` -> ``code-writer``), so
+        a posture-*level* "is this posture globally invariant everywhere"
+        check would never exempt ANY ``build``-posture row -- ``build`` does
+        not qualify for the ``operate``/``research``/``verify``/
+        ``idea-critique`` treatment above. But the SPECIFIC pair ``is_any``
+        -> ``code`` coincidentally resolves to the same agent
+        (``code-writer``) on both sides -- confirmed directly via
+        ``cell_map_lookup("is_any", "build") == cell_map_lookup("code",
+        "build") == "code-writer"`` -- so this exact row could never have
+        changed the route, despite ``posture_routed=True``. Correct
+        eligibility must compare the ACTUAL per-row pair (``cell_map_lookup``
+        on the caller domain vs. the gold domain, both under this row's
+        posture), not exempt/include based on whether the posture has ANY
+        variant cell somewhere else in the map.
+        """
+        rows = [
+            _row(1, domain="is_any", posture="build", posture_routed=True),
+        ]
+        gold = _gold_map(_gold(1, domain="code", posture="build"))
+        verdict = compute_kc4(rows, gold)
+        assert verdict.metrics["eligible_n"] == 0
+        assert verdict.metrics["violations"] == 0
+        assert verdict.status == "INSUFFICIENT_DATA"
 
 
 # ---------------------------------------------------------------------------
