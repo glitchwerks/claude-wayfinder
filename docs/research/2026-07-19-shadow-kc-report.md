@@ -67,7 +67,7 @@ not change) is correctly excluded from eligibility.
 Re-running the same command as above (unchanged except for `--json`) against `bee6683` — the
 original run cited everywhere else in this document was against `d0230cd` — produced:
 
-```
+```text
 KC-1: FAIL — {"lexical_rc": 0.4268, "shadow_rc": 0.6707}
 KC-2: PASS — {"anchor": 0.2558, "lexical_cw": 0.25, "shadow_cw": 0.1509}
 KC-3: PASS — {"eligible_n": 42, "numerator": 40, "rate": 0.9524}
@@ -203,7 +203,7 @@ Two of five criteria fail — KC-1 (lexical/shadow routing correctness) and KC-5
 routing correctness, on a thin 7-row slice) — and those failures indicate real Compose
 routing-correctness and traffic-mix issues that warrant investigation before any flip decision is
 revisited. KC-4 no longer contributes a failing criterion, but not because it passed: after
-#503/#506 corrected `compute_kc4`'s eligibility check (see
+\#503/\#506 corrected `compute_kc4`'s eligibility check (see
 [Addendum 2026-07-25](#addendum-2026-07-25-post-506-re-run)), the gold sample's eligible set
 collapsed to `eligible_n: 0`, so KC-4 is **INSUFFICIENT_DATA** — this dataset currently contains
 no rows that can test KC-4's routing-neutrality question at all, a data-coverage gap rather than
