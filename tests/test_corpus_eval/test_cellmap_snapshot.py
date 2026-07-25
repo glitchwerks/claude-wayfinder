@@ -159,7 +159,7 @@ assert len(CELL_MAP_LOOKUP_SNAPSHOT) == 45, (
 # cell_map_lookup(gold_domain, posture), 2026-07-25.
 # ---------------------------------------------------------------------------
 
-ROUTE_COULD_DIFFER_SNAPSHOT: dict[tuple[str, str, str], bool] = {
+ROUTE_COULD_DIFFER_SNAPSHOT: dict[tuple[str, str, str | None], bool] = {
     # caller_domain="is_any" -- resolves via the ("any", *) fallback,
     # identically to the (None, posture) column of the table above.
     ("is_any", "code", "build"): False,
@@ -239,11 +239,20 @@ ROUTE_COULD_DIFFER_SNAPSHOT: dict[tuple[str, str, str], bool] = {
     ("project_meta", "infra_deploy", "plan"): True,
     ("project_meta", "infra_deploy", "research"): False,
     ("project_meta", "infra_deploy", "operate"): False,
+    ("is_any", "code", None): True,
+    ("is_any", "docs_prose", None): True,
+    ("is_any", "project_meta", None): True,
+    ("is_any", "infra_deploy", None): True,
+    ("project_meta", "code", None): True,
+    ("project_meta", "docs_prose", None): True,
+    ("project_meta", "project_meta", None): True,
+    ("project_meta", "infra_deploy", None): True,
 }
 
-assert len(ROUTE_COULD_DIFFER_SNAPSHOT) == 72, (
-    "Expected 72 _route_could_differ snapshot entries (2 caller domains x "
-    f"4 gold domains x 9 postures); got {len(ROUTE_COULD_DIFFER_SNAPSHOT)}."
+assert len(ROUTE_COULD_DIFFER_SNAPSHOT) == 80, (
+    "Expected 80 _route_could_differ snapshot entries (2 caller domains x "
+    f"4 gold domains x 10 postures, including None); got "
+    f"{len(ROUTE_COULD_DIFFER_SNAPSHOT)}."
 )
 
 
@@ -336,7 +345,7 @@ class TestRouteCouldDifferSnapshot:
         self,
         caller_domain: str,
         gold_domain: str,
-        posture: str,
+        posture: str | None,
         expected: bool,
     ) -> None:
         """_route_could_differ(caller, gold, posture) must match the
