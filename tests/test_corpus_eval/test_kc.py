@@ -42,6 +42,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from scripts.corpus.eval._kc import (
     KC2_LEXICAL_CW_ANCHOR,
     KCVerdict,
@@ -620,6 +622,125 @@ class TestKC4MissingOptionalKeys:
 
         assert verdict_absent.metrics == verdict_null.metrics
         assert verdict_absent.status == verdict_null.status
+
+
+class TestKC4DomainInvariantPostureExemption:
+    """Issue #503: mislabel rows only count as eligible when the preferred
+    agent could ACTUALLY differ under the corrected (gold) domain versus
+    the caller's domain, i.e. when
+    ``cell_map_lookup(gold_domain, posture) != cell_map_lookup(caller_domain,
+    posture)``.
+
+    For postures whose only ``_CELL_MAP`` entry is the domain-agnostic
+    ``("any", posture)`` fallback -- ``operate`` -> ``ops``, ``research`` ->
+    ``researcher``, ``verify`` -> ``auditor``, and ``idea-critique`` ->
+    ``approach-critic`` -- the preferred agent is the same for every domain
+    (confirmed by calling ``cell_map_lookup`` directly across a spread of
+    domains, since these fixtures must not rely on which domains happen to
+    share a cell), so a mislabeled ``is_any``/``project_meta`` row can never
+    actually change the route for these postures. The prior
+    ``posture_routed``-only proxy counted such rows as violation-eligible
+    regardless, which is a false positive that must be excluded from both
+    ``eligible_n`` and ``violations``.
+
+    ``build`` is used as the domain-*variant* control: ``project_meta`` is
+    the one caller domain whose ``build`` cell (the self-handle sentinel)
+    differs from every other domain's (``code-writer``) -- ``is_any``
+    resolves to ``code-writer`` too, so it is NOT a valid variant fixture
+    for ``build`` and must not be used as one.
+    """
+
+    @pytest.mark.parametrize("posture", ["operate", "research", "verify", "idea-critique"])
+    def test_domain_invariant_posture_mislabel_excluded_from_eligible_set(
+        self, posture: str
+    ) -> None:
+        """A mislabeled row for a domain-invariant posture is never eligible.
+
+        The preferred agent for these postures cannot change regardless of
+        domain (only an ``("any", posture)`` cell exists), so a mislabeled
+        ``is_any`` row -- even one flagged ``posture_routed=True`` -- must
+        not inflate ``eligible_n`` nor count toward ``violations``. With
+        zero eligible rows the verdict must be INSUFFICIENT_DATA, never a
+        FAIL driven by a proxy that could not have actually fired.
+        """
+        rows = [_row(1, domain="is_any", posture=posture, posture_routed=True)]
+        gold = _gold_map(_gold(1, domain="code", posture=posture))
+        verdict = compute_kc4(rows, gold)
+        assert verdict.metrics["eligible_n"] == 0
+        assert verdict.metrics["violations"] == 0
+        assert verdict.status == "INSUFFICIENT_DATA"
+
+    def test_domain_variant_build_posture_mislabel_remains_eligible(self) -> None:
+        """A mislabel where the preferred agent genuinely differs stays eligible.
+
+        ``build`` has a domain-specific cell for ``project_meta`` (the
+        self-handle sentinel) that differs from ``code``'s (``code-writer``),
+        so correcting the caller's ``project_meta`` mislabel to gold ``code``
+        really could change the preferred agent. This row must remain
+        eligible and, since it did not posture-route, count as compliant
+        (PASS) -- the narrowed eligible-set filter must not sweep away
+        genuinely eligible rows along with the domain-invariant ones.
+        """
+        rows = [
+            _row(1, domain="project_meta", posture="build", posture_routed=False),
+        ]
+        gold = _gold_map(_gold(1, domain="code", posture="build"))
+        verdict = compute_kc4(rows, gold)
+        assert verdict.metrics["eligible_n"] == 1
+        assert verdict.metrics["violations"] == 0
+        assert verdict.status == "PASS"
+
+    def test_domain_variant_build_posture_violation_still_flagged(self) -> None:
+        """A genuinely-eligible mislabel row that DOES posture-route still FAILs.
+
+        Companion to the PASS case above: with the real difference between
+        ``project_meta`` (self-handle) and ``code`` (``code-writer``) for
+        ``build``, a ``posture_routed=True`` row must still count as a
+        violation after the fix -- narrowing the eligible set must not
+        accidentally suppress real violations too.
+        """
+        rows = [
+            _row(1, domain="project_meta", posture="build", posture_routed=True),
+        ]
+        gold = _gold_map(_gold(1, domain="code", posture="build"))
+        verdict = compute_kc4(rows, gold)
+        assert verdict.metrics["eligible_n"] == 1
+        assert verdict.metrics["violations"] == 1
+        assert verdict.status == "FAIL"
+
+    def test_realistic_mixed_scenario_eligible_n_drops_when_invariant_excluded(
+        self,
+    ) -> None:
+        """Issue #503 shape: is_any/project_meta + operate mislabels alongside
+        one genuine build-posture mislabel.
+
+        Four ``operate``-posture mislabel rows (domain-invariant: every
+        domain resolves to ``ops``) sit alongside one ``build``-posture
+        mislabel row with caller domain ``project_meta`` (domain-variant:
+        ``project_meta``'s self-handle resolution differs from ``code``'s
+        ``code-writer``). Only the build row may count -- the four operate
+        rows must be excluded from both ``eligible_n`` and ``violations``
+        regardless of their ``posture_routed`` flag, so ``eligible_n`` drops
+        from 5 to 1.
+        """
+        rows = [
+            _row(1, domain="is_any", posture="operate", posture_routed=True),
+            _row(2, domain="is_any", posture="operate", posture_routed=False),
+            _row(3, domain="project_meta", posture="operate", posture_routed=True),
+            _row(4, domain="project_meta", posture="operate", posture_routed=False),
+            _row(5, domain="project_meta", posture="build", posture_routed=True),
+        ]
+        gold = _gold_map(
+            _gold(1, domain="code", posture="operate"),
+            _gold(2, domain="code", posture="operate"),
+            _gold(3, domain="code", posture="operate"),
+            _gold(4, domain="code", posture="operate"),
+            _gold(5, domain="code", posture="build"),
+        )
+        verdict = compute_kc4(rows, gold)
+        assert verdict.metrics["eligible_n"] == 1
+        assert verdict.metrics["violations"] == 1
+        assert verdict.status == "FAIL"
 
 
 # ---------------------------------------------------------------------------

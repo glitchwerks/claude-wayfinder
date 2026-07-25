@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from claude_wayfinder.match._cells import cell_map_lookup
+from claude_wayfinder.match._cells import DOMAIN_AGENT_MAP, cell_map_lookup
 from scripts.corpus.eval._metrics import (
     metric_confident_wrong_rate,
     metric_routing_correctness,
@@ -30,6 +30,9 @@ _KC5_INFRA_RC_FLOOR: float = 0.600
 
 KCStatus = Literal["PASS", "FAIL", "INSUFFICIENT_DATA"]
 CorpusRow = dict[str, Any]
+_REAL_DOMAINS: tuple[str, ...] = tuple(
+    domain for domain in DOMAIN_AGENT_MAP if domain is not None
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,26 @@ class KCVerdict:
     kc: str
     status: KCStatus
     metrics: dict[str, Any]
+
+
+def _is_domain_invariant_posture(posture: str | None) -> bool:
+    """Return whether a posture resolves identically in every real domain.
+
+    Args:
+        posture: Caller-supplied posture label, or ``None`` when omitted.
+
+    Returns:
+        ``True`` when every real domain resolves to the same preferred
+        agent. Missing postures preserve the original KC-4 behavior.
+    """
+    if posture is None:
+        return False
+    return (
+        len({
+            cell_map_lookup(domain, posture) for domain in _REAL_DOMAINS
+        })
+        == 1
+    )
 
 
 def _system_results(
@@ -217,10 +240,12 @@ def compute_kc4(
         corpus_id = row["corpus_id"]
         label = gold.get(corpus_id)
         caller_domain = row["input"].get("domain")
+        posture = row["input"].get("posture")
         if (
             label is not None
             and caller_domain in {"is_any", "project_meta"}
             and label.domain != caller_domain
+            and not _is_domain_invariant_posture(posture)
         ):
             eligible.append(row)
 
