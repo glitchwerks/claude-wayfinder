@@ -73,6 +73,7 @@ _TRANSITIVE_DEPENDENCY_MODULES = (
 )
 # Every dependency that must be clean before provenance comparison.
 _DEPENDENCY_MODULES = (_COMPOSE_MODULE_PATH,) + _TRANSITIVE_DEPENDENCY_MODULES
+_DRIFT_WARNING_THRESHOLD: float = 0.25
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -161,6 +162,15 @@ class ProvenancePartition:
     included: frozenset[int]
     excluded: dict[int, str]
     unverifiable: dict[int, str]
+
+
+def _provenance_drift_fraction(partition: ProvenancePartition) -> float:
+    """Return the fraction of provenance rows excluded from KC computation."""
+    drifted_rows = len(partition.excluded) + len(partition.unverifiable)
+    total_rows = len(partition.included) + drifted_rows
+    if total_rows == 0:
+        return 0.0
+    return drifted_rows / total_rows
 
 
 class ProvenanceGuardError(RuntimeError):
@@ -911,6 +921,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    provenance_drift_fraction = _provenance_drift_fraction(partition)
+    if provenance_drift_fraction >= _DRIFT_WARNING_THRESHOLD:
+        print(
+            "WARNING: provenance drift "
+            f"{provenance_drift_fraction:.1%} "
+            f"(excluded rows: {len(partition.excluded)}; "
+            f"unverifiable rows: {len(partition.unverifiable)}); "
+            "see issue #510.",
+            file=sys.stderr,
+        )
+
     for corpus_id, reason in sorted(partition.excluded.items()):
         print(
             f"Excluded corpus_id {corpus_id} from KC computation: {reason}",
@@ -940,6 +961,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = {
                 "criteria": [asdict(verdict) for verdict in verdicts],
                 "overall_recommendation": recommendation,
+                "provenance_drift_fraction": provenance_drift_fraction,
             }
             args.json.write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n",

@@ -120,6 +120,27 @@ router / code-implementer, since no prior contract existed for these):
    some excluded/unverifiable rows still completes (exit 0) and the
    report/stderr surfaces the exclusion, rather than the whole run
    aborting non-zero the way the old boolean guard did.
+9. **[NEW, issue #510] Provenance drift-fraction warning.** A new pure
+   function, ``_provenance_drift_fraction(partition: ProvenancePartition)
+   -> float``, computes ``(len(excluded) + len(unverifiable)) /
+   total_rows`` where ``total_rows = len(included) + len(excluded) +
+   len(unverifiable)``, returning ``0.0`` when ``total_rows == 0`` (no
+   divide-by-zero). A module-level constant, ``_DRIFT_WARNING_THRESHOLD
+   = 0.25``, names the 25% threshold from the issue's scoping decision.
+   ``main()`` prints a ``WARNING:`` line to stderr (naming the fraction,
+   the excluded/unverifiable counts, and a pointer to issue #510) when
+   the fraction is ``>= _DRIFT_WARNING_THRESHOLD``, BEFORE the KC
+   verdicts are printed to stdout -- this suite pins that ordering by
+   monkeypatching ``sys.stdout``/``sys.stderr`` with write-order
+   recorders rather than merely asserting presence on each stream
+   independently (two ``capsys.readouterr()`` calls cannot recover
+   cross-stream ordering). The ``--json`` payload always carries a
+   ``"provenance_drift_fraction"`` float field, regardless of whether
+   the threshold was crossed, so consumers can see the number on every
+   run, not just flagged ones. This suite does not pin an exact wording
+   or percent-vs-fraction display format for the warning text beyond
+   what the spec requires (fraction, counts, issue pointer all
+   discoverable) -- see ``TestProvenanceDriftWarningMainIntegration``.
 
 Public API designed here (the implementer builds to match):
 
@@ -130,6 +151,12 @@ Public API designed here (the implementer builds to match):
     ``--json PATH`` (optional), ``--repo-root PATH`` (optional, default cwd),
     ``--catalog-path PATH`` (optional, falls back to ``DISPATCH_CATALOG_PATH``
     env var, else fails loud -- issue #501, item 7).
+
+    ``_provenance_drift_fraction(partition: ProvenancePartition) -> float``
+    and module-level ``_DRIFT_WARNING_THRESHOLD: float = 0.25`` (issue
+    #510, item 9). ``--json`` payload gains a ``"provenance_drift_fraction"``
+    float key alongside the existing ``"criteria"``/``"overall_recommendation"``
+    keys.
 """
 
 from __future__ import annotations
@@ -1726,3 +1753,331 @@ class TestExecutionErrors:
 
         rc = _run_main(kc_report_module, corpus_path, missing_labels, repo_root)
         assert rc != 0
+
+
+# ---------------------------------------------------------------------------
+# Provenance drift-fraction warning (issue #510)
+# ---------------------------------------------------------------------------
+
+
+class TestProvenanceDriftFraction:
+    """``_provenance_drift_fraction(partition: ProvenancePartition) ->
+    float`` computes ``(len(excluded) + len(unverifiable)) / total_rows``,
+    where ``total_rows = len(included) + len(excluded) +
+    len(unverifiable)``, returning ``0.0`` when ``total_rows == 0`` (no
+    divide-by-zero). Exercised directly against constructed
+    ``ProvenancePartition`` instances -- no git fixture or subprocess
+    needed, since this is a pure function of the partition's bucket sizes.
+    """
+
+    def test_all_included_partition_has_zero_drift(
+        self, kc_report_module: ModuleType
+    ) -> None:
+        partition = kc_report_module.ProvenancePartition(
+            included=frozenset({1, 2, 3}),
+            excluded={},
+            unverifiable={},
+        )
+        assert kc_report_module._provenance_drift_fraction(partition) == 0.0
+
+    def test_all_excluded_partition_has_full_drift(
+        self, kc_report_module: ModuleType
+    ) -> None:
+        partition = kc_report_module.ProvenancePartition(
+            included=frozenset(),
+            excluded={1: "r", 2: "r", 3: "r"},
+            unverifiable={},
+        )
+        assert kc_report_module._provenance_drift_fraction(partition) == 1.0
+
+    def test_all_unverifiable_partition_has_full_drift(
+        self, kc_report_module: ModuleType
+    ) -> None:
+        partition = kc_report_module.ProvenancePartition(
+            included=frozenset(),
+            excluded={},
+            unverifiable={1: "r", 2: "r"},
+        )
+        assert kc_report_module._provenance_drift_fraction(partition) == 1.0
+
+    def test_mixed_partition_above_threshold(
+        self, kc_report_module: ModuleType
+    ) -> None:
+        """4 excluded + 1 unverifiable out of 10 total rows = 0.5 drift."""
+        partition = kc_report_module.ProvenancePartition(
+            included=frozenset(range(1, 6)),
+            excluded={i: "r" for i in range(6, 10)},
+            unverifiable={10: "r"},
+        )
+        fraction = kc_report_module._provenance_drift_fraction(partition)
+        assert fraction == pytest.approx(0.5)
+        assert fraction >= kc_report_module._DRIFT_WARNING_THRESHOLD
+
+    def test_mixed_partition_below_threshold(
+        self, kc_report_module: ModuleType
+    ) -> None:
+        """1 excluded out of 10 total rows = 0.1 drift."""
+        partition = kc_report_module.ProvenancePartition(
+            included=frozenset(range(1, 10)),
+            excluded={10: "r"},
+            unverifiable={},
+        )
+        fraction = kc_report_module._provenance_drift_fraction(partition)
+        assert fraction == pytest.approx(0.1)
+        assert fraction < kc_report_module._DRIFT_WARNING_THRESHOLD
+
+    def test_exactly_at_threshold_counts_as_drifted(
+        self, kc_report_module: ModuleType
+    ) -> None:
+        """1 excluded out of 4 total rows = 0.25, exactly at the
+        threshold -- the boundary is inclusive (">=", not ">").
+        """
+        partition = kc_report_module.ProvenancePartition(
+            included=frozenset({1, 2, 3}),
+            excluded={4: "r"},
+            unverifiable={},
+        )
+        fraction = kc_report_module._provenance_drift_fraction(partition)
+        assert fraction == pytest.approx(0.25)
+        assert fraction >= kc_report_module._DRIFT_WARNING_THRESHOLD
+
+    def test_empty_partition_has_zero_drift_no_divide_by_zero(
+        self, kc_report_module: ModuleType
+    ) -> None:
+        """Zero total rows must not raise ``ZeroDivisionError``."""
+        partition = kc_report_module.ProvenancePartition(
+            included=frozenset(),
+            excluded={},
+            unverifiable={},
+        )
+        assert kc_report_module._provenance_drift_fraction(partition) == 0.0
+
+    def test_drift_warning_threshold_constant_is_one_quarter(
+        self, kc_report_module: ModuleType
+    ) -> None:
+        assert kc_report_module._DRIFT_WARNING_THRESHOLD == 0.25
+
+
+class TestProvenanceDriftWarningMainIntegration:
+    """``main()`` surfaces the provenance drift fraction: a ``WARNING:``
+    stderr line (naming the fraction, the excluded/unverifiable counts,
+    and a pointer to issue #510) when drift is at or above
+    ``_DRIFT_WARNING_THRESHOLD``, printed before the KC verdicts are
+    written to stdout; and always includes a ``"provenance_drift_fraction"``
+    float field in the ``--json`` payload, whether or not the threshold
+    was crossed (issue #510).
+    """
+
+    def test_below_threshold_drift_prints_no_warning(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """All rows trivially agree (baseline == HEAD) -- 0.0 drift,
+        well below the 0.25 threshold -- no WARNING line.
+        """
+        repo_root, sha = guard_repo
+        rows = [_corpus_row(i, matcher_version=sha) for i in range(1, 5)]
+        gold = [_gold_row(i) for i in range(1, 5)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        captured = capsys.readouterr()
+
+        assert rc == 0
+        assert "WARNING" not in captured.err, (
+            "drift below the threshold (0.0) must not print a WARNING "
+            f"line; stderr:\n{captured.err}"
+        )
+
+    def test_below_threshold_json_field_present_with_actual_value(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+    ) -> None:
+        """The JSON field must be present and correct even when the run
+        is entirely clean -- always emitted, not only when flagged.
+        """
+        repo_root, sha = guard_repo
+        rows = [_corpus_row(i, matcher_version=sha) for i in range(1, 5)]
+        gold = [_gold_row(i) for i in range(1, 5)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        json_path = tmp_path / "report.json"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root, json_path)
+        assert rc == 0
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert "provenance_drift_fraction" in data, (
+            "the JSON payload must always include provenance_drift_fraction"
+        )
+        assert data["provenance_drift_fraction"] == pytest.approx(0.0)
+
+    def test_at_threshold_drift_prints_warning_naming_fraction_counts_and_issue(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """1 excluded row of 4 total = 0.25 drift, exactly at the
+        threshold -- the inclusive ">=" boundary must still warn.
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [
+            _corpus_row(1, domain=_FLAKY_DOMAIN, matcher_version=baseline_sha),
+            _corpus_row(2, domain="code", matcher_version=baseline_sha),
+            _corpus_row(3, domain="code", matcher_version=baseline_sha),
+            _corpus_row(4, domain="code", matcher_version=baseline_sha),
+        ]
+        gold = [_gold_row(i) for i in range(1, 5)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        captured = capsys.readouterr()
+
+        assert rc == 0
+        assert "WARNING" in captured.err, (
+            f"drift at exactly the 0.25 threshold must warn; stderr:\n{captured.err}"
+        )
+        assert "510" in captured.err, (
+            f"the warning must point to issue #510; stderr:\n{captured.err}"
+        )
+        assert re.search(r"0\.25\b|25(\.0)?%", captured.err), (
+            f"the warning must name the drift fraction (0.25 / 25%); stderr:\n{captured.err}"
+        )
+        excluded_pattern = r"exclud\w*\D{0,15}1\b|\b1\D{0,15}exclud\w*"
+        assert re.search(excluded_pattern, captured.err, re.IGNORECASE), (
+            f"the warning must name the excluded-row count (1); stderr:\n{captured.err}"
+        )
+
+    def test_above_threshold_drift_with_both_excluded_and_unverifiable_rows(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """2 of 4 rows drifted (1 excluded, 1 unverifiable) = 0.5 drift --
+        both counts, and the combined fraction, must be discoverable.
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [
+            _corpus_row(1, domain=_FLAKY_DOMAIN, matcher_version=baseline_sha),
+            _corpus_row(2, matcher_version="not-a-real-revision-at-all"),
+            _corpus_row(3, domain="code", matcher_version=baseline_sha),
+            _corpus_row(4, domain="code", matcher_version=baseline_sha),
+        ]
+        gold = [_gold_row(i) for i in range(1, 5)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        json_path = tmp_path / "report.json"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root, json_path)
+        captured = capsys.readouterr()
+
+        assert rc == 0
+        assert "WARNING" in captured.err
+        assert re.search(r"0\.5\b|50(\.0)?%", captured.err), (
+            f"the warning must name the 0.5 drift fraction; stderr:\n{captured.err}"
+        )
+        excluded_pattern = r"exclud\w*\D{0,15}1\b|\b1\D{0,15}exclud\w*"
+        assert re.search(excluded_pattern, captured.err, re.IGNORECASE), (
+            f"the warning must name the excluded-row count (1); stderr:\n{captured.err}"
+        )
+        unverifiable_pattern = r"unverif\w*\D{0,15}1\b|\b1\D{0,15}unverif\w*"
+        assert re.search(unverifiable_pattern, captured.err, re.IGNORECASE), (
+            f"the warning must name the unverifiable-row count (1); stderr:\n{captured.err}"
+        )
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert data["provenance_drift_fraction"] == pytest.approx(0.5)
+
+    def test_warning_printed_before_kc_verdicts(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The WARNING must reach stderr BEFORE the KC verdict report
+        reaches stdout. Two independent ``capsys.readouterr()`` calls
+        cannot recover cross-stream ordering, so this test replaces
+        ``sys.stdout``/``sys.stderr`` with recorders sharing one
+        ordered event log and checks relative position directly.
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [
+            _corpus_row(1, domain=_FLAKY_DOMAIN, matcher_version=baseline_sha),
+            _corpus_row(2, domain="code", matcher_version=baseline_sha),
+            _corpus_row(3, domain="code", matcher_version=baseline_sha),
+            _corpus_row(4, domain="code", matcher_version=baseline_sha),
+        ]
+        gold = [_gold_row(i) for i in range(1, 5)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        events: list[tuple[str, str]] = []
+
+        class _RecordingStream:
+            """A minimal file-like recorder that logs non-blank writes."""
+
+            def __init__(self, label: str) -> None:
+                self._label = label
+
+            def write(self, text: str) -> int:
+                if text.strip():
+                    events.append((self._label, text))
+                return len(text)
+
+            def flush(self) -> None:
+                """No-op; satisfies the file-like interface."""
+
+        monkeypatch.setattr(sys, "stdout", _RecordingStream("stdout"))
+        monkeypatch.setattr(sys, "stderr", _RecordingStream("stderr"))
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+
+        assert rc == 0
+        warning_index = next(
+            (
+                i
+                for i, (label, text) in enumerate(events)
+                if label == "stderr" and "WARNING" in text
+            ),
+            None,
+        )
+        kc_index = next(
+            (
+                i
+                for i, (label, text) in enumerate(events)
+                if label == "stdout" and "KC-1" in text
+            ),
+            None,
+        )
+        assert warning_index is not None, (
+            f"no WARNING line was ever written to stderr; events: {events!r}"
+        )
+        assert kc_index is not None, (
+            f"no KC verdict content was ever written to stdout; events: {events!r}"
+        )
+        assert warning_index < kc_index, (
+            "the WARNING must be printed before the KC verdicts; observed "
+            f"event order: {[label for label, _ in events]!r}"
+        )
