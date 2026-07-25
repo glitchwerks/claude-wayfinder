@@ -520,3 +520,30 @@ reference (`scripts/shadow-summary.py:Lx`), inline at point of use.
    yet confirmed. §4.3 now makes this an **in-code gated assertion inside `_kc.py`** (a documented,
    asserted module constant) rather than a separable prose pre-check, and §7 M15-6b carries forward
    guidance to record the confirmed denominator definition in the issue body once created.
+
+---
+
+## 10. M15-7 pre-flip checklist addition — corpus drift detection (issue #510)
+
+The §4.4 provenance guard is correct but silent about its own cost: it permanently excludes any
+corpus row whose stamped `matcher_version` predates a change to one of six provenance-guarded
+dependency modules — `src/claude_wayfinder/match/_cells.py`, `_decide.py`, `_types.py`, `_match.py`,
+`_stem.py`, and `src/claude_wayfinder/match_filters.py` — and nothing re-stamps or regenerates the
+corpus when those modules change. The usable sample can erode well below the ≥ 100-row floor (§F.3)
+without the report ever failing outright; it just quietly runs on fewer rows (glitchwerks/claude-wayfinder#510).
+
+**Checklist item — add before trusting any M15-7 flip verdict:** confirm none of the six
+provenance-guarded modules above have changed since the shadow corpus was last regenerated. If any
+have, treat the go/no-go verdict as **provisional** until the corpus is refreshed — do not flip on it.
+
+**Automated signal (issue #510).** `scripts/shadow-kc-report.py` computes a `provenance_drift_fraction`
+— always present in the `--json` output — and prints a stderr `WARNING` when it is `>= 0.25` (25% of
+rows excluded or unverifiable). This is the mechanical check that surfaces the checklist item above;
+the checklist is not purely manual vigilance.
+
+**Out of scope.** Full automated corpus regeneration (re-running generation, re-annotating gold, and
+re-stamping `matcher_version` on a cadence tied to dependency-module changes) is explicitly **not**
+implemented by #510 — it needs an annotation/ownership workflow decision this issue doesn't have
+standing to make unilaterally. This section is a detection/checklist aid layered on the existing
+provenance guard, not a fix for the underlying erosion; full regeneration is tracked as a possible
+follow-up issue.
