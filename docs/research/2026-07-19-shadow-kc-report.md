@@ -9,7 +9,9 @@ the M15-7 hard-routing flip decision.
 
 ## Overall recommendation
 
-> **NO-GO** — failed criteria: KC-1, KC-4, KC-5.
+> **NO-GO** — failed criteria: KC-1, KC-5. KC-4: **INSUFFICIENT_DATA** (was FAIL in the original
+> 2026-07-24 run; see [Addendum 2026-07-25](#addendum-2026-07-25-post-506-re-run) for the
+> post-#503/#506 re-run that changed this).
 
 See [What this means for M15-7](#what-this-means-for-m15-7) for the closing interpretation.
 
@@ -51,6 +53,44 @@ remediation plan's design (`docs/superpowers/plans/2026-07-23-shadow-kc-provenan
 gold labels — no live catalog re-scoring feeds the KC metrics. Today's freshly rebuilt catalog is
 therefore safe to use for the provenance check and does not confound the verdicts below.
 
+### Addendum 2026-07-25 (post-#506 re-run)
+
+Issue #503 identified a KC-4 eligibility gap in `compute_kc4`: rows with `caller_domain` in
+`{"is_any", "project_meta"}` and `posture=operate` were treated as eligible for the neutrality
+check purely on posture, without checking whether the caller/gold domain disagreement could
+actually change the route. PR #506 (merged as `bee6683`) fixed this by adding a per-row
+`_route_could_differ` check (`scripts/corpus/eval/_kc.py:51`–`:79`) that compares
+`cell_map_lookup(caller_domain, posture)` against `cell_map_lookup(gold_domain, posture)` for
+each row's actual pair, so a coincidental domain-pair collision (where the route provably could
+not change) is correctly excluded from eligibility.
+
+Re-running the same command as above (unchanged except for `--json`) against `bee6683` — the
+original run cited everywhere else in this document was against `d0230cd` — produced:
+
+```
+KC-1: FAIL — {"lexical_rc": 0.4268, "shadow_rc": 0.6707}
+KC-2: PASS — {"anchor": 0.2558, "lexical_cw": 0.25, "shadow_cw": 0.1509}
+KC-3: PASS — {"eligible_n": 42, "numerator": 40, "rate": 0.9524}
+KC-4: INSUFFICIENT_DATA — {"eligible_n": 0, "violations": 0}
+KC-5: FAIL — {"shadow_rc": 0.5714, "slice_n": 7}
+Whole-sample cut: {"n": 161, "shadow_cw": 0.1509, "shadow_rc": 0.6707}
+Gated-eligible subset cut: {"n": 42, "shadow_cw": 0.1905, "shadow_rc": 0.8182}
+Caller-label match breakdown: Matched gold: 29; caller-label mismatch/disagreement: 53.
+Go/no-go: NO-GO: failed criteria: KC-1, KC-5. Insufficient data: KC-4.
+```
+
+KC-1, KC-2, KC-3, and KC-5 are numerically identical to the original 2026-07-24 run — expected,
+since #506 touches only `compute_kc4`. KC-4 moved from **FAIL** (`eligible_n: 36`,
+`violations: 30`) to **INSUFFICIENT_DATA** (`eligible_n: 0`, `violations: 0`): the corrected
+per-row check determined that every one of the 36 previously-"eligible" rows in this gold sample
+is a coincidental domain-pair collision where the route provably could not change, so none of
+them are genuinely eligible to test KC-4's route-change risk. KC-4 can no longer be assessed as
+PASS or FAIL on this dataset — it is a data-coverage gap now, not a resolved or newly-introduced
+routing-neutrality violation. The overall verdict stays **NO-GO**, on KC-1 and KC-5, unrelated to
+this fix. See #503 for the original gap and #506 for the fix; the sections below carry the
+detailed per-criterion breakdown from the original 2026-07-24 run and are annotated where KC-4's
+change affects their reading.
+
 ## Provenance partition
 
 PR #502 replaced the prior whole-run boolean provenance guard with a per-row
@@ -87,15 +127,22 @@ Computed over the 161 included rows, per `scripts/corpus/eval/_kc.py`.
 | KC-1 | **FAIL** | `shadow_rc >= 0.6891` AND `shadow_rc >= lexical_rc + 0.20` (`scripts/corpus/eval/_kc.py:26`–`:27`, `:98`–`:101`) | `lexical_rc: 0.4268`, `shadow_rc: 0.6707` |
 | KC-2 (hard block) | **PASS** | `shadow_cw <= 0.2558` — fixed historical lexical-CW anchor (`scripts/corpus/eval/_kc.py:21`, `:128`–`:130`) | `anchor: 0.2558`, `lexical_cw: 0.25`, `shadow_cw: 0.1509` |
 | KC-3 | **PASS** | `rate >= 0.55` (`scripts/corpus/eval/_kc.py:28`, `:189`) | `eligible_n: 42`, `numerator: 40`, `rate: 0.9524` |
-| KC-4 | **FAIL** | `violations == 0` on the eligible set (`scripts/corpus/eval/_kc.py:234`) | `eligible_n: 36`, `violations: 30` |
+| KC-4 | **INSUFFICIENT_DATA** | `violations == 0` on the eligible set; `eligible_n == 0` short-circuits to INSUFFICIENT_DATA (`scripts/corpus/eval/_kc.py:264`–`:267`) | `eligible_n: 0`, `violations: 0` — see the KC-4 root cause note below; was `eligible_n: 36`, `violations: 30` / **FAIL** in the original 2026-07-24 run, before #503/#506 |
 | KC-5 | **FAIL** | `shadow_rc >= 0.600` (`scripts/corpus/eval/_kc.py:29`, `:272`) | `shadow_rc: 0.5714`, `slice_n: 7` |
 
-**KC-4 root cause.** All 30 violations trace to one path: `caller_domain=is_any`, `posture=operate`,
-routed to `ops` via `branch3_generic`/`branch3_ops_veto`. This fires because `is_any` is
-unconditionally ungated by design (`src/claude_wayfinder/match/_cells.py:155`) — a
-design-vs-criterion mismatch, not a routing bug: KC-4's neutrality criterion has no way to express
-"posture-routed to a domain-independent agent" as non-violating. Tracked in issue #503 (open, needs
-a design decision).
+**KC-4 root cause.** In the original 2026-07-24 run, all 30 violations traced to one path:
+`caller_domain=is_any`, `posture=operate`, routed to `ops` via
+`branch3_generic`/`branch3_ops_veto`. This fired because `is_any` is unconditionally ungated by
+design (`src/claude_wayfinder/match/_cells.py:155`) — a design-vs-criterion mismatch, not a
+routing bug: `compute_kc4` as originally written had no way to express "posture-routed to a
+domain-independent agent" as non-violating. Issue #503 tracked this; PR #506 (merged `bee6683`)
+resolved it by adding a per-row `_route_could_differ` check (`scripts/corpus/eval/_kc.py:51`–`:79`)
+so eligibility depends on whether the row's specific caller/gold domain pair could actually change
+the route under that row's posture, rather than on posture alone. Re-running against `bee6683`
+finds `eligible_n: 0` (see [Addendum 2026-07-25](#addendum-2026-07-25-post-506-re-run)): every
+row that was previously counted as an eligible violation turned out to be a domain-pair collision
+where the route provably could not change, so KC-4 is now **INSUFFICIENT_DATA** rather than
+**FAIL** on this gold sample. Full mechanism in #503 and #506.
 
 **KC-5 small-sample caveat.** KC-5's FAIL rests on `slice_n: 7` — the gold `infra_deploy` slice
 within the 161 included rows is thin. `scripts/corpus/eval/_kc.py`'s `compute_kc5` (`:243`–`:278`)
@@ -152,22 +199,25 @@ caller-label noise versus Compose error.
 ## What this means for M15-7
 
 The verdict is **NO-GO**. The M15-7 hard-routing flip should **not** proceed on this evidence.
-Three of five criteria fail — KC-1 (lexical/shadow routing correctness), KC-4 (a 36-row eligible
-gate with 30 violations), and KC-5 (infra-deploy routing correctness, on a thin 7-row slice) — and
-those failures indicate real Compose routing-correctness and traffic-mix issues that warrant
-investigation before any flip decision is revisited. On KC-1 specifically, the failure is on the
-absolute floor only: `shadow_rc` (0.6707) falls short of the 0.6891 floor by 0.0184, while it clears
-the lexical-margin requirement (0.6707 >= 0.4268 + 0.20 = 0.6268) with room to spare — so shadow
-does out-route lexical by the required margin; the shortfall is specifically against the absolute
-correctness bar, not against lexical. On KC-4 specifically, all 30 violations trace
-to one path — `caller_domain=is_any`, `posture=operate`, routed to `ops` via
-`branch3_generic`/`branch3_ops_veto` — because `is_any` is unconditionally ungated by design
-(`src/claude_wayfinder/match/_cells.py:155`), a design-vs-criterion mismatch rather than a routing
-bug; this is tracked in issue #503 (open, needs a design decision) and should be resolved before
-KC-4 is re-evaluated. KC-2, the hard block criterion, does PASS, so
-the failure is not of the single most severe kind this gate exists to catch — but a NO-GO on three
-other criteria, including two whose failure surfaces genuine routing-correctness gaps (KC-1, KC-5)
-and one gating a specific eligible-decision population (KC-4), is enough on its own to withhold the
-flip. The caller-label disagreement rate (~65% of gold-labeled included rows) and the whole-sample
-vs. gated-eligible gap are offered above as diagnostic leads for that follow-up investigation, not
-as mitigating factors that override the FAIL verdicts.
+Two of five criteria fail — KC-1 (lexical/shadow routing correctness) and KC-5 (infra-deploy
+routing correctness, on a thin 7-row slice) — and those failures indicate real Compose
+routing-correctness and traffic-mix issues that warrant investigation before any flip decision is
+revisited. KC-4 no longer contributes a failing criterion, but not because it passed: after
+#503/#506 corrected `compute_kc4`'s eligibility check (see
+[Addendum 2026-07-25](#addendum-2026-07-25-post-506-re-run)), the gold sample's eligible set
+collapsed to `eligible_n: 0`, so KC-4 is **INSUFFICIENT_DATA** — this dataset currently contains
+no rows that can test KC-4's routing-neutrality question at all, a data-coverage gap rather than
+a resolved-favorable or newly-introduced routing problem. On KC-1 specifically, the failure is on
+the absolute floor only: `shadow_rc` (0.6707) falls short of the 0.6891 floor by 0.0184, while it
+clears the lexical-margin requirement (0.6707 >= 0.4268 + 0.20 = 0.6268) with room to spare — so
+shadow does out-route lexical by the required margin; the shortfall is specifically against the
+absolute correctness bar, not against lexical. KC-2, the hard block criterion, does PASS, so
+the failure is not of the single most severe kind this gate exists to catch — but a NO-GO on the
+two other failing criteria, both of which surface genuine routing-correctness gaps (KC-1, KC-5),
+is enough on its own to withhold the flip. KC-4's INSUFFICIENT_DATA status means the M15-7
+decision cannot lean on it either way; closing that data gap — a gold sample with rows that
+genuinely exercise route-changing caller-domain mislabels — is a prerequisite for KC-4 to
+contribute a verdict on any future re-run. The caller-label disagreement rate (~65% of
+gold-labeled included rows) and the whole-sample vs. gated-eligible gap are offered above as
+diagnostic leads for that follow-up investigation, not as mitigating factors that override the
+FAIL verdicts.
