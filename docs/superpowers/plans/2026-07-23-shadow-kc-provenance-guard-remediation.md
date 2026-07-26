@@ -27,21 +27,21 @@ skills_relevant:
 > authoritative design reference for the catalog-drift-cancellation argument. Three corrections, recorded
 > here per the corpus-regeneration-process plan §7:
 >
-> 1. **§4a's narrow-guard branch landed, via PR #502.** This plan's §1 description of
->    `_provenance_guard` (`scripts/shadow-kc-report.py:131`–`:214`, the whole-run, two-check gate) no
->    longer matches the code: the guard is now a per-row behavioral partition
->    (`_provenance_partition`, `scripts/shadow-kc-report.py:617-719`), not the file-diff proxy this plan
->    describes and proposes replacing.
+> 1. **§4a's narrow-guard branch landed, via PR #502.** This plan's §1 describes `_provenance_guard` as
+>    a whole-run, two-check gate at the range this plan cites in `scripts/shadow-kc-report.py` — that no
+>    longer matches the code: the guard is now the per-row behavioral partition `_provenance_partition`
+>    (`scripts/shadow-kc-report.py:617-719`), not the file-diff proxy §1 describes and §4 proposes
+>    replacing.
 > 2. **§5's `--matcher-version` builder-flag branch is moot.** §4.1 of this plan already makes the
 >    recommendation conditional: "if §4 lands, prefer the behavioral partition (`--substrate-check`) and
->    skip the stamp flag" (`:277-279`). §4 landed (correction 1, above), so by this plan's own
->    conditional, no stamp-filter flag is needed. Do not build it from this document — a mixed-stamp
->    corpus is now handled natively by the per-row partition.
+>    skip the stamp flag." §4 landed (correction 1, above), so by this plan's own conditional, no
+>    stamp-filter flag is needed. Do not build it from this document — a mixed-stamp corpus is now
+>    handled natively by the per-row partition.
 > 3. **§6's claim that the marketplace pin bump is "downstream housekeeping with no functional bearing
->    on the guard"** (`:296-299`) **is wrong for the pin bump.** The pin gates which `claude-wayfinder`
->    version the plugin venv installs, which gates what version newly-logged traffic stamps as
->    `matcher_version`, which gates whether that traffic survives the provenance partition on a future
->    regeneration. See `docs/maintenance/corpus-regeneration.md` (precondition P3) for the corrected
+>    on the guard" is wrong for the pin bump.** The pin gates which `claude-wayfinder` version the
+>    plugin venv installs, which gates what version newly-logged traffic stamps as `matcher_version`,
+>    which gates whether that traffic survives the provenance partition on a future regeneration. See
+>    `docs/maintenance/corpus-regeneration.md` (precondition P3) for the corrected
 >    account.
 
 **Status (as originally written; superseded above):** PLAN / DECISIONS OPEN. This is a **follow-on** to

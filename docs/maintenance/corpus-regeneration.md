@@ -154,11 +154,16 @@ fraction of already-labeled rows. If you need to close a coverage gap (e.g. a th
    place that flag belongs.
 3. Draw from the pool with `scripts/shadow-sample-for-labeling.py`, using a new `--seed` and a new
    `--output` path sized to the gap you're closing.
-4. Label the new rows, then **union** them into the gold JSONL. Never replace the existing file.
+4. Strip the draw to a labeler-safe view with `scripts/shadow-strip-for-labeling.py` (drops caller
+   labels, matcher decisions, and decision-adjacent metadata, keeping only the corpus id and raw
+   input signal) before handing it to a labeler.
+5. Label the new rows, then **union** them into the gold JSONL. Never replace the existing file.
 
-**Footgun:** both the corpus builder's exclusion flag and `shadow-sample-for-labeling.py`'s output
-argument open their output file in exclusive-create (`"x"`) mode — every run needs a fresh output
-path, or it will fail rather than silently overwrite.
+**Footgun:** both `shadow-sample-for-labeling.py`'s and `shadow-strip-for-labeling.py`'s output
+arguments open their output file in exclusive-create (`"x"`) mode — every run needs a fresh output
+path, or it will fail rather than silently overwrite. (Contrast Step 2: the corpus builder's artifact
+writer opens in `"w"` mode instead — the opposite failure mode, silent overwrite — which is why Step 2
+requires a new dated `--output-dir` on every rebuild.)
 
 **Targeted vs. proportional draw.** Keep the proportional stratified draw as the substrate for the
 rate-based KCs (KC-1/KC-2/KC-3). If a route-changing-caller-domain KC (e.g. KC-4) still starves under
@@ -229,7 +234,8 @@ Preconditions
    a. Rebuild with no gold exclusion -> existing labels rejoin by corpus_id
    b. Build a disjoint pool: --exclude-gold-labels-file <gold file> --output-dir <new dir>
    c. Draw from the pool: shadow-sample-for-labeling.py --seed <new> --output <new path>
-   d. Label, then union into the gold JSONL (never replace)
+   d. Strip to a labeler-safe view: shadow-strip-for-labeling.py --output <new path>
+   e. Label, then union into the gold JSONL (never replace)
 
 4. Sign off
    - Commit the manifest (docs/research/<date>-corpus-manifest.json)
