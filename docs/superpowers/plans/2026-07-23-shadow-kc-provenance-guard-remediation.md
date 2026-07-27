@@ -19,7 +19,32 @@ skills_relevant:
 
 # Unblock #485 — remediate the shadow-kc-report provenance guard (issue #499)
 
-**Status:** PLAN / DECISIONS OPEN. This is a **follow-on** to
+> **SUPERSEDED — see `docs/superpowers/plans/2026-07-25-corpus-regeneration-process.md` (issue #516).**
+> The status line below ("PLAN / DECISIONS OPEN") is stale; this plan's open decisions were resolved
+> when PR #502 landed the narrow, per-row provenance partition. **Kept on disk, not deleted** — the
+> retention rule in CLAUDE.md § Document Files ("persistence rule wins over the lifecycle rule") applies
+> because `docs/research/2026-07-19-shadow-kc-report.md:50-51` still cites this plan's §4 as the
+> authoritative design reference for the catalog-drift-cancellation argument. Three corrections, recorded
+> here per the corpus-regeneration-process plan §7:
+>
+> 1. **§4a's narrow-guard branch landed, via PR #502.** This plan's §1 describes `_provenance_guard` as
+>    a whole-run, two-check gate at the range this plan cites in `scripts/shadow-kc-report.py` — that no
+>    longer matches the code: the guard is now the per-row behavioral partition `_provenance_partition`
+>    (`scripts/shadow-kc-report.py:617-719`), not the file-diff proxy §1 describes and §4 proposes
+>    replacing.
+> 2. **§5's `--matcher-version` builder-flag branch is moot.** §4.1 of this plan already makes the
+>    recommendation conditional: "if §4 lands, prefer the behavioral partition (`--substrate-check`) and
+>    skip the stamp flag." §4 landed (correction 1, above), so by this plan's own conditional, no
+>    stamp-filter flag is needed. Do not build it from this document — a mixed-stamp corpus is now
+>    handled natively by the per-row partition.
+> 3. **§6's claim that the marketplace pin bump is "downstream housekeeping with no functional bearing
+>    on the guard" is wrong for the pin bump.** The pin gates which `claude-wayfinder` version the
+>    plugin venv installs, which gates what version newly-logged traffic stamps as `matcher_version`,
+>    which gates whether that traffic survives the provenance partition on a future regeneration. See
+>    `docs/maintenance/corpus-regeneration.md` (precondition P3) for the corrected
+>    account.
+
+**Status (as originally written; superseded above):** PLAN / DECISIONS OPEN. This is a **follow-on** to
 `docs/superpowers/plans/2026-07-19-m15-6-shadow-kc-report.md` (the M15-6 parent plan), **not a
 replacement**. That plan built the guard as a deliverable (§4.4); this plan remediates the guard
 now that it correctly fired and is blocking #485 (M15-6c, the go/no-go report). Per CLAUDE.md

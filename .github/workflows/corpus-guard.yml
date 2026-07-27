@@ -1,0 +1,54 @@
+name: Corpus Guard
+
+on:
+  pull_request:
+    paths:
+      - "src/claude_wayfinder/match/_compose.py"
+      - "src/claude_wayfinder/match/_cells.py"
+      - "src/claude_wayfinder/match/_decide.py"
+      - "src/claude_wayfinder/match/_types.py"
+      - "src/claude_wayfinder/match/_match.py"
+      - "src/claude_wayfinder/match/_stem.py"
+      - "src/claude_wayfinder/match_filters.py"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Corpus regeneration advisory
+  # ---------------------------------------------------------------------------
+  corpus-advisory:
+    name: Corpus Regeneration Advisory
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post corpus regeneration advisory
+        continue-on-error: true
+        # verified 2026-07-26 via gh api repos/actions/github-script/git/refs/tags/v9.0.0 (annotated tag) → git/tags/<tag-sha>.object.sha
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            const marker = "<!-- corpus-guard-advisory -->";
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              });
+              if (comments.some(({ body }) => body?.includes(marker))) return;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `${marker}
+            This PR touches a provenance-guarded matcher module. Per the [corpus regeneration runbook](https://github.com/glitchwerks/claude-wayfinder/blob/main/docs/maintenance/corpus-regeneration.md), corpus regeneration is event-driven and should be considered or triggered by following the linked process.
+
+            This comment is informational only and does not block merge.`,
+              });
+            } catch (error) {
+              core.warning(`Unable to post corpus regeneration advisory: ${error}`);
+            }

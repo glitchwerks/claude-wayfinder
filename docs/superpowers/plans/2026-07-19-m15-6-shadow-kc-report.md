@@ -545,5 +545,10 @@ the checklist is not purely manual vigilance.
 re-stamping `matcher_version` on a cadence tied to dependency-module changes) is explicitly **not**
 implemented by #510 — it needs an annotation/ownership workflow decision this issue doesn't have
 standing to make unilaterally. This section is a detection/checklist aid layered on the existing
-provenance guard, not a fix for the underlying erosion; full regeneration is tracked as a possible
-follow-up issue.
+provenance guard, not a fix for the underlying erosion.
+
+**Regeneration runbook (issue #516).** The manual, event-driven regeneration process this section
+anticipated is now written down: see `docs/maintenance/corpus-regeneration.md`. It documents the
+trigger split (a CI advisory notice vs. the flip-blocking gate restated from this checklist), the
+publish-chain preconditions, the rebuild procedure, and the never-re-draw-only-union gold-label
+workflow. Run it — do not re-derive the process from this checklist item alone.
