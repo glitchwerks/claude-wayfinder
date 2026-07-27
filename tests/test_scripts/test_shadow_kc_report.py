@@ -141,6 +141,29 @@ router / code-implementer, since no prior contract existed for these):
    or percent-vs-fraction display format for the warning text beyond
    what the spec requires (fraction, counts, issue pointer all
    discoverable) -- see ``TestProvenanceDriftWarningMainIntegration``.
+10. **[NEW, issue #518] Manifest citation, drift-in-report, repo HEAD,
+    and the explicit Gate section.** ``--manifest PATH`` (new, optional
+    CLI flag) points at a corpus-manifest JSON file; when provided, the
+    report cites ``hashlib.sha256`` of that file's raw bytes, and when
+    omitted the report states manifest citation is unavailable rather
+    than silently dropping the section or crashing. The already-computed
+    ``provenance_drift_fraction`` (item 9) must now also render in the
+    report body unconditionally, not only as a stderr WARNING (which
+    only fires over-threshold) or the ``--json`` payload. The report
+    also cites the git HEAD SHA of ``--repo-root`` at generation time.
+    An explicit "Gate" section states the provisional-verdict rule as
+    fixed text -- a go/no-go verdict is NOT flip-authorizing if
+    ``provenance_drift_fraction >= _DRIFT_WARNING_THRESHOLD`` (reusing
+    the item-9 module constant, not a second hardcoded literal) OR if a
+    guarded module changed after the manifest's regeneration date (the
+    latter is NOT auto-checked by this script -- rendered as an explicit
+    manual-verification reminder for the human operator) -- and states
+    which case applies for the run just generated (whether the
+    auto-checkable drift half PASSES or FAILS). This suite does not pin
+    exact wording beyond the discoverable concepts above (mirroring item
+    9's precedent) -- see ``TestManifestCitationInReport``,
+    ``TestProvenanceDriftFractionInReportBody``,
+    ``TestRepoHeadCitationInReport``, ``TestGateSection``.
 
 Public API designed here (the implementer builds to match):
 
@@ -150,7 +173,8 @@ Public API designed here (the implementer builds to match):
     CLI flags: ``--corpus PATH`` (required), ``--labels PATH`` (required),
     ``--json PATH`` (optional), ``--repo-root PATH`` (optional, default cwd),
     ``--catalog-path PATH`` (optional, falls back to ``DISPATCH_CATALOG_PATH``
-    env var, else fails loud -- issue #501, item 7).
+    env var, else fails loud -- issue #501, item 7), ``--manifest PATH``
+    (optional, issue #518 item 10).
 
     ``_provenance_drift_fraction(partition: ProvenancePartition) -> float``
     and module-level ``_DRIFT_WARNING_THRESHOLD: float = 0.25`` (issue
@@ -161,6 +185,7 @@ Public API designed here (the implementer builds to match):
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import re
@@ -444,6 +469,7 @@ def _run_main(
     repo_root: Path,
     json_path: Path | None = None,
     catalog_path: Path | None = None,
+    manifest_path: Path | None = None,
 ) -> int:
     """Invoke ``mod.main`` with the standard required flags.
 
@@ -458,6 +484,10 @@ def _run_main(
             next to ``corpus`` so existing (non-guard-focused) call sites
             do not need to supply one explicitly (issue #501, judgment
             call 7).
+        manifest_path: Optional path passed as ``--manifest`` (issue
+            #518, judgment call 10). When ``None``, ``--manifest`` is
+            omitted entirely so existing (non-manifest-focused) call
+            sites do not need to supply one explicitly.
 
     Returns:
         The CLI's exit code.
@@ -476,6 +506,8 @@ def _run_main(
     ]
     if json_path is not None:
         argv += ["--json", str(json_path)]
+    if manifest_path is not None:
+        argv += ["--manifest", str(manifest_path)]
     return mod.main(argv)
 
 
@@ -2080,4 +2112,376 @@ class TestProvenanceDriftWarningMainIntegration:
         assert warning_index < kc_index, (
             "the WARNING must be printed before the KC verdicts; observed "
             f"event order: {[label for label, _ in events]!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Manifest citation, provenance-drift-fraction-in-report-body, repo HEAD
+# citation, and the explicit go/no-go Gate section (issue #518; plan
+# docs/superpowers/plans/2026-07-25-corpus-regeneration-process.md Sec 7
+# items 2 and 4; module docstring judgment call 10).
+# ---------------------------------------------------------------------------
+
+
+class TestManifestCitationInReport:
+    """``--manifest PATH`` (new, optional CLI flag) points at a corpus-
+    manifest JSON file (e.g. ``docs/research/<date>-corpus-manifest.json``,
+    produced by ``build_manifest()`` in ``scripts/corpus/builder.py``).
+    When provided, the report must cite the sha256 of that manifest
+    file's own raw bytes (``hashlib.sha256``). When omitted, the report
+    must say manifest citation is unavailable -- never crash, never
+    silently drop the section.
+    """
+
+    def test_manifest_flag_cites_correct_sha256_of_manifest_bytes(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The cited hash must be the manifest file's own sha256 -- the
+        fixture's manifest content is deliberately unrelated to the
+        expected value's shape (no ``sha256`` key inside it) so a naive
+        implementation that echoes some in-file field instead of hashing
+        the bytes cannot pass by coincidence.
+        """
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        manifest_path = tmp_path / "2026-07-25-corpus-manifest.json"
+        manifest_path.write_text(
+            json.dumps({"generated_at": "2026-07-25", "row_count": 1}),
+            encoding="utf-8",
+        )
+        expected_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+        rc = _run_main(
+            kc_report_module,
+            corpus_path,
+            labels_path,
+            repo_root,
+            manifest_path=manifest_path,
+        )
+        report = capsys.readouterr().out
+
+        assert rc == 0
+        assert expected_sha256.lower() in report.lower(), (
+            "the report must cite the manifest file's own sha256, not a "
+            f"placeholder, a different hash, or a field from inside the "
+            f"manifest; expected {expected_sha256!r}; report:\n{report}"
+        )
+
+    def test_manifest_flag_omitted_states_citation_unavailable_and_exits_zero(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        report = capsys.readouterr().out
+
+        assert rc == 0, "omitting --manifest must not crash the run"
+        manifest_lines = [
+            line for line in report.splitlines() if re.search(r"manifest", line, re.IGNORECASE)
+        ]
+        assert manifest_lines, f"no line mentions 'manifest' in report:\n{report}"
+        assert any(
+            re.search(
+                r"unavailable|not provided|no manifest|not supplied|omitted",
+                line,
+                re.IGNORECASE,
+            )
+            for line in manifest_lines
+        ), (
+            "a line mentioning 'manifest' must also state citation is "
+            f"unavailable when --manifest is omitted; manifest-mentioning "
+            f"lines: {manifest_lines!r}"
+        )
+
+
+class TestProvenanceDriftFractionInReportBody:
+    """The already-computed ``provenance_drift_fraction`` (issue #510)
+    must now also appear in the human-readable Markdown report body
+    itself (stdout), unconditionally -- not only as a stderr WARNING
+    (which only fires over-threshold, per
+    ``TestProvenanceDriftWarningMainIntegration``) and not only in the
+    optional ``--json`` payload (per ``TestProvenanceDriftFraction``).
+    """
+
+    def test_report_body_states_drift_fraction_when_below_threshold(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """All rows trivially agree (baseline == HEAD): 0.0 drift, well
+        below the warning threshold. Before issue #518 this value only
+        ever reached a human via the (suppressed, below-threshold)
+        stderr WARNING or the optional ``--json`` payload -- it must now
+        be discoverable, quantified, in the report body on every run.
+        """
+        repo_root, sha = guard_repo
+        rows = [_corpus_row(i, matcher_version=sha) for i in range(1, 4)]
+        gold = [_gold_row(i) for i in range(1, 4)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        report = capsys.readouterr().out
+
+        assert rc == 0
+        drift_lines = [
+            line for line in report.splitlines() if re.search(r"drift", line, re.IGNORECASE)
+        ]
+        assert drift_lines, f"no drift-fraction line found in report body:\n{report}"
+        assert any(re.search(r"\d", line) for line in drift_lines), (
+            "the drift-fraction line(s) must quantify the fraction (e.g. "
+            f"'0.0' / '0%'), not just name it; matched lines: {drift_lines!r}"
+        )
+
+
+class TestRepoHeadCitationInReport:
+    """The report must cite the git HEAD commit SHA of ``--repo-root`` at
+    report-generation time, reusing this file's own ``_run_git``-style
+    git subprocess pattern (issue #518, item 3).
+    """
+
+    def test_report_body_contains_repo_head_sha(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        expected_head = _run_git(["rev-parse", "HEAD"], cwd=repo_root).stdout.strip()
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        report = capsys.readouterr().out
+
+        assert rc == 0
+        assert expected_head, "fixture setup problem: could not resolve repo HEAD"
+        assert expected_head in report, (
+            "the report must cite --repo-root's actual git HEAD SHA (not "
+            f"a placeholder); expected {expected_head!r}; report:\n{report}"
+        )
+
+
+class TestGateSection:
+    """An explicit "Gate" section states the provisional-verdict rule as
+    fixed text: a go/no-go verdict is NOT flip-authorizing if
+    ``provenance_drift_fraction >= _DRIFT_WARNING_THRESHOLD`` (reusing
+    the existing module constant, not a second hardcoded ``0.25``
+    literal) OR if a guarded module changed after the manifest's
+    regeneration date (NOT auto-checked by this script -- rendered as an
+    explicit reminder for the human operator to verify manually). The
+    section must state which case applies for THIS run: whether the
+    auto-checkable half of the gate (drift >= threshold) currently
+    PASSES or FAILS.
+    """
+
+    @staticmethod
+    def _gate_section(report: str) -> str:
+        """Extract the Gate section, distinct from the unrelated
+        "gated-eligible-subset" cut section (``TestWholeVsGatedCuts``):
+        the pattern requires ``gate`` on a Markdown heading line itself
+        (not merely somewhere in the report), so an earlier, unrelated
+        line that happens to mention "gate" cannot be mistaken for the
+        section's opening heading. ``\\bgate\\b`` additionally does not
+        match inside "gated" because "gate" is immediately followed by
+        the word character "d" there, so no word boundary exists at that
+        position.
+        """
+        return _extract_section(report, r"^#{1,6}\s.*\bgate\b")
+
+    @staticmethod
+    def _lines_with_only(section: str, keep_word: str, exclude_word: str) -> list[str]:
+        """Lines in ``section`` matching ``keep_word`` but not
+        ``exclude_word`` (both ``\\b``-bounded, case-insensitive).
+
+        Used to find a per-run verdict line (e.g. "This run: PASS")
+        distinct from the gate's two-branch rule-statement line, which
+        legitimately names both PASS and FAIL together when it states
+        the rule as fixed text.
+        """
+        keep_re = re.compile(rf"\b{keep_word}\b", re.IGNORECASE)
+        exclude_re = re.compile(rf"\b{exclude_word}\b", re.IGNORECASE)
+        return [
+            line
+            for line in section.splitlines()
+            if keep_re.search(line) and not exclude_re.search(line)
+        ]
+
+    def test_gate_section_states_the_drift_threshold_rule_using_the_module_constant(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        threshold = kc_report_module._DRIFT_WARNING_THRESHOLD
+        candidates = [
+            str(threshold),
+            f"{threshold:.2f}",
+            f"{threshold * 100:.0f}%",
+            f"{threshold * 100:.1f}%",
+        ]
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        report = capsys.readouterr().out
+        gate_section = self._gate_section(report)
+
+        assert rc == 0
+        assert re.search(r"drift", gate_section, re.IGNORECASE)
+        assert any(c in gate_section for c in candidates), (
+            "the Gate section must state the drift threshold using the "
+            f"module constant's actual value ({threshold!r}), not a "
+            f"disconnected literal; gate section:\n{gate_section}"
+        )
+        assert re.search(r"flip", gate_section, re.IGNORECASE), (
+            "the Gate section must state the spec's flip-authorizing "
+            f"framing; gate section:\n{gate_section}"
+        )
+
+    def test_gate_section_states_the_manual_guarded_module_check_as_a_reminder(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The second gate condition -- a guarded module changed after
+        the manifest's regeneration date -- is NOT auto-checked by this
+        script; the Gate section must render it as an explicit reminder
+        for the human operator to verify manually, not silently omit it.
+        """
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        report = capsys.readouterr().out
+        gate_section = self._gate_section(report)
+
+        assert rc == 0
+        assert re.search(r"manifest", gate_section, re.IGNORECASE), (
+            "the Gate section must reference the manifest's regeneration "
+            f"date; gate section:\n{gate_section}"
+        )
+        assert re.search(
+            r"guard(ed)?\s+module|module", gate_section, re.IGNORECASE
+        ), (
+            "the Gate section must reference a guarded module changing "
+            f"after the manifest's regeneration date; gate section:\n{gate_section}"
+        )
+        assert re.search(
+            r"manual(ly)?|verify|operator|reminder|by hand",
+            gate_section,
+            re.IGNORECASE,
+        ), (
+            "the Gate section must present the guarded-module check as a "
+            f"manual reminder for the human operator, since this script "
+            f"does not auto-check it; gate section:\n{gate_section}"
+        )
+
+    def test_gate_states_auto_checkable_half_passes_when_drift_below_threshold(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """All rows trivially agree (0.0 drift) -- well below the
+        threshold -- so the auto-checkable half of the gate must state
+        PASS for this run.
+        """
+        repo_root, sha = guard_repo
+        rows = [_corpus_row(i, matcher_version=sha) for i in range(1, 4)]
+        gold = [_gold_row(i) for i in range(1, 4)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        report = capsys.readouterr().out
+        gate_section = self._gate_section(report)
+
+        assert rc == 0
+        # A line naming PASS but not FAIL -- distinct from the gate's
+        # two-branch rule-statement line, which legitimately names both
+        # PASS and FAIL together when stating the rule as fixed text
+        # (see test_gate_section_states_the_drift_threshold_rule_...).
+        verdict_lines = self._lines_with_only(gate_section, "PASS(ES)?", "FAIL(S)?")
+        assert verdict_lines, (
+            "the Gate section must carry a line stating the auto-checkable "
+            "half PASSES for THIS run (distinct from the two-branch rule "
+            f"text, which may name both words together); gate section:\n"
+            f"{gate_section}"
+        )
+
+    def test_gate_states_auto_checkable_half_fails_when_drift_at_or_above_threshold(
+        self,
+        kc_report_module: ModuleType,
+        versioned_guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """1 excluded row of 4 total = 0.25 drift, exactly at the
+        inclusive ">=" threshold (mirrors
+        ``TestProvenanceDriftWarningMainIntegration``'s at-threshold
+        fixture) -- the auto-checkable half of the gate must state FAIL
+        for this run.
+        """
+        repo_root, baseline_sha = versioned_guard_repo
+        rows = [
+            _corpus_row(1, domain=_FLAKY_DOMAIN, matcher_version=baseline_sha),
+            _corpus_row(2, domain="code", matcher_version=baseline_sha),
+            _corpus_row(3, domain="code", matcher_version=baseline_sha),
+            _corpus_row(4, domain="code", matcher_version=baseline_sha),
+        ]
+        gold = [_gold_row(i) for i in range(1, 5)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root)
+        report = capsys.readouterr().out
+        gate_section = self._gate_section(report)
+
+        assert rc == 0
+        # A line naming FAIL but not PASS -- distinct from the gate's
+        # two-branch rule-statement line, which legitimately names both
+        # PASS and FAIL together when stating the rule as fixed text.
+        verdict_lines = self._lines_with_only(gate_section, "FAIL(S)?", "PASS(ES)?")
+        assert verdict_lines, (
+            "the Gate section must carry a line stating the auto-checkable "
+            "half FAILS for THIS run (distinct from the two-branch rule "
+            f"text, which may name both words together); gate section:\n"
+            f"{gate_section}"
         )

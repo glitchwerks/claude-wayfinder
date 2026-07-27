@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import inspect
 import json
@@ -122,6 +123,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=Path,
         metavar="PATH",
         help=("Dispatch catalog JSON file (default: DISPATCH_CATALOG_PATH environment variable)."),
+    )
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        type=Path,
+        metavar="PATH",
+        help="Optional corpus-manifest JSON file to cite in the report.",
     )
     return parser.parse_args(argv)
 
@@ -822,6 +830,9 @@ def _render_report(
     rows: list[CorpusRow],
     gold: dict[int, GoldLabel],
     recommendation: str,
+    provenance_drift_fraction: float,
+    repo_head: str,
+    manifest_sha256: str | None,
 ) -> str:
     """Render the human-readable Markdown report.
 
@@ -830,6 +841,11 @@ def _render_report(
         rows: Full raw corpus row set.
         gold: Gold labels keyed by corpus ID.
         recommendation: Overall recommendation text.
+        provenance_drift_fraction: Fraction of rows excluded or
+            unverifiable by the provenance guard.
+        repo_head: Full Git HEAD commit SHA for the selected repository.
+        manifest_sha256: SHA-256 of the manifest's raw bytes, or None when
+            the citation is unavailable.
 
     Returns:
         Complete Markdown report text.
@@ -858,6 +874,16 @@ def _render_report(
         ]
     )
 
+    manifest_citation = (
+        f"Manifest SHA-256: {manifest_sha256}."
+        if manifest_sha256 is not None
+        else "Manifest citation unavailable: --manifest not provided or unreadable."
+    )
+    gate_verdict = (
+        "FAILS"
+        if provenance_drift_fraction >= _DRIFT_WARNING_THRESHOLD
+        else "PASSES"
+    )
     matched = 0
     mismatched = 0
     for row in rows:
@@ -875,6 +901,21 @@ def _render_report(
             "",
             "## Go/no-go recommendation",
             recommendation,
+            "",
+            "## Report provenance",
+            f"Repository HEAD: {repo_head}.",
+            f"Provenance drift fraction: {provenance_drift_fraction:.6f}.",
+            manifest_citation,
+            "",
+            "## Gate",
+            "A go/no-go verdict is not flip-authorizing unless both gate "
+            "conditions hold.",
+            "Rule: the auto-checkable provenance drift fraction PASSES when "
+            f"below {_DRIFT_WARNING_THRESHOLD} and FAILS when at or above it.",
+            f"This run: the auto-checkable drift-threshold half {gate_verdict}.",
+            "Guarded-module reminder: this script does not auto-check whether "
+            "a guarded module changed after the manifest's regeneration date; "
+            "the operator must verify that condition manually.",
         ]
     )
     return "\n".join(lines)
@@ -946,6 +987,19 @@ def main(argv: list[str] | None = None) -> int:
     rows = [row for row in rows if int(row["corpus_id"]) in partition.included]
 
     try:
+        repo_head_result = _run_git(args.repo_root, "rev-parse", "HEAD")
+        repo_head = repo_head_result.stdout.strip()
+        if repo_head_result.returncode != 0 or not repo_head:
+            detail = repo_head_result.stderr.strip() or "git rev-parse returned no SHA"
+            raise RuntimeError(f"cannot resolve repository HEAD: {detail}")
+
+        manifest_sha256 = None
+        if args.manifest is not None:
+            try:
+                manifest_sha256 = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
+            except OSError:
+                manifest_sha256 = None
+
         verdicts = [
             compute_kc1(rows, gold),
             compute_kc2(rows, gold),
@@ -954,7 +1008,15 @@ def main(argv: list[str] | None = None) -> int:
             compute_kc5(rows, gold),
         ]
         recommendation = _recommendation(verdicts)
-        report = _render_report(verdicts, rows, gold, recommendation)
+        report = _render_report(
+            verdicts,
+            rows,
+            gold,
+            recommendation,
+            provenance_drift_fraction,
+            repo_head,
+            manifest_sha256,
+        )
         print(report)
 
         if args.json is not None:
