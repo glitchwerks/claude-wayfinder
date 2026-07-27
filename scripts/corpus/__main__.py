@@ -306,6 +306,11 @@ def main(argv: list[str] | None = None) -> int:
         shadow_only=args.shadow_only,
         join_shadow_from_twins=args.join_shadow_from_twins,
         exclude_corpus_ids=exclude_corpus_ids,
+        exclude_gold_labels_file=(
+            Path(args.exclude_gold_labels_file)
+            if args.exclude_gold_labels_file
+            else None
+        ),
     )
     _print_corpus_report(result, sample_floor)
 

@@ -183,6 +183,7 @@ def build_corpus(
     shadow_only: bool = False,
     join_shadow_from_twins: bool = False,
     exclude_corpus_ids: set[int] | None = None,
+    exclude_gold_labels_file: Path | None = None,
 ) -> dict[str, Any]:
     """Build a stratified corpus from the dispatch log.
 
@@ -206,6 +207,8 @@ def build_corpus(
                                 Defaults to ``False``.
         exclude_corpus_ids: Source-log line numbers to exclude. Defaults to
                             ``None``.
+        exclude_gold_labels_file: Path to the gold-labels exclusion file to
+                                  record as provenance. Defaults to ``None``.
 
     Returns:
         Dict with keys:
@@ -215,7 +218,8 @@ def build_corpus(
         - ``entries``         — list of augmented entry dicts
         - ``per_cell_counts`` — {cell_key_str: count} in corpus
         - ``shortfall_table`` — list of {cell, count, shortfall, floor} dicts
-        - ``generation_params`` — {sample_floor, log_path, filter_rules}
+        - ``generation_params`` — {sample_floor, log_path, filter_rules,
+          exclude_gold_labels_file (when provided)}
     """
     # Load all organic entries as (line_no, entry) tuples.
     # line_no is the 1-based position of the raw line in the source file —
@@ -315,6 +319,16 @@ def build_corpus(
         "(decision_band × td_length_band × file_paths_present) cell"
     )
 
+    generation_params = {
+        "sample_floor": sample_floor,
+        "log_path": _home_relative(log_path),
+        "filter_rules": filter_rules,
+    }
+    if exclude_gold_labels_file is not None:
+        generation_params["exclude_gold_labels_file"] = _home_relative(
+            exclude_gold_labels_file
+        )
+
     return {
         "total_organic": total_organic,
         "total_filtered": total_filtered,
@@ -322,11 +336,7 @@ def build_corpus(
         "entries": sampled,
         "per_cell_counts": per_cell_counts,
         "shortfall_table": shortfall_table,
-        "generation_params": {
-            "sample_floor": sample_floor,
-            "log_path": _home_relative(log_path),
-            "filter_rules": filter_rules,
-        },
+        "generation_params": generation_params,
     }
 
 

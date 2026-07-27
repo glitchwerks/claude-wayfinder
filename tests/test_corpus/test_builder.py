@@ -37,6 +37,18 @@ Coverage:
           adjacent timestamp
         - a malformed/unparseable ts on a candidate twin is skipped (treated
           as no-twin), not a crash
+  19. exclude_gold_labels_file (#519) — recording the exclusion-file path in
+      generation_params:
+        - passed -> home-relative form recorded under
+          generation_params["exclude_gold_labels_file"], using the same
+          redaction convention _home_relative() already applies to log_path
+        - non-home absolute path -> redacted to <external>/<basename>
+        - omitted, or passed explicitly as None -> the key is absent from
+          generation_params entirely (not present with value None)
+        - metadata-only: passing it alone (no exclude_corpus_ids) does not
+          change total_in_corpus or which entries survive
+        - independent of exclude_corpus_ids: both can be passed together,
+          each doing its own job (provenance vs. actual filtering)
 """
 
 from __future__ import annotations
@@ -1317,4 +1329,156 @@ def test_join_shadow_from_twins_malformed_ts_skipped_not_crash(
 
     assert "shadow" not in result["entries"][0], (
         "malformed-ts twin must be skipped (treated as no-twin), not joined"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 19. exclude_gold_labels_file — generation_params provenance (#519 / #516c)
+# ---------------------------------------------------------------------------
+#
+# Background: the CLI resolves --exclude-gold-labels-file <path> into
+# exclude_corpus_ids (a set of ints) before calling build_corpus() -- the
+# source file path itself never reaches generation_params today. A committed
+# manifest can then not tell you which exclusion file produced a given
+# exclude_corpus_ids set, making "re-run with the same flags" non-
+# reproducible from committed artifacts alone. These tests describe a new
+# optional keyword argument, exclude_gold_labels_file: Path | None = None,
+# which build_corpus() records -- home-relative, via the same
+# _home_relative() redaction already applied to log_path -- under
+# generation_params["exclude_gold_labels_file"] when passed, and omits
+# entirely when not passed. It is metadata-only: it must never change which
+# entries are filtered (that remains exclude_corpus_ids's job, a separate
+# parameter).
+
+
+def test_exclude_gold_labels_file_recorded_home_relative(tmp_path: Path) -> None:
+    """A gold-labels file path under the user's home is recorded in
+    generation_params as ~/... (POSIX slashes), matching log_path's
+    redaction convention exactly.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    log = _write_jsonl(tmp_path, [_md(session_id="s1")])
+    gold_labels_file = Path.home() / ".claude" / "state" / "gold-labels.jsonl"
+
+    result = build_corpus(
+        log, output_dir=None, exclude_gold_labels_file=gold_labels_file
+    )
+
+    params = result["generation_params"]
+    assert "exclude_gold_labels_file" in params, (
+        "generation_params must include exclude_gold_labels_file when the "
+        "keyword argument is passed"
+    )
+    value = params["exclude_gold_labels_file"]
+    assert value == "~/.claude/state/gold-labels.jsonl", (
+        f"expected home-relative POSIX form, got: {value!r}"
+    )
+    assert "\\" not in value, f"expected no backslashes (POSIX form), got: {value!r}"
+
+
+def test_exclude_gold_labels_file_non_home_path_redacted(tmp_path: Path) -> None:
+    """A gold-labels file path NOT under home is redacted to
+    <external>/<basename> -- same convention _home_relative() applies to
+    log_path and artifact_path elsewhere.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    log = _write_jsonl(tmp_path, [_md(session_id="s1")])
+    non_home = Path("/d/github/workspace/runner/gold-labels.jsonl")
+
+    result = build_corpus(
+        log, output_dir=None, exclude_gold_labels_file=non_home
+    )
+
+    value = result["generation_params"]["exclude_gold_labels_file"]
+    assert value == "<external>/gold-labels.jsonl", (
+        f"expected '<external>/gold-labels.jsonl', got: {value!r}"
+    )
+
+
+def test_exclude_gold_labels_file_omitted_key_absent(tmp_path: Path) -> None:
+    """When exclude_gold_labels_file is never passed, the key is absent from
+    generation_params entirely -- not present with a None value. This
+    parallels how other optional generation_params entries (e.g. the
+    conditional filter_rules entries) only appear when their condition is
+    true, and is the regression guard for existing callers that never pass
+    the new keyword argument.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    log = _write_jsonl(tmp_path, [_md(session_id="s1")])
+    result = build_corpus(log, output_dir=None)
+
+    assert "exclude_gold_labels_file" not in result["generation_params"], (
+        "exclude_gold_labels_file key must be absent when the argument is "
+        "omitted, not present with a None value"
+    )
+
+
+def test_exclude_gold_labels_file_explicit_none_key_absent(tmp_path: Path) -> None:
+    """Passing exclude_gold_labels_file=None explicitly behaves identically
+    to omitting it: the key is absent, not present with value None.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    log = _write_jsonl(tmp_path, [_md(session_id="s1")])
+    result = build_corpus(log, output_dir=None, exclude_gold_labels_file=None)
+
+    assert "exclude_gold_labels_file" not in result["generation_params"]
+
+
+def test_exclude_gold_labels_file_is_metadata_only(tmp_path: Path) -> None:
+    """Passing exclude_gold_labels_file alone (no exclude_corpus_ids) must
+    not change total_in_corpus or which entries survive -- it is a
+    provenance record only. Actual filtering stays driven by
+    exclude_corpus_ids, a wholly separate parameter.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [_md(session_id=f"s{i}") for i in range(5)]
+    log = _write_jsonl(tmp_path, entries)
+
+    baseline = build_corpus(log, output_dir=None)
+    with_file = build_corpus(
+        log,
+        output_dir=None,
+        exclude_gold_labels_file=Path.home() / "gold-labels.jsonl",
+    )
+
+    assert with_file["total_in_corpus"] == baseline["total_in_corpus"]
+    assert [e["corpus_id"] for e in with_file["entries"]] == [
+        e["corpus_id"] for e in baseline["entries"]
+    ], "exclude_gold_labels_file alone must not change which entries survive"
+
+
+def test_exclude_gold_labels_file_combines_with_exclude_corpus_ids(
+    tmp_path: Path,
+) -> None:
+    """exclude_gold_labels_file and exclude_corpus_ids are independent: the
+    file path is recorded as provenance in generation_params while
+    exclude_corpus_ids continues to be what actually filters entries.
+    """
+    from scripts.corpus.builder import build_corpus
+
+    entries = [
+        _md(session_id="s1"),  # line 1 -> corpus_id 1, kept
+        _md(session_id="s2"),  # line 2 -> corpus_id 2, excluded by id
+        _md(session_id="s3"),  # line 3 -> corpus_id 3, kept
+    ]
+    log = _write_jsonl(tmp_path, entries)
+    gold_labels_file = Path.home() / ".claude" / "state" / "gold-labels.jsonl"
+
+    result = build_corpus(
+        log,
+        output_dir=None,
+        exclude_corpus_ids={2},
+        exclude_gold_labels_file=gold_labels_file,
+    )
+
+    assert result["total_in_corpus"] == 2
+    assert [e["corpus_id"] for e in result["entries"]] == [1, 3]
+    assert (
+        result["generation_params"]["exclude_gold_labels_file"]
+        == "~/.claude/state/gold-labels.jsonl"
     )
