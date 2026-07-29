@@ -59,7 +59,12 @@ log and does not affect anything below; all figures in this report use the rebui
 not the earlier profile-only reading. Against the 2026-07-19 manifest's `"total_organic": 1478`, the
 rebuild's own `"total_organic": 1917` is growth of **+439 rows (+29.7%)**.
 
-**Rebuild command (runbook Step 2):**
+**Prerequisite:** `DISPATCH_CATALOG_PATH` must be set in the shell before running the commands
+below; see Inputs above for the path used in this run.
+
+**Rebuild command (runbook Step 2).** This worktree has no `.venv/` of its own; the
+`./.venv/Scripts/python.exe` below is the sibling main-checkout venv's interpreter — see the
+"Interpreter note" below for the full explanation.
 
 ```shell
 ./.venv/Scripts/python.exe -m scripts.corpus \
@@ -82,7 +87,8 @@ were checked against the corresponding lines in `~/.claude/state/dispatch-log.js
 still carry `task_description` and are consistent with their existing gold labels (`domain:
 project_meta`, `confidence: high`). The `corpus_id` → dispatch-log-line join holds; no drift found.
 
-**Verify command (runbook Step 4), reproduced independently for this report:**
+**Verify command (runbook Step 4), reproduced independently for this report.** Same interpreter
+substitution as the rebuild command above — see the "Interpreter note" below.
 
 ```shell
 ./.venv/Scripts/python.exe scripts/shadow-kc-report.py \
