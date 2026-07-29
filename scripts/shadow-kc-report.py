@@ -996,9 +996,23 @@ def main(argv: list[str] | None = None) -> int:
         manifest_sha256 = None
         if args.manifest is not None:
             try:
-                manifest_sha256 = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
+                manifest_bytes = args.manifest.read_bytes()
+                manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
             except OSError:
                 manifest_sha256 = None
+            else:
+                try:
+                    manifest = json.loads(manifest_bytes)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    manifest = None
+                if isinstance(manifest, dict) and "sha256" in manifest:
+                    corpus_sha256 = hashlib.sha256(args.corpus.read_bytes()).hexdigest()
+                    if corpus_sha256 != manifest["sha256"]:
+                        print(
+                            "ERROR: corpus SHA256 does not match the manifest.",
+                            file=sys.stderr,
+                        )
+                        return 1
 
         verdicts = [
             compute_kc1(rows, gold),
@@ -1020,8 +1034,16 @@ def main(argv: list[str] | None = None) -> int:
         print(report)
 
         if args.json is not None:
+            gate_status = (
+                "FAIL"
+                if provenance_drift_fraction >= _DRIFT_WARNING_THRESHOLD
+                else "PASS"
+            )
             payload = {
                 "criteria": [asdict(verdict) for verdict in verdicts],
+                "flip_authorized": gate_status == "PASS",
+                "gate_status": gate_status,
+                "gate_threshold": _DRIFT_WARNING_THRESHOLD,
                 "overall_recommendation": recommendation,
                 "provenance_drift_fraction": provenance_drift_fraction,
             }
