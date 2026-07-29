@@ -43,7 +43,7 @@ verdict.
   (`src/claude_wayfinder/match/_catalog.py:195`) falls back to the `DISPATCH_CATALOG_PATH`
   environment variable when the flag is omitted; in the shell this report's author used, that
   variable is set (in the operator's shell profile) to
-  `C:\Users\chris\.claude\state\dispatch-catalog.json` — confirmed by echoing it before the
+  `<operator home>\.claude\state\dispatch-catalog.json` — confirmed by echoing it before the
   reproduction run.
 - Repo HEAD: `3bb28a9c8b43e6265cf1145c2b2d895161218da4`.
 
@@ -61,7 +61,7 @@ rebuild's own `"total_organic": 1917` is growth of **+439 rows (+29.7%)**.
 
 **Rebuild command (runbook Step 2):**
 
-```
+```shell
 ./.venv/Scripts/python.exe -m scripts.corpus \
   --output-dir ~/.claude/state/wayfinder-corpus/2026-07-27/ \
   --shadow-only --join-shadow-from-twins \
@@ -84,7 +84,7 @@ project_meta`, `confidence: high`). The `corpus_id` → dispatch-log-line join h
 
 **Verify command (runbook Step 4), reproduced independently for this report:**
 
-```
+```shell
 ./.venv/Scripts/python.exe scripts/shadow-kc-report.py \
   --corpus ~/.claude/state/wayfinder-corpus/2026-07-27/wayfinder-corpus.jsonl \
   --labels docs/research/2026-07-19-shadow-sample-gold-labels-redacted.jsonl \
@@ -94,10 +94,10 @@ project_meta`, `confidence: high`). The `corpus_id` → dispatch-log-line join h
 ```
 
 **Interpreter note.** This worktree (`.worktrees/520-execute-regeneration-cycle`) has no `.venv/`
-of its own. This report's author ran the interpreter from the sibling main-checkout venv
-(`I:/ai/claude/claude-wayfinder/.venv/Scripts/python.exe`) while pointing `--repo-root` at this
-worktree, so the provenance partition still walked this worktree's git tree, not the main
-checkout's. A future reproduction from a worktree without its own venv needs the same substitution.
+of its own. This report's author ran the sibling main-checkout venv's interpreter while pointing
+`--repo-root` at this worktree, so the provenance partition still walked this worktree's git tree,
+not the main checkout's. A future reproduction from a worktree without its own venv needs the same
+substitution.
 
 This report's author re-ran the command above from a clean invocation and confirmed:
 
@@ -206,10 +206,10 @@ caller-label mismatch/disagreement (identical counts to the 2026-07-19 run, sinc
 
 ## What this means for #521
 
-#521 ("Close the KC-4 / KC-5 coverage gap", per the plan's #516e) is scoped exactly to the gap this
+Issue #521 ("Close the KC-4 / KC-5 coverage gap", per the plan's #516e) is scoped exactly to the gap this
 run reconfirms: KC-4 has `eligible_n: 0` (zero rows in this gold sample can test KC-4's
 routing-neutrality question at all under the corrected #506 eligibility check), and KC-5 has only
-`slice_n: 7` — twelve rows short of the `_KC5_MIN_SLICE_N: 20` floor added by #511/#513. Both
+`slice_n: 7` — thirteen rows short of the `_KC5_MIN_SLICE_N: 20` floor added by #511/#513. Both
 criteria remain starved on the current gold sample regardless of how much unlabeled corpus growth
 occurs, because growing the corpus does not by itself add labeled rows in the specific
 route-changing-caller-domain and `infra_deploy` strata these two criteria depend on. This is the
