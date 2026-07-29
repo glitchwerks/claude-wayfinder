@@ -1,0 +1,48 @@
+{
+  "criteria": [
+    {
+      "kc": "KC-1",
+      "metrics": {
+        "lexical_rc": 0.4268,
+        "shadow_rc": 0.6707
+      },
+      "status": "FAIL"
+    },
+    {
+      "kc": "KC-2",
+      "metrics": {
+        "anchor": 0.2558,
+        "lexical_cw": 0.25,
+        "shadow_cw": 0.1509
+      },
+      "status": "PASS"
+    },
+    {
+      "kc": "KC-3",
+      "metrics": {
+        "eligible_n": 65,
+        "numerator": 62,
+        "rate": 0.9538461538461539
+      },
+      "status": "PASS"
+    },
+    {
+      "kc": "KC-4",
+      "metrics": {
+        "eligible_n": 0,
+        "violations": 0
+      },
+      "status": "INSUFFICIENT_DATA"
+    },
+    {
+      "kc": "KC-5",
+      "metrics": {
+        "shadow_rc": 0.5714,
+        "slice_n": 7
+      },
+      "status": "INSUFFICIENT_DATA"
+    }
+  ],
+  "overall_recommendation": "NO-GO: failed criteria: KC-1. Insufficient data: KC-4, KC-5.",
+  "provenance_drift_fraction": 0.2664576802507837
+}
