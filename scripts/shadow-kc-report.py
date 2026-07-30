@@ -77,6 +77,21 @@ _DEPENDENCY_MODULES = (_COMPOSE_MODULE_PATH,) + _TRANSITIVE_DEPENDENCY_MODULES
 _DRIFT_WARNING_THRESHOLD: float = 0.25
 
 
+def _gate_passes(provenance_drift_fraction: float) -> bool:
+    """Return True when the auto-checkable drift half of the gate passes.
+
+    Args:
+        provenance_drift_fraction: Fraction of corpus rows excluded or
+            unverifiable under the matcher_version provenance guard.
+
+    Returns:
+        True when the fraction is strictly below
+        ``_DRIFT_WARNING_THRESHOLD`` (gate PASSES); False otherwise
+        (gate FAILS, inclusive of the exact-boundary case).
+    """
+    return provenance_drift_fraction < _DRIFT_WARNING_THRESHOLD
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     """Parse command-line arguments.
 
@@ -132,6 +147,94 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Optional corpus-manifest JSON file to cite in the report.",
     )
     return parser.parse_args(argv)
+
+
+def _load_manifest_for_integrity_check(
+    manifest_path: Path | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Read and parse an optional manifest for citation and integrity.
+
+    Args:
+        manifest_path: Optional ``--manifest`` path.
+
+    Returns:
+        A tuple of ``(manifest_sha256, manifest)``. Both values are None
+        when no path was supplied or when the manifest could not be read
+        or parsed. Explicit read and parse failures also emit a warning.
+    """
+    if manifest_path is None:
+        return None, None
+
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+    except OSError as exc:
+        print(
+            f"WARNING: --manifest {manifest_path} could not be read "
+            f"({exc}); skipping corpus-hash integrity validation "
+            "(manifest citation unavailable).",
+            file=sys.stderr,
+        )
+        return None, None
+
+    try:
+        parsed_manifest = json.loads(manifest_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        print(
+            f"WARNING: --manifest {manifest_path} could not be parsed "
+            f"as JSON ({exc}); skipping corpus-hash integrity "
+            "validation (manifest citation unavailable).",
+            file=sys.stderr,
+        )
+        return None, None
+
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if not isinstance(parsed_manifest, dict):
+        print(
+            f"WARNING: --manifest {manifest_path} did not parse to a JSON "
+            "object; skipping corpus-hash integrity validation "
+            "(manifest citation unavailable).",
+            file=sys.stderr,
+        )
+        return manifest_sha256, None
+    return manifest_sha256, parsed_manifest
+
+
+def _check_corpus_hash_integrity(
+    corpus_path: Path,
+    manifest: dict[str, Any] | None,
+) -> str | None:
+    """Validate corpus bytes against a manifest-recorded SHA-256 digest.
+
+    Args:
+        corpus_path: Corpus file whose bytes should be validated.
+        manifest: Parsed manifest dictionary, or None when unavailable.
+
+    Returns:
+        An error message when the corpus cannot be read or its digest
+        differs from a string digest recorded by the manifest; otherwise
+        None.
+    """
+    recorded = manifest.get("sha256") if isinstance(manifest, dict) else None
+    if not isinstance(recorded, str):
+        return None
+
+    try:
+        corpus_bytes = corpus_path.read_bytes()
+    except OSError as exc:
+        return (
+            "ERROR: corpus SHA-256 integrity check could not read "
+            f"{corpus_path}: {exc}."
+        )
+
+    corpus_sha256 = hashlib.sha256(corpus_bytes).hexdigest()
+    recorded_sha256 = recorded.strip().lower()
+    if corpus_sha256 != recorded_sha256:
+        return (
+            "ERROR: corpus SHA-256 integrity check failed for "
+            f"{corpus_path}: manifest records {recorded_sha256}, "
+            f"actual {corpus_sha256}."
+        )
+    return None
 
 
 def _run_git(repo_root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -880,9 +983,7 @@ def _render_report(
         else "Manifest citation unavailable: --manifest not provided or unreadable."
     )
     gate_verdict = (
-        "FAILS"
-        if provenance_drift_fraction >= _DRIFT_WARNING_THRESHOLD
-        else "PASSES"
+        "PASSES" if _gate_passes(provenance_drift_fraction) else "FAILS"
     )
     matched = 0
     mismatched = 0
@@ -934,6 +1035,12 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = _parse_args(argv)
 
+    manifest_sha256, manifest = _load_manifest_for_integrity_check(args.manifest)
+    integrity_error = _check_corpus_hash_integrity(args.corpus, manifest)
+    if integrity_error is not None:
+        print(integrity_error, file=sys.stderr)
+        return 1
+
     try:
         catalog_path = _resolve_catalog_path(args.catalog_path)
     except SystemExit as exc:
@@ -963,7 +1070,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     provenance_drift_fraction = _provenance_drift_fraction(partition)
-    if provenance_drift_fraction >= _DRIFT_WARNING_THRESHOLD:
+    if not _gate_passes(provenance_drift_fraction):
         print(
             "WARNING: provenance drift "
             f"{provenance_drift_fraction:.1%} "
@@ -993,13 +1100,6 @@ def main(argv: list[str] | None = None) -> int:
             detail = repo_head_result.stderr.strip() or "git rev-parse returned no SHA"
             raise RuntimeError(f"cannot resolve repository HEAD: {detail}")
 
-        manifest_sha256 = None
-        if args.manifest is not None:
-            try:
-                manifest_sha256 = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
-            except OSError:
-                manifest_sha256 = None
-
         verdicts = [
             compute_kc1(rows, gold),
             compute_kc2(rows, gold),
@@ -1020,8 +1120,13 @@ def main(argv: list[str] | None = None) -> int:
         print(report)
 
         if args.json is not None:
+            gate_passes = _gate_passes(provenance_drift_fraction)
+            gate_status = "PASS" if gate_passes else "FAIL"
             payload = {
                 "criteria": [asdict(verdict) for verdict in verdicts],
+                "flip_authorized": gate_passes,
+                "gate_status": gate_status,
+                "gate_threshold": _DRIFT_WARNING_THRESHOLD,
                 "overall_recommendation": recommendation,
                 "provenance_drift_fraction": provenance_drift_fraction,
             }

@@ -164,6 +164,50 @@ router / code-implementer, since no prior contract existed for these):
     9's precedent) -- see ``TestManifestCitationInReport``,
     ``TestProvenanceDriftFractionInReportBody``,
     ``TestRepoHeadCitationInReport``, ``TestGateSection``.
+11. **[NEW, issue #532] Gate encoded in the ``--json`` payload, not just
+    prose.** ``TestGateSection`` (item 10) only pins the gate's rule and
+    per-run verdict in the human-readable Markdown report body. The
+    ``--json`` payload never carries an equivalent machine-readable
+    signal -- a caller parsing only ``criteria``/``overall_recommendation``
+    can see an all-PASS report and conclude "go" while the evidence
+    itself is untrustworthy (high provenance drift), because nothing in
+    the JSON says so independent of the KC verdicts. This suite designs
+    three new top-level ``--json`` keys (no prior contract existed):
+    ``"gate_threshold"`` (float, must equal the module's own
+    ``_DRIFT_WARNING_THRESHOLD`` -- not a second hardcoded literal),
+    ``"gate_status"`` (``"PASS"`` or ``"FAIL"``, the auto-checkable
+    drift-vs-threshold half of the Gate section, mirrored into JSON),
+    and ``"flip_authorized"`` (bool -- whether this run's provenance
+    drift is low enough that the KC verdicts may be trusted to
+    authorize a flip decision AT ALL, independent of what the
+    individual KC criteria say). **Scope note:** per the existing Gate
+    section's own prose (item 10), flip-authorization has TWO
+    conditions -- the auto-checkable drift-vs-threshold comparison, and
+    a guarded-module-changed-since-manifest-regeneration check that
+    this script does NOT auto-check (rendered as a manual-verification
+    reminder). ``"flip_authorized"`` in JSON mirrors ONLY the
+    auto-checkable half (``gate_status == "PASS"``), identically to how
+    the report's own "This run: ... PASSES/FAILS" line only ever speaks
+    to that same half. It is not a claim that a flip is fully cleared --
+    the manual guarded-module check is still required regardless of
+    this field's value. See ``TestGateEncodedInJson``.
+12. **[NEW, issue #532] Corpus-hash integrity check.** The manifest is
+    hashed for citation (item 10, ``hashlib.sha256`` of the manifest
+    file's own bytes -- ``TestManifestCitationInReport``), but the
+    manifest's OWN recorded ``"sha256"`` field (the corpus artifact's
+    hash, per ``build_manifest`` -- confirmed schema in
+    ``tests/test_corpus/test_builder.py::test_manifest_sha256_matches_artifact``)
+    is never compared against the actual bytes of the file supplied via
+    ``--corpus``. This suite designs: when the manifest (loaded via
+    ``--manifest``, JSON) records a ``"sha256"`` key, and that value
+    does not match ``hashlib.sha256(Path(--corpus).read_bytes()).hexdigest()``,
+    the generator must fail loudly (non-zero exit, no KC verdicts
+    printed) rather than silently computing KC results against a
+    corpus that does not match its own recorded provenance. A manifest
+    with no ``"sha256"`` key at all (as already exercised by
+    ``TestManifestCitationInReport``) is unaffected -- there is nothing
+    to compare, so citation-only behavior continues unchanged. See
+    ``TestCorpusHashIntegrityCheck``.
 
 Public API designed here (the implementer builds to match):
 
@@ -181,6 +225,15 @@ Public API designed here (the implementer builds to match):
     #510, item 9). ``--json`` payload gains a ``"provenance_drift_fraction"``
     float key alongside the existing ``"criteria"``/``"overall_recommendation"``
     keys.
+
+    ``--json`` payload additionally gains ``"gate_threshold"`` (float),
+    ``"gate_status"`` (``"PASS"``/``"FAIL"``), and ``"flip_authorized"``
+    (bool) top-level keys (issue #532, item 11).
+
+    When ``--manifest``'s JSON records a ``"sha256"`` key, its value
+    must match the actual sha256 of the ``--corpus`` file's bytes, or
+    ``main()`` returns non-zero and does not print KC verdicts (issue
+    #532, item 12).
 """
 
 from __future__ import annotations
@@ -193,7 +246,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -514,6 +567,56 @@ def _run_main(
 def _kc_status_appears(report: str, kc: str, status: str) -> bool:
     """Return True if some report line mentions both ``kc`` and ``status``."""
     return any(kc in line and status in line for line in report.splitlines())
+
+
+def _build_all_kc_pass_fixture(
+    tmp_path: Path,
+    sha: str,
+    unverifiable_ids: frozenset[int] = frozenset(),
+) -> tuple[Path, Path]:
+    """Build the same 10-row corpus as ``TestReportStructure._build_fixture``
+    (KC-1/2/3 PASS, KC-4/5 INSUFFICIENT_DATA on the full, no-drift
+    sample), optionally marking a subset of row ids as unverifiable
+    (an unresolvable ``matcher_version``) to control
+    ``provenance_drift_fraction`` independently of the KC verdicts --
+    used by ``TestGateEncodedInJson`` to build both a below-threshold
+    (no unverifiable rows) and an at/above-threshold fixture that both
+    still yield PASS on KC-1/2/3 over their respective ``included``
+    subsets.
+
+    With ``unverifiable_ids == {6, 9, 10}``: rows 9-10 (already the
+    "both shadow and lexical wrong, ungated-delegate" rows) are dropped
+    entirely from computation, and row 6 (one of the "both correct,
+    posture-routed" rows) is also dropped -- leaving rows
+    {1, 2, 3, 4, 5, 7, 8} (7 rows) included. Over that included subset:
+    shadow_rc = 7/7 = 1.0 (rows 7-8 still shadow-correct); lexical_rc =
+    5/7 (rows 7-8 lexical-wrong) approx 0.714; KC-1 PASS (1.0 >= 0.6891
+    and 1.0 >= 0.714 + 0.20). KC-2: 0 wrong-delegates / 7 delegates = 0.0
+    <= 0.2558, PASS. KC-3: all 7 included rows are posture_routed=True,
+    numerator/eligible = 7/7 = 1.0 >= 0.55, PASS. Drift = 3 unverifiable
+    / 10 total = 0.3, at/above the 0.25 threshold.
+
+    Args:
+        tmp_path: Pytest tmp_path fixture directory to write fixtures under.
+        sha: A resolvable git revision (``guard_repo``'s commit SHA) used
+            for every row NOT listed in ``unverifiable_ids``.
+        unverifiable_ids: Corpus ids to stamp with an unresolvable
+            ``matcher_version`` instead of ``sha``.
+
+    Returns:
+        Tuple of ``(corpus_path, labels_path)``.
+    """
+
+    def _mv(corpus_id: int) -> str:
+        if corpus_id in unverifiable_ids:
+            return f"not-a-real-revision-{corpus_id}"
+        return sha
+
+    return TestReportStructure()._build_fixture(
+        tmp_path,
+        sha,
+        matcher_version_fn=_mv,
+    )
 
 
 _HEADING_RE = re.compile(r"^#{1,6}\s")
@@ -1393,7 +1496,24 @@ class TestReportStructure:
         KC-5 INSUFFICIENT_DATA  no row's gold.domain is infra_deploy.
     """
 
-    def _build_fixture(self, tmp_path: Path, sha: str) -> tuple[Path, Path]:
+    def _build_fixture(
+        self,
+        tmp_path: Path,
+        sha: str,
+        matcher_version_fn: Callable[[int], str] | None = None,
+    ) -> tuple[Path, Path]:
+        """Build the shared 10-row report fixture.
+
+        Args:
+            tmp_path: Pytest temporary directory for fixture files.
+            sha: Default matcher version assigned to every corpus row.
+            matcher_version_fn: Optional function deriving a matcher
+                version from each corpus ID. When None, every row uses
+                ``sha``.
+
+        Returns:
+            Tuple of ``(corpus_path, labels_path)``.
+        """
         rows = [
             # 1-6: shadow and lexical both correct, posture-routed.
             *[
@@ -1402,7 +1522,11 @@ class TestReportStructure:
                     shadow_agent="code-writer",
                     live_agent="code-writer",
                     posture_routed=True,
-                    matcher_version=sha,
+                    matcher_version=(
+                        sha
+                        if matcher_version_fn is None
+                        else matcher_version_fn(i)
+                    ),
                 )
                 for i in range(1, 7)
             ],
@@ -1413,7 +1537,11 @@ class TestReportStructure:
                     shadow_agent="code-writer",
                     live_agent="ops",
                     posture_routed=True,
-                    matcher_version=sha,
+                    matcher_version=(
+                        sha
+                        if matcher_version_fn is None
+                        else matcher_version_fn(i)
+                    ),
                 )
                 for i in (7, 8)
             ],
@@ -1426,7 +1554,11 @@ class TestReportStructure:
                     live_agent="ops",
                     posture_routed=False,
                     gated_agent_names=None,
-                    matcher_version=sha,
+                    matcher_version=(
+                        sha
+                        if matcher_version_fn is None
+                        else matcher_version_fn(i)
+                    ),
                 )
                 for i in (9, 10)
             ],
@@ -2484,4 +2616,374 @@ class TestGateSection:
             "half FAILS for THIS run (distinct from the two-branch rule "
             f"text, which may name both words together); gate section:\n"
             f"{gate_section}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Gate encoded in --json (issue #532, module docstring judgment call 11).
+# TestGateSection (above) only pins the gate's rule/verdict in the
+# human-readable Markdown report body; this class pins the same signal
+# machine-readably in the --json payload.
+# ---------------------------------------------------------------------------
+
+
+class TestGateEncodedInJson:
+    """The ``--json`` payload must independently encode the
+    provenance-drift gate: the threshold value, a PASS/FAIL gate
+    status, and a ``flip_authorized`` boolean -- distinct from
+    ``overall_recommendation``/``criteria``, which reflect the KC
+    verdicts only. This closes the reported bug: a NO-GO-worthy run's
+    JSON can look "clean" today because the gate is only ever rendered
+    as prose (the Gate section) or a bare fraction
+    (``provenance_drift_fraction``), never as an explicit,
+    independently-checkable pass/fail + authorization boolean a caller
+    can branch on without parsing Markdown.
+    """
+
+    def test_drift_below_threshold_gate_passes_and_authorizes_flip(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+    ) -> None:
+        repo_root, sha = guard_repo
+        corpus_path, labels_path = _build_all_kc_pass_fixture(tmp_path, sha)
+        json_path = tmp_path / "report.json"
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root, json_path)
+        assert rc == 0
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert data["provenance_drift_fraction"] == pytest.approx(0.0)
+
+        assert "gate_threshold" in data, f"missing gate_threshold key; data: {data!r}"
+        assert data["gate_threshold"] == pytest.approx(
+            kc_report_module._DRIFT_WARNING_THRESHOLD
+        ), (
+            "gate_threshold must mirror the module's own "
+            f"_DRIFT_WARNING_THRESHOLD constant, not a disconnected "
+            f"literal; data: {data!r}"
+        )
+
+        assert "gate_status" in data, f"missing gate_status key; data: {data!r}"
+        assert data["gate_status"] == "PASS", (
+            "drift 0.0 is below the threshold; gate_status must be PASS; "
+            f"data: {data!r}"
+        )
+
+        assert "flip_authorized" in data, f"missing flip_authorized key; data: {data!r}"
+        assert data["flip_authorized"] is True, (
+            "drift below threshold must authorize a flip decision; "
+            f"data: {data!r}"
+        )
+
+    def test_drift_above_threshold_gate_fails_and_blocks_flip_even_when_kc_all_pass(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+    ) -> None:
+        """The actual bug (#532): KC-1, KC-2, and KC-3 all independently
+        PASS on the ``included`` subset (see
+        ``_build_all_kc_pass_fixture``'s docstring-pinned arithmetic),
+        yet 3 of 10 rows are unverifiable (drift 0.3, above the 0.25
+        threshold). The gate must still report FAIL / flip_authorized
+        False -- before this field existed, a consumer reading only
+        ``criteria``/``overall_recommendation`` could see an all-PASS
+        report and conclude go, missing that the evidence itself is
+        untrustworthy.
+        """
+        repo_root, sha = guard_repo
+        corpus_path, labels_path = _build_all_kc_pass_fixture(
+            tmp_path, sha, unverifiable_ids=frozenset({6, 9, 10})
+        )
+        json_path = tmp_path / "report.json"
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root, json_path)
+        assert rc == 0, "an above-threshold-drift run still completes (exit 0)"
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert data["provenance_drift_fraction"] == pytest.approx(0.3)
+
+        by_kc = {c["kc"]: c["status"] for c in data["criteria"]}
+        assert by_kc.get("KC-1") == "PASS", by_kc
+        assert by_kc.get("KC-2") == "PASS", by_kc
+        assert by_kc.get("KC-3") == "PASS", by_kc
+
+        assert "gate_status" in data, f"missing gate_status key; data: {data!r}"
+        assert data["gate_status"] == "FAIL", (
+            "drift 0.3 is above the 0.25 threshold; gate_status must be "
+            f"FAIL even though every computed KC criterion PASSED; "
+            f"data: {data!r}, criteria: {by_kc!r}"
+        )
+
+        assert "flip_authorized" in data, f"missing flip_authorized key; data: {data!r}"
+        assert data["flip_authorized"] is False, (
+            "drift above threshold must NOT authorize a flip, "
+            f"regardless of individual KC verdicts; data: {data!r}, "
+            f"criteria: {by_kc!r}"
+        )
+
+    def test_drift_exactly_at_threshold_boundary_gate_fails_and_blocks_flip(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+    ) -> None:
+        """The inclusive ``>=`` boundary at exactly 0.25 must be pinned
+        on the JSON side too, matching the ``>=`` semantics already
+        pinned elsewhere in this suite for the same constant
+        (``TestProvenanceDriftFraction.test_exactly_at_threshold_counts_as_drifted``,
+        ``TestProvenanceDriftWarningMainIntegration.test_at_threshold_drift_prints_warning...``,
+        and the report-side
+        ``TestGateSection.test_gate_states_auto_checkable_half_fails_when_drift_at_or_above_threshold``).
+        An implementation using a strict ``>`` comparison for the JSON
+        gate fields would silently disagree with those ``>=``-based
+        checks at exactly this boundary; this test exists specifically
+        to catch that divergence. 1 of 4 rows unverifiable == 0.25
+        drift, exactly at the threshold -- does not assert on
+        individual KC verdicts, since the boundary itself is the point.
+        """
+        repo_root, sha = guard_repo
+        rows = [
+            _corpus_row(1, matcher_version="not-a-real-revision-1"),
+            _corpus_row(2, matcher_version=sha),
+            _corpus_row(3, matcher_version=sha),
+            _corpus_row(4, matcher_version=sha),
+        ]
+        gold = [_gold_row(i) for i in range(1, 5)]
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        json_path = tmp_path / "report.json"
+        _write_jsonl(corpus_path, rows)
+        _write_jsonl(labels_path, gold)
+
+        rc = _run_main(kc_report_module, corpus_path, labels_path, repo_root, json_path)
+        assert rc == 0, "an at-threshold-drift run still completes (exit 0)"
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert data["provenance_drift_fraction"] == pytest.approx(0.25)
+
+        assert "gate_status" in data, f"missing gate_status key; data: {data!r}"
+        assert data["gate_status"] == "FAIL", (
+            "drift exactly at the 0.25 threshold must count as FAIL (the "
+            f"boundary is inclusive, '>=' not '>'); data: {data!r}"
+        )
+
+        assert "flip_authorized" in data, f"missing flip_authorized key; data: {data!r}"
+        assert data["flip_authorized"] is False, (
+            "drift exactly at the threshold must NOT authorize a flip; "
+            f"data: {data!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Corpus-hash integrity check (issue #532, module docstring judgment
+# call 12).
+# ---------------------------------------------------------------------------
+
+
+class TestCorpusHashIntegrityCheck:
+    """``--manifest``, when it records a ``"sha256"`` key (the corpus
+    artifact's own hash per ``build_manifest`` -- confirmed schema in
+    ``tests/test_corpus/test_builder.py::test_manifest_sha256_matches_artifact``),
+    must be validated against the ACTUAL bytes of the file supplied via
+    ``--corpus``. This is distinct from the existing manifest-file
+    citation hash (``TestManifestCitationInReport``), which hashes the
+    manifest file itself for citation and never touches this
+    ``"sha256"`` field recorded inside the manifest.
+    """
+
+    def test_matching_corpus_sha256_proceeds_normally(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        corpus_sha256 = hashlib.sha256(corpus_path.read_bytes()).hexdigest()
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(
+            json.dumps({"sha256": corpus_sha256, "row_count": 1}),
+            encoding="utf-8",
+        )
+
+        rc = _run_main(
+            kc_report_module,
+            corpus_path,
+            labels_path,
+            repo_root,
+            manifest_path=manifest_path,
+        )
+        report = capsys.readouterr().out
+
+        assert rc == 0, (
+            "a manifest sha256 that matches the actual corpus bytes must "
+            "proceed normally"
+        )
+        assert "KC-1" in report, "KC computation must still run and be reported"
+
+    def test_mismatched_corpus_sha256_fails_loudly_and_skips_kc_computation(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The actual bug (#532): today the manifest's recorded corpus
+        sha256 is never compared against ``--corpus``'s real bytes, so a
+        tampered, stale, or simply wrong corpus file silently produces a
+        normal-looking report. A wrong recorded hash must make the
+        generator fail loudly (non-zero exit, no KC verdicts printed)
+        rather than silently computing KC results against unverified
+        data.
+        """
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        wrong_sha256 = "0" * 64
+        actual_sha256 = hashlib.sha256(corpus_path.read_bytes()).hexdigest()
+        assert wrong_sha256 != actual_sha256, "fixture sanity: hashes must genuinely differ"
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(
+            json.dumps({"sha256": wrong_sha256, "row_count": 1}),
+            encoding="utf-8",
+        )
+
+        rc = _run_main(
+            kc_report_module,
+            corpus_path,
+            labels_path,
+            repo_root,
+            manifest_path=manifest_path,
+        )
+        captured = capsys.readouterr()
+
+        assert rc != 0, (
+            "a manifest-recorded corpus sha256 that does not match the "
+            f"actual --corpus file bytes must fail loudly; stdout:\n"
+            f"{captured.out}\nstderr:\n{captured.err}"
+        )
+        assert re.search(r"sha256|hash|checksum|integrity", captured.err, re.IGNORECASE), (
+            f"the failure must name the hash/integrity problem; stderr:\n{captured.err}"
+        )
+        assert re.search(r"corpus", captured.err, re.IGNORECASE), (
+            f"the failure must reference the corpus file; stderr:\n{captured.err}"
+        )
+        assert "KC-1" not in captured.out, (
+            "KC verdicts must not be computed/printed when the corpus "
+            f"hash integrity check fails; stdout:\n{captured.out}"
+        )
+        assert "Traceback (most recent call last)" not in captured.err, (
+            "must fail cleanly (a handled error), not with an unhandled "
+            f"traceback; stderr:\n{captured.err}"
+        )
+
+    def test_malformed_manifest_warns_and_proceeds_without_citation(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Verify a malformed explicit manifest warns without aborting.
+
+        Args:
+            kc_report_module: Loaded shadow KC report script module.
+            guard_repo: Disposable repository and its current commit SHA.
+            tmp_path: Pytest temporary directory for fixture files.
+            capsys: Pytest fixture capturing stdout and stderr.
+        """
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        manifest_path = tmp_path / "manifest.json"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        manifest_path.write_text("{not valid json", encoding="utf-8")
+
+        rc = _run_main(
+            kc_report_module,
+            corpus_path,
+            labels_path,
+            repo_root,
+            manifest_path=manifest_path,
+        )
+        captured = capsys.readouterr()
+
+        assert rc == 0, (
+            "invalid manifest JSON must disable manifest validation "
+            f"without aborting the report; stderr:\n{captured.err}"
+        )
+        assert re.search(
+            r"warning.*manifest.*(?:json|pars)",
+            captured.err,
+            re.IGNORECASE,
+        ), (
+            "an explicit malformed manifest must emit a parse warning; "
+            f"stderr:\n{captured.err}"
+        )
+        assert (
+            "Manifest citation unavailable: --manifest not provided or unreadable."
+            in captured.out
+        )
+        assert "KC-1" in captured.out, (
+            "KC computation must proceed when manifest JSON is malformed"
+        )
+
+    def test_non_object_manifest_warns_and_proceeds_with_citation(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Verify a non-object manifest warns without aborting.
+
+        Args:
+            kc_report_module: Loaded shadow KC report script module.
+            guard_repo: Disposable repository and its current commit SHA.
+            tmp_path: Pytest temporary directory for fixture files.
+            capsys: Pytest fixture capturing stdout and stderr.
+        """
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        manifest_path = tmp_path / "manifest.json"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        manifest_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+
+        rc = _run_main(
+            kc_report_module,
+            corpus_path,
+            labels_path,
+            repo_root,
+            manifest_path=manifest_path,
+        )
+        captured = capsys.readouterr()
+
+        assert rc == 0, (
+            "a non-object manifest must disable manifest validation "
+            f"without aborting the report; stderr:\n{captured.err}"
+        )
+        assert re.search(
+            rf"warning.*manifest.*{re.escape(str(manifest_path))}.*"
+            r"(?:did not parse to|is not) a json object",
+            captured.err,
+            re.IGNORECASE,
+        ), (
+            "an explicit non-object manifest must emit a warning naming "
+            f"the manifest path; stderr:\n{captured.err}"
+        )
+        assert "Manifest SHA-256:" in captured.out
+        assert "KC-1" in captured.out, (
+            "KC computation must proceed when manifest JSON is not an object"
         )
