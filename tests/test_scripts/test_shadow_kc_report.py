@@ -246,7 +246,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -612,45 +612,11 @@ def _build_all_kc_pass_fixture(
             return f"not-a-real-revision-{corpus_id}"
         return sha
 
-    rows = [
-        *[
-            _corpus_row(
-                i,
-                shadow_agent="code-writer",
-                live_agent="code-writer",
-                posture_routed=True,
-                matcher_version=_mv(i),
-            )
-            for i in range(1, 7)
-        ],
-        *[
-            _corpus_row(
-                i,
-                shadow_agent="code-writer",
-                live_agent="ops",
-                posture_routed=True,
-                matcher_version=_mv(i),
-            )
-            for i in (7, 8)
-        ],
-        *[
-            _corpus_row(
-                i,
-                shadow_agent="ops",
-                live_agent="ops",
-                posture_routed=False,
-                gated_agent_names=None,
-                matcher_version=_mv(i),
-            )
-            for i in (9, 10)
-        ],
-    ]
-    gold = [_gold_row(i, gold_agent="code-writer") for i in range(1, 11)]
-    corpus_path = tmp_path / "corpus.jsonl"
-    labels_path = tmp_path / "labels.jsonl"
-    _write_jsonl(corpus_path, rows)
-    _write_jsonl(labels_path, gold)
-    return corpus_path, labels_path
+    return TestReportStructure()._build_fixture(
+        tmp_path,
+        sha,
+        matcher_version_fn=_mv,
+    )
 
 
 _HEADING_RE = re.compile(r"^#{1,6}\s")
@@ -1530,7 +1496,24 @@ class TestReportStructure:
         KC-5 INSUFFICIENT_DATA  no row's gold.domain is infra_deploy.
     """
 
-    def _build_fixture(self, tmp_path: Path, sha: str) -> tuple[Path, Path]:
+    def _build_fixture(
+        self,
+        tmp_path: Path,
+        sha: str,
+        matcher_version_fn: Callable[[int], str] | None = None,
+    ) -> tuple[Path, Path]:
+        """Build the shared 10-row report fixture.
+
+        Args:
+            tmp_path: Pytest temporary directory for fixture files.
+            sha: Default matcher version assigned to every corpus row.
+            matcher_version_fn: Optional function deriving a matcher
+                version from each corpus ID. When None, every row uses
+                ``sha``.
+
+        Returns:
+            Tuple of ``(corpus_path, labels_path)``.
+        """
         rows = [
             # 1-6: shadow and lexical both correct, posture-routed.
             *[
@@ -1539,7 +1522,11 @@ class TestReportStructure:
                     shadow_agent="code-writer",
                     live_agent="code-writer",
                     posture_routed=True,
-                    matcher_version=sha,
+                    matcher_version=(
+                        sha
+                        if matcher_version_fn is None
+                        else matcher_version_fn(i)
+                    ),
                 )
                 for i in range(1, 7)
             ],
@@ -1550,7 +1537,11 @@ class TestReportStructure:
                     shadow_agent="code-writer",
                     live_agent="ops",
                     posture_routed=True,
-                    matcher_version=sha,
+                    matcher_version=(
+                        sha
+                        if matcher_version_fn is None
+                        else matcher_version_fn(i)
+                    ),
                 )
                 for i in (7, 8)
             ],
@@ -1563,7 +1554,11 @@ class TestReportStructure:
                     live_agent="ops",
                     posture_routed=False,
                     gated_agent_names=None,
-                    matcher_version=sha,
+                    matcher_version=(
+                        sha
+                        if matcher_version_fn is None
+                        else matcher_version_fn(i)
+                    ),
                 )
                 for i in (9, 10)
             ],
@@ -2889,4 +2884,56 @@ class TestCorpusHashIntegrityCheck:
         assert "Traceback (most recent call last)" not in captured.err, (
             "must fail cleanly (a handled error), not with an unhandled "
             f"traceback; stderr:\n{captured.err}"
+        )
+
+    def test_malformed_manifest_warns_and_proceeds_without_citation(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Verify a malformed explicit manifest warns without aborting.
+
+        Args:
+            kc_report_module: Loaded shadow KC report script module.
+            guard_repo: Disposable repository and its current commit SHA.
+            tmp_path: Pytest temporary directory for fixture files.
+            capsys: Pytest fixture capturing stdout and stderr.
+        """
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        manifest_path = tmp_path / "manifest.json"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        manifest_path.write_text("{not valid json", encoding="utf-8")
+
+        rc = _run_main(
+            kc_report_module,
+            corpus_path,
+            labels_path,
+            repo_root,
+            manifest_path=manifest_path,
+        )
+        captured = capsys.readouterr()
+
+        assert rc == 0, (
+            "invalid manifest JSON must disable manifest validation "
+            f"without aborting the report; stderr:\n{captured.err}"
+        )
+        assert re.search(
+            r"warning.*manifest.*(?:json|pars)",
+            captured.err,
+            re.IGNORECASE,
+        ), (
+            "an explicit malformed manifest must emit a parse warning; "
+            f"stderr:\n{captured.err}"
+        )
+        assert (
+            "Manifest citation unavailable: --manifest not provided or unreadable."
+            in captured.out
+        )
+        assert "KC-1" in captured.out, (
+            "KC computation must proceed when manifest JSON is malformed"
         )
