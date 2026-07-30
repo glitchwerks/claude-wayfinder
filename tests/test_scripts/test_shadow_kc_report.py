@@ -2937,3 +2937,53 @@ class TestCorpusHashIntegrityCheck:
         assert "KC-1" in captured.out, (
             "KC computation must proceed when manifest JSON is malformed"
         )
+
+    def test_non_object_manifest_warns_and_proceeds_with_citation(
+        self,
+        kc_report_module: ModuleType,
+        guard_repo: tuple[Path, str],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Verify a non-object manifest warns without aborting.
+
+        Args:
+            kc_report_module: Loaded shadow KC report script module.
+            guard_repo: Disposable repository and its current commit SHA.
+            tmp_path: Pytest temporary directory for fixture files.
+            capsys: Pytest fixture capturing stdout and stderr.
+        """
+        repo_root, sha = guard_repo
+        corpus_path = tmp_path / "corpus.jsonl"
+        labels_path = tmp_path / "labels.jsonl"
+        manifest_path = tmp_path / "manifest.json"
+        _write_jsonl(corpus_path, [_corpus_row(1, matcher_version=sha)])
+        _write_jsonl(labels_path, [_gold_row(1)])
+        manifest_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+
+        rc = _run_main(
+            kc_report_module,
+            corpus_path,
+            labels_path,
+            repo_root,
+            manifest_path=manifest_path,
+        )
+        captured = capsys.readouterr()
+
+        assert rc == 0, (
+            "a non-object manifest must disable manifest validation "
+            f"without aborting the report; stderr:\n{captured.err}"
+        )
+        assert re.search(
+            rf"warning.*manifest.*{re.escape(str(manifest_path))}.*"
+            r"(?:did not parse to|is not) a json object",
+            captured.err,
+            re.IGNORECASE,
+        ), (
+            "an explicit non-object manifest must emit a warning naming "
+            f"the manifest path; stderr:\n{captured.err}"
+        )
+        assert "Manifest SHA-256:" in captured.out
+        assert "KC-1" in captured.out, (
+            "KC computation must proceed when manifest JSON is not an object"
+        )

@@ -188,8 +188,15 @@ def _load_manifest_for_integrity_check(
         return None, None
 
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-    manifest = parsed_manifest if isinstance(parsed_manifest, dict) else None
-    return manifest_sha256, manifest
+    if not isinstance(parsed_manifest, dict):
+        print(
+            f"WARNING: --manifest {manifest_path} did not parse to a JSON "
+            "object; skipping corpus-hash integrity validation "
+            "(manifest citation unavailable).",
+            file=sys.stderr,
+        )
+        return manifest_sha256, None
+    return manifest_sha256, parsed_manifest
 
 
 def _check_corpus_hash_integrity(
