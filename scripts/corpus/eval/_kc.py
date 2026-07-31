@@ -26,6 +26,8 @@ assert KC2_LEXICAL_CW_ANCHOR == 0.2558, "KC-2 historical anchor must stay pinned
 _KC1_SHADOW_RC_FLOOR: float = 0.6891
 _KC1_LEXICAL_MARGIN: float = 0.20
 _KC3_DECISIVENESS_FLOOR: float = 0.55
+_KC4_DOMAINS: set[str] = {"is_any", "project_meta"}
+_KC5_DOMAIN: str = "infra_deploy"
 _KC5_INFRA_RC_FLOOR: float = 0.600
 _KC5_MIN_SLICE_N: int = 20
 
@@ -252,7 +254,7 @@ def compute_kc4(
         posture = caller_input.get("posture")
         if (
             label is not None
-            and caller_domain in {"is_any", "project_meta"}
+            and caller_domain in _KC4_DOMAINS
             and label.domain != caller_domain
             and _route_could_differ(caller_domain, label.domain, posture)
         ):
@@ -292,7 +294,7 @@ def compute_kc5(
         row
         for row in corpus_rows
         if row["corpus_id"] in gold
-        and gold[row["corpus_id"]].domain == "infra_deploy"
+        and gold[row["corpus_id"]].domain == _KC5_DOMAIN
     ]
     slice_gold = {
         row["corpus_id"]: gold[row["corpus_id"]] for row in slice_rows
