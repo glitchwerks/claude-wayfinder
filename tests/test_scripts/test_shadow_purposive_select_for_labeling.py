@@ -727,24 +727,32 @@ class TestCliRejectsMalformedInputLines:
     message identifying the bad line number -- never a silent skip.
     """
 
+    def _write_corpus_with_malformed_line_4(self, source: Path) -> None:
+        """Write a six-line corpus with malformed JSON on line 4.
+
+        Valid rows occupy lines 1-3 and 5-6. Their corpus IDs deliberately
+        avoid the digit ``4`` so an error-message assertion cannot pass from
+        a coincidental ID substring such as ``104``.
+
+        Args:
+            source: Path where the malformed JSONL corpus will be written.
+        """
+        lines = [
+            json.dumps(make_row(101, domain="is_any")),
+            json.dumps(make_row(102, domain="code")),
+            json.dumps(make_row(103, domain="infra_deploy")),
+            '{"corpus_id": 999, "input": {domain: is_any}',
+            json.dumps(make_row(105, domain="project_meta")),
+            json.dumps(make_row(106, domain="code")),
+        ]
+        source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
     def test_malformed_line_causes_nonzero_exit(
         self, purposive_module: ModuleType, tmp_path: Path
     ) -> None:
         source = tmp_path / "corpus.jsonl"
         output = tmp_path / "selected.jsonl"
-        # Valid rows on lines 1-3 and 5-6; a syntactically-broken JSON
-        # line on line 4. corpus_ids deliberately avoid the digit '4'
-        # so a bare digit-match on the error message isn't a
-        # coincidental false positive from an id like 104.
-        lines = [
-            json.dumps(make_row(101, domain="is_any")),
-            json.dumps(make_row(102, domain="code")),
-            json.dumps(make_row(103, domain="infra_deploy")),
-            '{"corpus_id": 999, "input": {domain: is_any}',  # malformed: line 4
-            json.dumps(make_row(105, domain="project_meta")),
-            json.dumps(make_row(106, domain="code")),
-        ]
-        source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._write_corpus_with_malformed_line_4(source)
 
         exit_code, _ = run_main_expect_failure(
             purposive_module, ["--input", str(source), "--output", str(output)]
@@ -763,15 +771,7 @@ class TestCliRejectsMalformedInputLines:
     ) -> None:
         source = tmp_path / "corpus.jsonl"
         output = tmp_path / "selected.jsonl"
-        lines = [
-            json.dumps(make_row(101, domain="is_any")),
-            json.dumps(make_row(102, domain="code")),
-            json.dumps(make_row(103, domain="infra_deploy")),
-            '{"corpus_id": 999, "input": {domain: is_any}',  # malformed: line 4
-            json.dumps(make_row(105, domain="project_meta")),
-            json.dumps(make_row(106, domain="code")),
-        ]
-        source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._write_corpus_with_malformed_line_4(source)
 
         exit_code, message = run_main_expect_failure(
             purposive_module, ["--input", str(source), "--output", str(output)]

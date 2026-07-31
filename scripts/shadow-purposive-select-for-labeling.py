@@ -8,7 +8,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_KC4_DOMAINS = {"is_any", "project_meta"}
+# Direct script execution does not automatically put the repository root on
+# sys.path. Add it before importing the scripts namespace.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+_SRC_DIR = _REPO_ROOT / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
+from scripts.corpus.eval._kc import _KC4_DOMAINS, _KC5_DOMAIN  # noqa: E402
 
 
 def _candidate_kc(row: dict[str, Any]) -> str | None:
@@ -30,7 +40,7 @@ def _candidate_kc(row: dict[str, Any]) -> str | None:
         return None
     if domain in _KC4_DOMAINS:
         return "KC-4"
-    if domain == "infra_deploy":
+    if domain == _KC5_DOMAIN:
         return "KC-5"
     return None
 
