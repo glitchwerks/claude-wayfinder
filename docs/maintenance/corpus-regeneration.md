@@ -190,6 +190,14 @@ Sign-off is a manifest-backed provenance chain, not a separate approval workflow
    manifest's regeneration date. A provisional verdict is fine and useful on its own terms — it just
    cannot authorize a flip.
 
+**Migration note (#534, PR #533).** `scripts/shadow-kc-report.py`'s `--json` output now additionally
+encodes this same gate as three machine-readable fields — `gate_threshold` (the 0.25 constant),
+`gate_status` (`"PASS"`/`"FAIL"`), and `flip_authorized` (bool) — and the tool now automatically
+validates the corpus file's SHA-256 against the manifest's recorded `sha256` before running (no new
+flag; hard error on mismatch). Both changes are additive: they encode the gate rule and the manifest
+sha256 citation this section already documents in prose, and neither adds, removes, nor reorders any
+step above. No runbook change was needed beyond this note.
+
 ---
 
 ## What this process does not do

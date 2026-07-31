@@ -43,6 +43,9 @@
       "status": "INSUFFICIENT_DATA"
     }
   ],
+  "flip_authorized": false,
+  "gate_status": "FAIL",
+  "gate_threshold": 0.25,
   "overall_recommendation": "NO-GO: failed criteria: KC-1. Insufficient data: KC-4, KC-5.",
   "provenance_drift_fraction": 0.2664576802507837
 }
