@@ -18,14 +18,10 @@ filter, distinct from the existing
 ``scripts/shadow-sample-for-labeling.py``, which draws a proportional
 stratified *random* sample -- different tool, not to be confused.
 
-This test module authors the contract in advance of the
-implementation (``scripts/shadow-purposive-select-for-labeling.py``
-does not exist yet) per the test-implementer / code-implementer split
--- every test below is expected to fail (via the module-scoped
-``purposive_module`` fixture raising ``FileNotFoundError`` when it
-tries to load the not-yet-existing script) until that script exists.
-
-RED -- written before implementation.
+This test module authored the contract in advance of the
+implementation per the test-implementer / code-implementer split. It
+was written test-first and now runs against the real implementation
+added by this PR.
 
 Design judgment calls made by the test-implementer (documented for
 the router / code-implementer, since the briefing left some CLI
@@ -95,8 +91,7 @@ def purposive_module() -> ModuleType:
         The loaded module, expected to expose ``main(argv) -> int | None``.
 
     Raises:
-        FileNotFoundError: If the script does not exist yet (the
-            expected RED state before the implementation lands).
+        FileNotFoundError: If the script is ever removed or renamed.
     """
     spec = importlib.util.spec_from_file_location(
         "shadow_purposive_select_for_labeling", _SCRIPT_PATH
@@ -240,7 +235,8 @@ def run_main_expect_failure(module: ModuleType, argv: list[str]) -> tuple[int, s
         rc = module.main(argv)
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
-        return code, str(exc.code) if exc.code is not None else ""
+        message = "" if exc.code is None or isinstance(exc.code, int) else str(exc.code)
+        return code, message
     except Exception as exc:  # noqa: BLE001 - any raised exception is a
         # valid "fail loudly" shape per the CLI contract; the specific
         # exception type is an implementation choice this suite does
@@ -366,6 +362,18 @@ class TestAbsentOrNullDomainNotCandidate:
         source = tmp_path / "corpus.jsonl"
         output = tmp_path / "selected.jsonl"
         write_jsonl(source, [make_row(1, domain=None)])
+
+        rc = run_main(purposive_module, ["--input", str(source), "--output", str(output)])
+
+        assert rc == 0
+        assert read_jsonl(output) == []
+
+    def test_non_string_domain_value_not_selected(
+        self, purposive_module: ModuleType, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "corpus.jsonl"
+        output = tmp_path / "selected.jsonl"
+        write_jsonl(source, [make_row(1, domain=["is_any"])])
 
         rc = run_main(purposive_module, ["--input", str(source), "--output", str(output)])
 
@@ -745,6 +753,9 @@ class TestCliRejectsMalformedInputLines:
         assert exit_code != 0, (
             "a malformed JSON input line must cause a non-zero exit, "
             "never a silent skip of that line"
+        )
+        assert not output.exists(), (
+            "a malformed input line must not leave a partial output file behind"
         )
 
     def test_malformed_line_error_identifies_the_line_number(

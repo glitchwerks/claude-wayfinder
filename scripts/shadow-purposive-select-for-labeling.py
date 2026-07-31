@@ -26,6 +26,8 @@ def _candidate_kc(row: dict[str, Any]) -> str | None:
         return None
 
     domain = input_data.get("domain")
+    if not isinstance(domain, str):
+        return None
     if domain in _KC4_DOMAINS:
         return "KC-4"
     if domain == "infra_deploy":
