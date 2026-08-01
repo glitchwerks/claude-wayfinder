@@ -47,7 +47,13 @@ from claude_wayfinder.match._cells import (
 )
 from claude_wayfinder.match._decide import (
     _DELEGATE_THRESHOLD,
+    _top_alternatives,
     decide,
+)
+from claude_wayfinder.match._match import (
+    _MAX_SKILLS,
+    _SKILL_MIN,
+    _skills_for_agent,
 )
 from claude_wayfinder.match._types import (
     CatalogEntry,
@@ -115,6 +121,40 @@ def confidence_is_high(labels: Labels) -> bool:
         ``True`` when ``labels.confidence == "high"``, else ``False``.
     """
     return labels.confidence == "high"
+
+
+def _skills_for_name(
+    name: str,
+    agent_entry_by_name: Mapping[str, CatalogEntry],
+    scored_skills: list[ScoredEntry],
+    features: Features,
+) -> list[str]:
+    """D-PARITY2: None-safe skill lookup by agent name.
+
+    ``_skills_for_agent`` needs a ``CatalogEntry``, not a name.  The entry is
+    resolved from *agent_entry_by_name* -- built from the full
+    ``scored_agents`` pool (broader than the domain-filtered ``gated`` list)
+    so that Branch 1's investigator route, which is guaranteed only via
+    ``catalog_agent_names`` and NOT via domain gating, has the widest
+    realistic chance of resolving its entry. When *name* is absent from the
+    pool entirely (never scored, or filtered upstream by
+    ``is_agent_routable``), this degrades to an empty skill list rather than
+    raising -- callers must not assume the lookup always succeeds.
+
+    Args:
+        name: Agent name to resolve skills for.
+        agent_entry_by_name: Name to CatalogEntry map built from scored_agents.
+        scored_skills: Lexically scored skills (score-sorted descending).
+        features: Extracted feature set for the current context.
+
+    Returns:
+        Skill names applicable to *name*, or ``[]`` when *name* has no entry
+        in *agent_entry_by_name*.
+    """
+    entry = agent_entry_by_name.get(name)
+    if entry is None:
+        return []
+    return _skills_for_agent(entry, scored_skills, features)
 
 
 # ---------------------------------------------------------------------------
@@ -397,13 +437,19 @@ def compose_route(
             and frozen tests unaffected.
 
     Returns:
-        Decision dict with at minimum the keys ``decision`` (str),
-        ``agent`` (str | None), ``confidence`` (float), and
-        ``disposition_source`` (``"posture_routed"`` | forwarded from
-        ``decide()``).
+        Decision dict with the keys ``decision``, ``agent``, ``skills``,
+        ``confidence``, ``rationale``, ``alternatives``, and
+        ``disposition_source`` on posture-routed branches. Fallback branches
+        forward the full ``decide()`` payload.
     """
     # --- Pre-compute gated list and preferred agent ---
     gated = gate_agents(scored_agents, labels.domain)
+    _agent_entry_by_name: dict[str, CatalogEntry] = {
+        se.entry.name: se.entry for se in scored_agents
+    }
+    _self_handle_skills: list[str] = [
+        se.entry.name for se in scored_skills if se.score >= _SKILL_MIN
+    ][:_MAX_SKILLS]
 
     # is_any / None → look up under "any"; concrete domain → look up verbatim.
     domain_for_lookup: str = (
@@ -428,6 +474,9 @@ def compose_route(
     _branch: str = "fallback"
     _lexical_agreement: bool | None = None
     _posture_veto_reason: str | None = None
+    _skills_out: list[str] = []
+    _rationale_out: str = ""
+    _alternatives_out: list[dict[str, Any]] = []
 
     if labels.posture:
         # ------------------------------------------------------------------
@@ -449,6 +498,23 @@ def compose_route(
                 confidence_out = 0.9
                 posture_routed = True
                 _branch = "branch1_investigator"
+                _skills_out = _skills_for_name(
+                    "investigator",
+                    _agent_entry_by_name,
+                    scored_skills,
+                    features,
+                )
+                _alternatives_out = _top_alternatives(
+                    [
+                        se
+                        for se in gated
+                        if se.entry.name != "investigator"
+                    ],
+                    n=3,
+                )
+                _rationale_out = (
+                    "posture route: diagnose × area_span>=2 → investigator"
+                )
             # else: investigator absent or confidence not high → decide()
             elif diagnostics is not None:
                 # §F.1 Branch-1 veto diagnostics (Codex P2 / #429):
@@ -469,6 +535,11 @@ def compose_route(
             confidence_out = 0.9
             posture_routed = True
             _branch = "branch2_sentinel"
+            _skills_out = _self_handle_skills
+            _alternatives_out = []
+            _rationale_out = (
+                "posture route: project_meta × build → router self-handles"
+            )
 
         # ------------------------------------------------------------------
         # BRANCH 3: generic preferred → delegate@0.9 (§B.3)
@@ -504,6 +575,12 @@ def compose_route(
                 posture_routed = True
                 _branch = "branch3_ops_veto"
                 _posture_veto_reason = "ops_write_tool"
+                _skills_out = _self_handle_skills
+                _alternatives_out = []
+                _rationale_out = (
+                    "posture route: branch3_ops_veto (ops_write_tool) → "
+                    "router self-handles"
+                )
             elif preferred == "ops" and ops_tool_signal is None:
                 decision_out = "self_handle"
                 agent_out = None
@@ -511,6 +588,12 @@ def compose_route(
                 posture_routed = True
                 _branch = "branch3_ops_veto"
                 _posture_veto_reason = "ops_no_github_signal"
+                _skills_out = _self_handle_skills
+                _alternatives_out = []
+                _rationale_out = (
+                    "posture route: branch3_ops_veto "
+                    "(ops_no_github_signal) → router self-handles"
+                )
             elif (
                 preferred == "code-writer"
                 and _test_authoring_signal(features)
@@ -527,6 +610,23 @@ def compose_route(
                 posture_routed = True
                 _branch = "branch3_testfirst"
                 _lexical_agreement = True   # §B.1 passed — record it
+                _skills_out = _skills_for_name(
+                    "test-implementer",
+                    _agent_entry_by_name,
+                    scored_skills,
+                    features,
+                )
+                _alternatives_out = _top_alternatives(
+                    [
+                        se
+                        for se in gated
+                        if se.entry.name != "test-implementer"
+                    ],
+                    n=3,
+                )
+                _rationale_out = (
+                    "posture route: branch3_testfirst → test-implementer"
+                )
             elif (
                 preferred
                 and preferred in genuine_gated_names
@@ -540,6 +640,19 @@ def compose_route(
                 posture_routed = True
                 _branch = "branch3_generic"
                 _lexical_agreement = True   # §B.1 passed — record it
+                _skills_out = _skills_for_name(
+                    preferred,
+                    _agent_entry_by_name,
+                    scored_skills,
+                    features,
+                )
+                _alternatives_out = _top_alternatives(
+                    [se for se in gated if se.entry.name != preferred],
+                    n=3,
+                )
+                _rationale_out = (
+                    f"posture route: branch3_generic → {preferred}"
+                )
             elif diagnostics is not None and preferred:
                 # Branch-3 did not fire — diagnose the blocking condition.
                 # Evaluate each gate in order to surface the first veto.
@@ -588,6 +701,9 @@ def compose_route(
     return {
         "decision": decision_out,
         "agent": agent_out,
+        "skills": _skills_out,
         "confidence": confidence_out,
+        "rationale": _rationale_out,
+        "alternatives": _alternatives_out,
         "disposition_source": "posture_routed",
     }
