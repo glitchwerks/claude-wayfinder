@@ -215,7 +215,7 @@ class TestShadowLiveUnchanged:
             f"with_log={out_with_log!r}"
         )
 
-    def test_stdout_decision_matches_live_fields_in_log(
+    def test_stdout_decision_matches_served_fields_in_log(
         self, tmp_path: Path
     ) -> None:
         """served_* fields in the shadow record match the stdout decision.
