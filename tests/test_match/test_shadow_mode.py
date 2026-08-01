@@ -294,6 +294,7 @@ class TestShadowLiveUnchanged:
         lexical_result = _run(
             divergent_input,
             divergent_catalog,
+            strip_env=["DISPATCH_HARD_ROUTING_DOMAINS"],
             tmp_path=tmp_path,
         )
         assert lexical_result.returncode == 0, lexical_result.stderr

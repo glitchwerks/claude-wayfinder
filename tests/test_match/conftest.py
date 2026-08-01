@@ -128,14 +128,27 @@ def _run(
     *,
     catalog_path: Path | None = None,
     extra_env: dict[str, str] | None = None,
+    strip_env: list[str] | None = None,
     tmp_path: Path,
 ) -> subprocess.CompletedProcess[str]:
-    """Run match.py via subprocess with the given catalog and input."""
+    """Run match.py via subprocess with the given catalog and input.
+
+    Args:
+        stdin_obj: JSON-serializable input for the matcher subprocess.
+        catalog: Catalog to write when no catalog path is provided.
+        catalog_path: Optional path to an existing catalog.
+        extra_env: Environment variables to override for the subprocess.
+        strip_env: Environment variable names to remove from the subprocess.
+        tmp_path: Temporary directory used to write the catalog.
+    """
     if catalog_path is None:
         catalog_path = tmp_path / "catalog.json"
         catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
 
     env = {**os.environ, "DISPATCH_CATALOG_PATH": str(catalog_path)}
+    if strip_env:
+        for key in strip_env:
+            env.pop(key, None)
     if extra_env:
         env.update(extra_env)
 
