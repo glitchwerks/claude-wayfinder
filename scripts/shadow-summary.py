@@ -3,7 +3,8 @@
 Reads a dispatch-log JSONL file (one JSON object per line), extracts entries
 that carry a ``"shadow"`` dict (added in M15-5), and prints an accumulation
 summary: total entries, shadow-covered entries, live/shadow agreement count,
-and branch distribution.
+branch distribution, served-arm distribution, and distinct hard-routing domain
+combinations.
 
 Usage::
 
@@ -35,6 +36,9 @@ def summarize(path: Path) -> dict[str, object]:
     * entries with a shadow record
     * agreement count (``shadow["agreement"]`` truthy)
     * branch distribution (``shadow["branch"]`` values)
+    * served-arm distribution (``shadow["served_arm"]`` values, defaulting
+      missing schema-v1 values to ``"lexical"``)
+    * distinct present ``shadow["hard_routing_domains"]`` combinations
 
     Args:
         path: Absolute or relative path to the dispatch-log JSONL file.
@@ -47,11 +51,16 @@ def summarize(path: Path) -> dict[str, object]:
             ``shadow`` (int): lines carrying a shadow dict.
             ``agreement`` (int): shadow records where agreement is truthy.
             ``branches`` (dict[str, int]): branch-value frequency map.
+            ``served`` (dict[str, int]): served-arm frequency map.
+            ``hard_routing_domains_seen`` (list[list[str]]): distinct
+            hard-routing domain combinations present in shadow records.
     """
     total = 0
     shadow_count = 0
     agreement_count = 0
     branch_dist: Counter[str] = Counter()
+    served_dist: Counter[str] = Counter()
+    hard_routing_domains_seen: set[tuple[str, ...]] = set()
 
     with open(path, encoding="utf-8") as fh:
         for raw in fh:
@@ -74,12 +83,20 @@ def summarize(path: Path) -> dict[str, object]:
             branch = shadow.get("branch")
             if branch is not None:
                 branch_dist[str(branch)] += 1
+            served_dist[shadow.get("served_arm", "lexical")] += 1
+            if "hard_routing_domains" in shadow:
+                domains = tuple(sorted(shadow["hard_routing_domains"]))
+                hard_routing_domains_seen.add(domains)
 
     return {
         "entries": total,
         "shadow": shadow_count,
         "agreement": agreement_count,
         "branches": dict(branch_dist),
+        "served": dict(served_dist),
+        "hard_routing_domains_seen": [
+            list(domains) for domains in sorted(hard_routing_domains_seen)
+        ],
     }
 
 
@@ -154,6 +171,8 @@ def main() -> None:
             f" shadow={s}"
             f" agreement={a}/{s}"
             f" branches={result['branches']}"
+            f" served={' '.join(f'{k}={v}' for k, v in sorted(result['served'].items()))}"
+            f" hard_routing_domains={result['hard_routing_domains_seen']}"
         )
 
 
