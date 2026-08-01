@@ -3,6 +3,15 @@
 Owns ``main()``: parses the ``--catalog-path`` flag, loads the catalog,
 reads stdin JSON, delegates to ``build_features``, ``score_entries``,
 ``decide``, and ``_write_log_entry``, then prints the result JSON to stdout.
+
+Two environment gates control Compose routing with opposite safe defaults.
+``DISPATCH_SHADOW`` is the coarse, all-domain compute and hard-routing kill
+switch: absent or malformed values fail open to ON, while an explicit falsey
+value skips Compose entirely. ``DISPATCH_HARD_ROUTING_DOMAINS`` is the
+surgical per-domain serving gate: absent or empty values resolve OFF, unknown
+tokens are dropped, and parse failures fail closed to no hard routing.
+Consequently, ``DISPATCH_SHADOW=0`` always serves the lexical ``decide()``
+result regardless of the configured hard domains.
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ from claude_wayfinder.match._catalog import (
     _write_log_entry,
     load_catalog,
 )
+from claude_wayfinder.match._cells import DOMAIN_AGENT_MAP
 from claude_wayfinder.match._compose import compose_route, parse_labels
 from claude_wayfinder.match._decide import decide
 from claude_wayfinder.match._match import build_features, score_entries
@@ -59,28 +69,85 @@ def _shadow_enabled() -> bool:
     return value.lower() not in _SHADOW_FALSEY_VALUES
 
 
+def _parse_hard_routing_domains() -> frozenset[str]:
+    """Resolve domains explicitly consented to Compose serving.
+
+    Reads ``DISPATCH_HARD_ROUTING_DOMAINS`` as comma-separated domain
+    tokens. Parsing is fail-closed: absent, empty, or whitespace-only
+    values resolve to an empty set. Tokens are stripped, lowercased,
+    deduplicated, and limited to keys in ``DOMAIN_AGENT_MAP`` plus the
+    explicit ``"is_any"`` token. Unknown tokens are dropped with a
+    warning, and any unexpected parse error also warns and resolves OFF.
+
+    Returns:
+        Recognized hard-routing domain tokens, or an empty frozenset when
+        hard routing is disabled or parsing fails.
+    """
+    try:
+        value = os.environ.get("DISPATCH_HARD_ROUTING_DOMAINS")
+        if value is None or not value.strip():
+            return frozenset()
+
+        tokens = {
+            token.strip().lower()
+            for token in value.split(",")
+            if token.strip()
+        }
+        recognized = (set(DOMAIN_AGENT_MAP) - {None}) | {"is_any"}
+        unknown = tokens - recognized
+        if unknown:
+            print(
+                "[dispatch] dropping unrecognized hard-routing domain(s): "
+                + ", ".join(sorted(unknown)),
+                file=sys.stderr,
+            )
+        return frozenset(tokens & recognized)
+    except Exception as exc:
+        print(
+            f"[dispatch] failed to parse hard-routing domains; disabling: {exc}",
+            file=sys.stderr,
+        )
+        return frozenset()
+
+
 def _build_shadow_record(
     labels: Labels,
     live_result: dict[str, Any],
     shadow: dict[str, Any],
     diag: dict[str, Any],
+    *,
+    served: dict[str, Any],
+    served_arm: str,
+    hard_routing_domains: frozenset[str],
 ) -> dict[str, Any]:
     """Build the §F.1 shadow record from routing outputs and diagnostics.
 
-    Combines live decision fields, Compose shadow decision fields, label
-    context, and per-step §F.1 intermediate state into a single flat
-    record suitable for storage under the ``"shadow"`` key of a log entry.
+    The historical ``live_*`` and ``shadow_*`` names identify algorithm
+    arms: ``live_*`` is always the lexical ``decide()`` result and
+    ``shadow_*`` is always the ``compose_route()`` result. They no longer
+    indicate what stdout served; that meaning belongs to ``served_*`` and
+    ``served_arm``. The misnomers are retained deliberately because renaming
+    them would break already-joined corpora and require dual-read support in
+    ``scripts/corpus/eval/_kc.py``, ``scripts/shadow-kc-report.py``, and
+    ``scripts/shadow-summary.py``.
 
     Args:
         labels: Parsed routing labels from the dispatch context.
-        live_result: The live ``decide()`` result dict (stdout decision).
+        live_result: The pure-lexical ``decide()`` algorithm result.
         shadow: The ``compose_route()`` result dict.
         diag: The populated §F.1 diagnostics dict from ``compose_route``.
+        served: The exact decision dict selected for logging and stdout.
+        served_arm: Algorithm selected by ``main()``; ``"lexical"`` or
+            ``"compose"``.
+        hard_routing_domains: Resolved domain set used for the serving
+            decision, passed through without re-reading the environment.
 
     Returns:
-        Flat dict matching the §F.1 shadow record schema.
+        Flat dict matching shadow record schema version 2.
     """
     return {
+        "shadow_schema_version": 2,
+        "hard_routing_domains": sorted(hard_routing_domains),
         # Label context
         "domain": labels.domain,
         "posture": labels.posture,
@@ -96,6 +163,12 @@ def _build_shadow_record(
         "shadow_agent": shadow.get("agent"),
         "shadow_confidence": shadow.get("confidence"),
         "shadow_disposition_source": shadow.get("disposition_source"),
+        # Decision actually served by main()
+        "served_arm": served_arm,
+        "served_decision": served.get("decision"),
+        "served_agent": served.get("agent"),
+        "served_confidence": served.get("confidence"),
+        "served_disposition_source": served.get("disposition_source"),
         # §F.1 intermediate state from diagnostics
         "gated_agent_names": diag.get("gated_agent_names"),
         "posture_preferred": diag.get("posture_preferred"),
@@ -279,12 +352,14 @@ def main(argv: list[str] | None = None) -> None:
 
     # --- Compose decision ---
     result = decide(scored_agents, scored_skills, features, entries)
+    served: dict[str, Any] = result
 
-    # --- Shadow compute (telemetry-only; gated by DISPATCH_SHADOW) ---
+    # --- Shadow compute and scoped serving (gated by DISPATCH_SHADOW) ---
     # When the gate is OFF, shadow compute is skipped entirely (not
     # computed-then-discarded) — compose_route is never invoked and the
     # log entry omits the "shadow" key. See _shadow_enabled().
     shadow_record: dict[str, Any] | None = None
+    hard_domains: frozenset[str] = _parse_hard_routing_domains()
     if _shadow_enabled():
         try:
             catalog_agent_names: frozenset[str] = frozenset(
@@ -301,18 +376,31 @@ def main(argv: list[str] | None = None) -> None:
                 catalog_agent_names,
                 diagnostics=diag,
             )
-            shadow_record = _build_shadow_record(labels, result, shadow, diag)
+            served_arm: str = "lexical"
+            if labels.domain is not None and labels.domain in hard_domains:
+                served = shadow
+                served_arm = "compose"
+            shadow_record = _build_shadow_record(
+                labels,
+                result,
+                shadow,
+                diag,
+                served=served,
+                served_arm=served_arm,
+                hard_routing_domains=hard_domains,
+            )
         except Exception as exc:   # shadow must never break live dispatch
             print(
                 f"[dispatch] shadow compute failed: {exc}",
                 file=sys.stderr,
             )
+            served = result
             shadow_record = None
 
     # --- Log decision (non-fatal: log failure never blocks stdout output) ---
     _write_log_entry(
         context,
-        result,
+        served,
         catalog_hash,
         _resolve_log_path(),
         override_id=None,
@@ -324,6 +412,6 @@ def main(argv: list[str] | None = None) -> None:
     # is unchanged; the fields are present in stdout for the JS hook
     # (log-dispatch-decision.js) to write a complete attributed row
     # (issue #311).
-    result["catalog_hash"] = catalog_hash
-    result["matcher_version"] = _get_matcher_version()
-    print(json.dumps(result, sort_keys=True), flush=True)
+    served["catalog_hash"] = catalog_hash
+    served["matcher_version"] = _get_matcher_version()
+    print(json.dumps(served, sort_keys=True), flush=True)

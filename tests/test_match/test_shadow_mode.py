@@ -215,15 +215,14 @@ class TestShadowLiveUnchanged:
             f"with_log={out_with_log!r}"
         )
 
-    def test_stdout_decision_matches_live_fields_in_log(
+    def test_stdout_decision_matches_served_fields_in_log(
         self, tmp_path: Path
     ) -> None:
-        """live_* fields in the shadow record match the stdout decision.
+        """served_* fields in the shadow record match the stdout decision.
 
-        Once shadow is wired, the log entry's ``shadow.live_*`` fields
-        must equal the stdout output's decision/agent/confidence/
-        disposition_source.  This verifies the §F.1 live mirror
-        requirement.
+        The historical ``live_*`` fields mirror the pure-lexical arm,
+        not necessarily what was served. The ``served_*`` fields always
+        mirror stdout after hard-routing cutover.
 
         Expected to be PARTIALLY RED until wiring lands (log line will
         have no ``"shadow"`` key yet, so the assertion will fail on
@@ -249,20 +248,97 @@ class TestShadowLiveUnchanged:
             f"Entry keys: {sorted(entry.keys())}"
         )
         shadow = entry["shadow"]
-        assert shadow["live_decision"] == stdout_decision["decision"], (
-            "shadow.live_decision must match stdout decision"
+        assert shadow["served_decision"] == stdout_decision["decision"], (
+            "shadow.served_decision must match stdout decision"
         )
-        # live_agent may be absent from stdout (self_handle etc.) → None
-        assert shadow["live_agent"] == stdout_decision.get("agent"), (
-            "shadow.live_agent must match stdout agent (or None)"
+        # served_agent may be absent from stdout (self_handle etc.) → None
+        assert shadow["served_agent"] == stdout_decision.get("agent"), (
+            "shadow.served_agent must match stdout agent (or None)"
         )
-        assert shadow["live_confidence"] == pytest.approx(
+        assert shadow["served_confidence"] == pytest.approx(
             stdout_decision["confidence"]
-        ), "shadow.live_confidence must match stdout confidence"
+        ), "shadow.served_confidence must match stdout confidence"
+        assert (
+            shadow["served_disposition_source"]
+            == stdout_decision.get("disposition_source")
+        ), "shadow.served_disposition_source must match stdout disposition_source"
+
+    def test_live_fields_remain_lexical_when_compose_is_served(
+        self, tmp_path: Path
+    ) -> None:
+        """live_* remains a falsifiable pure-lexical algorithm canary."""
+        divergent_catalog = _catalog(
+            [
+                _make_agent(
+                    "investigator",
+                    keywords=[
+                        {"term": "investigate", "weight": 1.0},
+                        {"term": "analyze", "weight": 1.0},
+                    ],
+                ),
+                _make_agent(
+                    "code-writer",
+                    keywords=[{"term": "implement", "weight": 1.0}],
+                    path_globs=["**/*.py"],
+                ),
+            ]
+        )
+        divergent_input: dict[str, Any] = {
+            "task_description": "investigate analyze and implement this change",
+            "file_paths": ["src/main.py"],
+            "domain": "code",
+            "posture": "build",
+            "confidence": "high",
+            "area_span": 1,
+        }
+        lexical_result = _run(
+            divergent_input,
+            divergent_catalog,
+            strip_env=["DISPATCH_HARD_ROUTING_DOMAINS"],
+            tmp_path=tmp_path,
+        )
+        assert lexical_result.returncode == 0, lexical_result.stderr
+        lexical_decision = json.loads(lexical_result.stdout)
+
+        log_path = tmp_path / "shadow_live_algorithm_canary.jsonl"
+        result = _run_with_log(
+            divergent_input,
+            divergent_catalog,
+            log_path=log_path,
+            tmp_path=tmp_path,
+            extra_env={
+                "DISPATCH_HARD_ROUTING_DOMAINS": "code",
+                "DISPATCH_SHADOW": "1",
+            },
+        )
+        assert result.returncode == 0, result.stderr
+
+        stdout_decision = json.loads(result.stdout)
+        shadow = _read_log_lines(log_path)[0]["shadow"]
+
+        assert shadow["served_decision"] == stdout_decision["decision"]
+        assert shadow["served_agent"] == stdout_decision.get("agent")
+        assert shadow["served_confidence"] == pytest.approx(
+            stdout_decision["confidence"]
+        )
+        assert (
+            shadow["served_disposition_source"]
+            == stdout_decision.get("disposition_source")
+        )
+
+        assert shadow["live_decision"] == lexical_decision["decision"]
+        assert shadow["live_agent"] == lexical_decision.get("agent")
+        assert shadow["live_confidence"] == pytest.approx(
+            lexical_decision["confidence"]
+        )
         assert (
             shadow["live_disposition_source"]
-            == stdout_decision.get("disposition_source")
-        ), "shadow.live_disposition_source must match stdout disposition_source"
+            == lexical_decision.get("disposition_source")
+        )
+
+        assert shadow["live_agent"] == "investigator"
+        assert stdout_decision["agent"] == "code-writer"
+        assert shadow["live_agent"] != stdout_decision.get("agent")
 
 
 # ---------------------------------------------------------------------------
