@@ -243,11 +243,11 @@ default.
 PY="${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe"   # Windows
 # PY="${CLAUDE_PLUGIN_DATA}/venv/bin/python"          # POSIX
 
-# DISPATCH_SHADOW gates the telemetry-only shadow-route compute (the v3
-# route computed and logged beside the live lexical decision — see "Two-
-# axis labels" above). It never affects the live decision. Sourced from
-# the userConfig `shadow_enabled` toggle in plugin.json so users can opt
-# out without touching source.
+# DISPATCH_SHADOW gates the v3 shadow-route compute (see "Two-axis labels"
+# above). The computed route remains telemetry-only unless its domain is
+# also enabled by DISPATCH_HARD_ROUTING_DOMAINS. Sourced from the userConfig
+# `shadow_enabled` toggle in plugin.json so users can opt out without
+# touching source.
 #
 # Only an exact case-insensitive match of "0", "false", or "no" disables
 # shadow compute. Every other value fails open to enabled — this
@@ -255,6 +255,19 @@ PY="${CLAUDE_PLUGIN_DATA}/venv/Scripts/python.exe"   # Windows
 # whitespace-padded value (e.g. " false "). Absent (unset) also fails
 # open to enabled.
 export DISPATCH_SHADOW="${user_config.shadow_enabled}"
+
+# DISPATCH_HARD_ROUTING_DOMAINS is the surgical serving gate: a comma-
+# separated set of domain tokens such as "is_any" or "is_any,code".
+# Unset, empty, or whitespace-only values fail closed to OFF. Tokens are
+# stripped, lowercased, and deduplicated; unrecognized tokens are dropped
+# with a stderr warning rather than failing dispatch.
+export DISPATCH_HARD_ROUTING_DOMAINS="is_any"
+
+# The two gates have opposite safe defaults: absent DISPATCH_SHADOW means
+# Compose compute is ON, while absent DISPATCH_HARD_ROUTING_DOMAINS means
+# hard routing is OFF. DISPATCH_HARD_ROUTING_DOMAINS scopes cutover per
+# domain; DISPATCH_SHADOW=0 is the coarse, all-domain kill switch because it
+# skips Compose entirely and therefore always serves the lexical decision.
 
 # Real-catalog mode — default; resolves to the canonical catalog
 echo '{"task_description": "implement auth module", "file_paths": ["src/auth.py"], "agent_mentions": [], "tool_mentions": [], "command_prefix": null}' \
