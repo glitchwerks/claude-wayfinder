@@ -291,6 +291,14 @@ class TestShadowLiveUnchanged:
             "confidence": "high",
             "area_span": 1,
         }
+        lexical_result = _run(
+            divergent_input,
+            divergent_catalog,
+            tmp_path=tmp_path,
+        )
+        assert lexical_result.returncode == 0, lexical_result.stderr
+        lexical_decision = json.loads(lexical_result.stdout)
+
         log_path = tmp_path / "shadow_live_algorithm_canary.jsonl"
         result = _run_with_log(
             divergent_input,
@@ -306,6 +314,27 @@ class TestShadowLiveUnchanged:
 
         stdout_decision = json.loads(result.stdout)
         shadow = _read_log_lines(log_path)[0]["shadow"]
+
+        assert shadow["served_decision"] == stdout_decision["decision"]
+        assert shadow["served_agent"] == stdout_decision.get("agent")
+        assert shadow["served_confidence"] == pytest.approx(
+            stdout_decision["confidence"]
+        )
+        assert (
+            shadow["served_disposition_source"]
+            == stdout_decision.get("disposition_source")
+        )
+
+        assert shadow["live_decision"] == lexical_decision["decision"]
+        assert shadow["live_agent"] == lexical_decision.get("agent")
+        assert shadow["live_confidence"] == pytest.approx(
+            lexical_decision["confidence"]
+        )
+        assert (
+            shadow["live_disposition_source"]
+            == lexical_decision.get("disposition_source")
+        )
+
         assert shadow["live_agent"] == "investigator"
         assert stdout_decision["agent"] == "code-writer"
         assert shadow["live_agent"] != stdout_decision.get("agent")
