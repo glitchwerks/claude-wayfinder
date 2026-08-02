@@ -4,6 +4,50 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-08-02
+
+Major release: Matcher v3 hard-routing cutover. **Ships defaulting
+OFF/unset — zero behavior change for existing users.** The new
+`hard_routing_domains` rollout flag is a domain-scoped opt-in for
+letting Matcher v3's `compose_route` posture-routing path steer live
+dispatch; until a domain is explicitly listed, every consumer keeps
+today's lexical `decide()` routing byte-for-byte. The major version
+bump reflects the deliberateness of introducing a live-steering code
+path, not a default-behavior break (see issue #544 for the rationale).
+
+### Added
+
+- **`hard_routing_domains` rollout flag** (`DISPATCH_HARD_ROUTING_DOMAINS`
+  env var; M15-7, #424, PR #542) — fail-closed, comma-separated
+  domain allowlist that lets `compose_route`'s posture-routed decision
+  become the *served* decision, scoped per domain. Unset or empty
+  means no domains are hard-routed and routing stays on the existing
+  lexical `decide()` path. `DISPATCH_SHADOW=0` remains the coarser
+  kill switch, since Compose is only ever computed inside that gate.
+- **Shadow-record schema v2** (#424, PR #542) — extends the shadow-mode
+  telemetry payload with `served_*` fields (`served_decision`,
+  `served_agent`, `served_confidence`, `served_disposition_source`),
+  `served_arm` (`"lexical"` | `"compose"`), and `hard_routing_domains`,
+  so shadow-mode logging now records what was actually served
+  alongside the independent lexical/compose comparison arms.
+  `shadow_schema_version` bumps to `2`.
+- **`shadow-summary.py` served-arm reporting** (#424, PR #542) — reports
+  the `served_arm` distribution (schema-v1 records backfill to
+  `"lexical"`) and distinct `hard_routing_domains` combinations, for
+  operator visibility during any future soak.
+
+### Changed
+
+- **`compose_route` posture-routed branches brought to full
+  return-shape parity with `decide()`** (#540, PR #542). Posture-routed
+  branches (investigator, sentinel self_handle, ops-veto, generic,
+  testfirst) now include `skills`, `rationale`, and `alternatives`
+  alongside `decision`/`agent`/`confidence`/`disposition_source`,
+  matching what `decide()` returns for the same decision type.
+  Previously these fields were silently dropped on a posture-routed
+  delegate (e.g. a posture-routed `code-writer` arrived with no
+  skills).
+
 ## [1.4.0] - 2026-07-24
 
 Minor release: M15-6 shadow-KC evaluation tooling — the machinery that

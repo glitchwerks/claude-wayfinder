@@ -331,6 +331,19 @@ export DISPATCH_SHADOW=0   # or "false" / "no" — disables shadow compute
 
 The same toggle is exposed as the `shadow_enabled` plugin `userConfig` field for users who configure the plugin through Claude Code's settings UI rather than a shell env var; it is plumbed through to `DISPATCH_SHADOW` at the matcher-launch site.
 
+## Hard-routing rollout (`DISPATCH_HARD_ROUTING_DOMAINS`)
+
+`DISPATCH_HARD_ROUTING_DOMAINS` is a domain-scoped opt-in that lets the Matcher-v3 Compose route (see above) actually become the *served* decision instead of shadow-only telemetry. It ships **unset by default, which means OFF — zero routing-behavior change** for existing consumers.
+
+```bash
+export DISPATCH_HARD_ROUTING_DOMAINS=code,infra   # serve Compose's decision for these domains only
+```
+
+- Absent, empty, or whitespace-only values resolve to **no domains hard-routed** (fail-closed) — routing stays on the existing lexical `decide()` path for every domain.
+- Tokens are comma-separated, stripped, lowercased, and deduplicated. Unknown tokens are dropped with a warning; a parse failure also fails closed to no hard routing.
+- `DISPATCH_SHADOW=0` always wins: it disables Compose compute entirely, so a hard-routed domain falls back to the lexical `decide()` result regardless of this flag's value.
+- Shadow-record log entries (schema `v2`) now carry `served_arm` (`"lexical"` or `"compose"`), `served_*` fields mirroring whatever was actually served, and the resolved `hard_routing_domains` set, in addition to the existing `shadow`/`live_*` comparison-arm fields. `scripts/shadow-summary.py` reports the `served_arm` distribution.
+
 ## What's next
 
 If you want to use the matcher for real routing in your own Claude Code setup, there are two paths:
