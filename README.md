@@ -317,7 +317,7 @@ rm "$DISPATCH_LOG_PATH"                 # if you have set a custom path
 
 ## Shadow-mode dispatch telemetry
 
-When enabled, the matcher also computes a second, telemetry-only routing decision — the Matcher-v3 two-axis "Compose" route — alongside the live lexical decision, and logs both. Compose never changes what gets dispatched: the routing decision — the selected `decision`/`agent`/`skills` values — is always the live decision, unchanged from earlier releases. (The serialized stdout JSON itself is not fully byte-identical to 1.2.0 — this release also adds `matcher_version` and `catalog_hash` fields — but which agent or skill gets dispatched is unaffected.) Shadow compute exists so Compose's decisions can be compared against live traffic offline before any future release lets it steer routing.
+When enabled, the matcher also computes a second, telemetry-only routing decision — the Matcher-v3 two-axis "Compose" route — alongside the live lexical decision, and logs both. By default Compose does not change what gets dispatched: the routing decision — the selected `decision`/`agent`/`skills` values — is the live lexical decision, unchanged from earlier releases. (The serialized stdout JSON itself is not fully byte-identical to 1.2.0 — this release also adds `matcher_version` and `catalog_hash` fields — but which agent or skill gets dispatched is unaffected.) The one exception is a domain explicitly opted in via `DISPATCH_HARD_ROUTING_DOMAINS` (see "Hard-routing rollout" below), where Compose's decision is served instead. Shadow compute exists so Compose's decisions can be compared against live traffic offline before hard routing is enabled more broadly.
 
 Shadow compute is gated by the `DISPATCH_SHADOW` env var, fail-open to ON:
 
@@ -336,7 +336,7 @@ The same toggle is exposed as the `shadow_enabled` plugin `userConfig` field for
 `DISPATCH_HARD_ROUTING_DOMAINS` is a domain-scoped opt-in that lets the Matcher-v3 Compose route (see above) actually become the *served* decision instead of shadow-only telemetry. It ships **unset by default, which means OFF — zero routing-behavior change** for existing consumers.
 
 ```bash
-export DISPATCH_HARD_ROUTING_DOMAINS=code,infra   # serve Compose's decision for these domains only
+export DISPATCH_HARD_ROUTING_DOMAINS=code,infra_deploy   # serve Compose's decision for these domains only
 ```
 
 - Absent, empty, or whitespace-only values resolve to **no domains hard-routed** (fail-closed) — routing stays on the existing lexical `decide()` path for every domain.
